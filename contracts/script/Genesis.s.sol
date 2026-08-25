@@ -10,18 +10,20 @@ import {UpDownRegistry} from "../src/UpDownRegistry.sol";
 contract Genesis is Script {
     function run() external {
         uint256 pk = vm.envUint("OWNER_PRIVATE_KEY");
+        // As in Deploy.s.sol: resolve the signer from the key, never from the script frame.
+        address signer = vm.addr(pk);
         string memory json = vm.readFile(string.concat("./deployments/", vm.toString(block.chainid), ".json"));
         address registry = vm.parseJsonAddress(json, ".registry");
 
         vm.startBroadcast(pk);
 
         UpDownRegistry reg = UpDownRegistry(registry);
-        if (reg.pendingOwner() == msg.sender) reg.acceptOwnership();
+        if (reg.pendingOwner() == signer) reg.acceptOwnership();
 
         UpDownRegistry.MarketInfo[] memory markets = reg.allMarkets();
         for (uint256 i; i < markets.length; ++i) {
             UpDownMarketBase m = UpDownMarketBase(markets[i].market);
-            if (m.pendingOwner() == msg.sender) m.acceptOwnership();
+            if (m.pendingOwner() == signer) m.acceptOwnership();
             if (!m.genesisStarted()) {
                 m.genesisStart();
                 console2.log("genesisStart", markets[i].market, markets[i].label);

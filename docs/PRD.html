@@ -250,6 +250,16 @@ table.cmp td:last-child{background:var(--accent-soft);font-weight:550}
 table.cmp thead th:last-child{background:var(--accent-soft);color:var(--accent-ink)}
 table.addr td{font-size:13px}
 table.addr .mono{font-size:12.5px;letter-spacing:-.01em;color:var(--code-ink)}
+table.rev td:first-child{white-space:nowrap;width:1%}
+table.rev td{font-size:13.5px}
+.sev{
+  display:inline-block;font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  padding:2px 8px;border-radius:999px;border:1px solid currentColor;
+}
+html[data-lang="zh"] .sev{letter-spacing:0;text-transform:none;font-size:12px}
+.sev-h{color:var(--down);background:var(--down-soft)}
+.sev-m{color:var(--accent-ink);background:var(--accent-soft)}
+.sev-l{color:var(--muted);background:var(--surface-2)}
 
 /* ── Callouts ────────────────────────────────────────────── */
 .note{
@@ -300,7 +310,7 @@ figure{margin:0 0 22px}
   padding:16px 10px 10px;box-shadow:var(--shadow);overflow-x:auto;
   -webkit-overflow-scrolling:touch;
 }
-.diagram svg{display:block;width:100%;min-width:660px;height:auto}
+.diagram svg{display:block;width:100%;min-width:720px;height:auto}
 svg .ax{stroke:var(--line-strong);stroke-width:1}
 svg .tick{stroke:var(--line-strong);stroke-width:1}
 svg .guide{stroke:var(--line-strong);stroke-width:1;stroke-dasharray:3 4;opacity:.8}
@@ -448,6 +458,7 @@ footer{
       <li><a href="#s8"><span class="l-en">Contract architecture</span><span class="l-zh">合约架构</span></a></li>
       <li><a href="#s9"><span class="l-en">Off-chain components</span><span class="l-zh">链下组件</span></a></li>
       <li><a href="#s10"><span class="l-en">Definition of done</span><span class="l-zh">完成标准</span></a></li>
+      <li><a href="#s11"><span class="l-en">Security review log</span><span class="l-zh">安全评审记录</span></a></li>
     </ol>
   </nav>
 
@@ -718,35 +729,35 @@ footer{
 
           <!-- shared boundary callout -->
           <circle class="dot" cx="464" cy="56" r="4.5"/>
-          <text class="t-hot l-en" x="474" y="250">executeRound() at t₀+2i — one oracle read, three effects:</text>
-          <text class="t-hot l-zh" x="474" y="250">在 t₀+2i 调用 executeRound()——一次预言机读取，三件事：</text>
+          <text class="t-hot l-en" x="474" y="250">the boundary t₀+2i has one price — three effects:</text>
+          <text class="t-hot l-zh" x="474" y="250">边界 t₀+2i 只对应一个价格——由此产生三个结果：</text>
           <text class="t-price l-en" x="474" y="268">closePrice(N−1) · lockPrice(N) · open betting for N+1</text>
           <text class="t-price l-zh" x="474" y="268">写入 N−1 的结算价 · 写入 N 的行权价 · 开放 N+1 的下注</text>
-          <text class="t-in l-en" x="474" y="286">so lockTs(N) == closeTs(N−1): consecutive rounds share one price, no gap.</text>
-          <text class="t-in l-zh" x="474" y="286">因此 lockTs(N) == closeTs(N−1)：相邻两轮共用同一个价格，中间没有缝隙。</text>
+          <text class="t-in l-en" x="474" y="286">lockTs(N) == closeTs(N−1) — no gap between rounds.</text>
+          <text class="t-in l-zh" x="474" y="286">即 lockTs(N) == closeTs(N−1)，两轮之间没有缝隙。</text>
 
           <!-- settlement window lane -->
-          <text class="t-row l-en" x="84" y="326" text-anchor="end">who may call</text>
-          <text class="t-row l-zh" x="84" y="326" text-anchor="end">谁可以调用</text>
-          <rect class="bar-buf"  x="464" y="310" width="96"  height="24" rx="5"/>
-          <rect class="bar-void" x="560" y="310" width="276" height="24" rx="5"/>
-          <text class="t-in l-en" x="512" y="326" text-anchor="middle">operator only</text>
-          <text class="t-in l-zh" x="512" y="326" text-anchor="middle">仅限 operator</text>
-          <text class="t-in l-en" x="698" y="326" text-anchor="middle">anyone — but a late call can only void the round</text>
-          <text class="t-in l-zh" x="698" y="326" text-anchor="middle">任何人——但迟到的调用只能将该轮作废退款</text>
-          <text class="t-tick" x="560" y="304" text-anchor="middle">+bufferSeconds</text>
+          <text class="t-row l-en" x="84" y="326" text-anchor="end">executeRound</text>
+          <text class="t-row l-zh" x="84" y="326" text-anchor="end">执行结算</text>
+          <rect class="bar-buf"  x="464" y="310" width="120" height="24" rx="5"/>
+          <rect class="bar-void" x="584" y="310" width="252" height="24" rx="5"/>
+          <text class="t-in l-en" x="524" y="326" text-anchor="middle">anyone may call</text>
+          <text class="t-in l-zh" x="524" y="326" text-anchor="middle">任何人都可调用</text>
+          <text class="t-in l-en" x="710" y="326" text-anchor="middle">too late — the round voids into refunds</text>
+          <text class="t-in l-zh" x="710" y="326" text-anchor="middle">已超时——该轮作废并全额退款</text>
+          <text class="t-tick" x="584" y="304" text-anchor="middle">+bufferSeconds</text>
         </svg>
         <div class="legend l-en">
           <span><i class="i-bet"></i>betting phase</span>
           <span><i class="i-live"></i>holding phase</span>
-          <span><i class="i-buf"></i>operator settlement window</span>
-          <span><i class="i-void"></i>permissionless fallback — void only</span>
+          <span><i class="i-buf"></i>settlement window — permissionless</span>
+          <span><i class="i-void"></i>past the buffer — refunds only</span>
         </div>
         <div class="legend l-zh">
           <span><i class="i-bet"></i>下注阶段</span>
           <span><i class="i-live"></i>持仓阶段</span>
-          <span><i class="i-buf"></i>operator 结算窗口</span>
-          <span><i class="i-void"></i>无许可兜底——只能作废</span>
+          <span><i class="i-buf"></i>结算窗口——无需许可</span>
+          <span><i class="i-void"></i>超过缓冲期——只能退款</span>
         </div>
       </div>
       <figcaption class="l-en">
@@ -754,7 +765,7 @@ footer{
         <code>[startTs(N), lockTs(N))</code>.
       </figcaption>
       <figcaption class="l-zh">
-        固定时间栅格上的三个连续轮次。对轮次 N 的下注窗口为 <code>[startTs(N), lockTs(N))</code>。
+        固定时间网格上的三个连续轮次。对轮次 N 的下注窗口为 <code>[startTs(N), lockTs(N))</code>。
       </figcaption>
     </figure>
 
@@ -762,7 +773,7 @@ footer{
       <h3>The timestamp grid</h3>
       <p>
         Round boundaries are derived from an immutable anchor rather than from the previous round's
-        actual settlement time, so they can never drift, no matter how late the keeper is:
+        actual settlement time, so they can never drift, no matter how late the crank is turned:
       </p>
 <pre><code>startTs(N) = anchorTs + (N - epochAnchor) * interval
 lockTs(N)  = startTs(N) + interval
@@ -770,9 +781,9 @@ closeTs(N) = lockTs(N)  + interval
 
 <span class="c">therefore  lockTs(N) == closeTs(N-1)</span></code></pre>
       <p>
-        <code>executeRound()</code> is called once per <code>interval</code> and does three things
-        atomically, with a <strong>single</strong> oracle read, so two adjacent rounds always agree
-        on the boundary price:
+        <code>executeRound(boundaryRoundId)</code> is called once per <code>interval</code> and does
+        three things atomically, all from the <strong>one</strong> price that belongs to the shared
+        boundary, so two adjacent rounds always agree on it:
       </p>
       <ol>
         <li>close epoch <code>N−1</code> — <code>closePrice(N−1) = price</code>, compute the reward pool</li>
@@ -780,33 +791,50 @@ closeTs(N) = lockTs(N)  + interval
         <li>open epoch <code>N+1</code> for betting</li>
       </ol>
 
-      <h3>Liveness: the keeper is not a single point of failure</h3>
+      <h3>Deterministic settlement — nobody holds a timing option</h3>
+      <p>
+        The price of a boundary is the <strong>last Chainlink print at or before that boundary
+        timestamp</strong> — not whatever <code>latestRoundData()</code> happens to return when
+        someone gets round to calling. The caller passes the round id of that print and the contract
+        <em>proves</em> it is the last qualifying one before accepting it.
+      </p>
+      <p>
+        Once a boundary has passed, the set of prints before it is frozen, so the settlement price is
+        a pure function of the boundary timestamp. Calling one second after the boundary and calling
+        three minutes after it produce byte-identical outcomes. That property is what makes the next
+        one safe.
+      </p>
+
+      <h3>Liveness: <code>executeRound</code> is permissionless</h3>
       <ul>
-        <li>The <code>operator</code> (the keeper bot) may call <code>executeRound()</code> from
-          <code>lockTs</code> onwards.</li>
-        <li>Once <code>lockTs + bufferSeconds</code> has passed, <strong>anyone</strong> may call it.
-          But a call that late can no longer settle at a price from the right moment, so it can only
-          <strong>void</strong> the affected rounds into full refunds. A stranger can never choose a
-          settlement price.</li>
+        <li><strong>Anyone may call it</strong>, from <code>lockTs</code> onwards. There is no
+          operator role, no privileged settler, and no address — including the project's own keeper —
+          that can influence a settlement price.</li>
+        <li>Lateness cannot buy anyone a better outcome; the only thing it can do is run out the
+          round's snapshotted <code>bufferSeconds</code>, after which the round <strong>voids into
+          full refunds</strong> instead of settling.</li>
+        <li>The people with money on the winning side have the incentive to call, because settling is
+          what makes their claim payable. That is what keeps the market live without a trusted role.</li>
         <li>If nobody calls at all, a stuck round becomes refundable on its own timer —
           <code>refundable()</code> flips to true with no admin action required.</li>
-        <li>A single call also fast-forwards past a long keeper outage: the epoch counter jumps
-          straight to the epoch the wall clock is actually in, in one transaction.</li>
+        <li>A single call also fast-forwards past a long outage: the epoch counter jumps straight to
+          the epoch the wall clock is actually in, in one transaction.</li>
       </ul>
       <div class="note">
-        <div class="t">What a keeper outage costs</div>
+        <div class="t">What an outage costs</div>
         <p>
-          Users get their money back, never less. A keeper outage degrades the product into refunds;
-          it can never produce a wrong settlement or a loss. Keeper punctuality is a
-          <em>product-quality</em> requirement, not a safety one.
+          Users get their money back, never less. Nobody calling degrades the product into refunds;
+          it can never produce a wrong settlement or a loss. The project runs a keeper because
+          someone should turn the crank promptly — punctuality is a <em>product-quality</em>
+          requirement, not a safety one.
         </p>
       </div>
     </div>
 
     <div class="l-zh">
-      <h3>时间栅格</h3>
+      <h3>时间网格</h3>
       <p>
-        轮次边界由一个不可变的锚点推导得出，而不是由上一轮的实际结算时刻推导，因此无论 keeper 迟到多久，
+        轮次边界由一个不可变的锚点推导得出，而不是由上一轮的实际结算时刻推导，因此无论结算调用迟到多久，
         边界都不会漂移：
       </p>
 <pre><code>startTs(N) = anchorTs + (N - epochAnchor) * interval
@@ -815,8 +843,8 @@ closeTs(N) = lockTs(N)  + interval
 
 <span class="c">由此可得  lockTs(N) == closeTs(N-1)</span></code></pre>
       <p>
-        <code>executeRound()</code> 每个 <code>interval</code> 调用一次，用<strong>一次</strong>预言机读取
-        原子地完成三件事，从而保证相邻两轮在边界价格上永远一致：
+        <code>executeRound(boundaryRoundId)</code> 每个 <code>interval</code> 调用一次，全部使用属于该共享
+        边界的<strong>同一个</strong>价格，原子地完成三件事，从而保证相邻两轮在边界价格上永远一致：
       </p>
       <ol>
         <li>结束轮次 <code>N−1</code>——写入 <code>closePrice(N−1) = price</code>，计算奖池</li>
@@ -824,22 +852,35 @@ closeTs(N) = lockTs(N)  + interval
         <li>开放轮次 <code>N+1</code> 的下注</li>
       </ol>
 
-      <h3>活性：keeper 不是单点故障</h3>
+      <h3>确定性结算——没有人握有时机期权</h3>
+      <p>
+        某个边界的价格，被定义为<strong>该边界时间戳之前（含）的最后一次 Chainlink 报价</strong>——而不是某人
+        终于想起来调用时 <code>latestRoundData()</code> 恰好返回的那个值。调用者需要把这条报价的轮次 ID 传进来，
+        合约会先<em>证明</em>它确实是符合条件的最后一条，然后才接受。
+      </p>
+      <p>
+        边界一旦过去，它之前的报价集合就被冻结了，因此结算价是边界时间戳的纯函数。在边界后一秒调用与在边界后
+        三分钟调用，得到的结果逐字节相同。正是这一性质，让下面这件事变得安全。
+      </p>
+
+      <h3>活性：<code>executeRound</code> 无需许可</h3>
       <ul>
-        <li><code>operator</code>（keeper 机器人）可以从 <code>lockTs</code> 起调用
-          <code>executeRound()</code>。</li>
-        <li>一旦超过 <code>lockTs + bufferSeconds</code>，<strong>任何人</strong>都可以调用。但这么晚的调用
-          已经无法拿到属于正确时刻的价格，因此它只能把相关轮次<strong>作废</strong>并全额退款。陌生人永远
-          无法挑选结算价。</li>
-        <li>即便无人调用，卡住的轮次也会按自身的计时器自动变为可退款——<code>refundable()</code> 会自行
+        <li><strong>任何人</strong>都可以从 <code>lockTs</code> 起调用它。不存在 operator 角色，不存在特权结算方，
+          也没有任何地址——包括项目方自己的 keeper——能够影响结算价。</li>
+        <li>迟到并不能为任何人换来更好的结果；它唯一能造成的后果，是耗尽该轮快照中的
+          <code>bufferSeconds</code>，此后该轮不再结算，而是<strong>作废并全额退款</strong>。</li>
+        <li>钱押在获胜一方的人天然有动力去调用，因为只有完成结算，他们的奖金才可领取。这就是这个市场在没有
+          可信角色的情况下依然保持活跃的原因。</li>
+        <li>即便完全无人调用，卡住的轮次也会按自身的计时器自动变为可退款——<code>refundable()</code> 会自行
           转为 true，不需要任何管理员操作。</li>
-        <li>一次调用还能一次性追平长时间的 keeper 停机：轮次计数会在同一笔交易里直接跳到当前墙钟所处的轮次。</li>
+        <li>一次调用还能一次性追平长时间的停机：轮次计数会在同一笔交易里直接跳到当前墙钟所处的轮次。</li>
       </ul>
       <div class="note">
-        <div class="t">keeper 停机的代价</div>
+        <div class="t">停机的代价</div>
         <p>
-          用户拿回全部本金，一分不少。keeper 停机只会把产品降级为「退款」，绝不会产生错误结算或资金损失。
-          keeper 的准时性是<em>产品体验</em>要求，而不是安全要求。
+          用户拿回全部本金，一分不少。无人调用只会把产品降级为「退款」，绝不会产生错误结算或资金损失。
+          项目方仍然运行一个 keeper，是因为应该有人及时转动这个曲柄——准时性是<em>产品体验</em>要求，
+          而不是安全要求。
         </p>
       </div>
     </div>
@@ -865,14 +906,15 @@ closePrice == lockPrice  →  tie  →  round is voided, full refund, zero fee</
         <li>a tie — <code>closePrice == lockPrice</code></li>
         <li>a one-sided book — <code>up == 0 || down == 0</code>: there is no counterparty, so there is
           nothing to win and nothing is taken</li>
-        <li>the oracle was unusable at lock or at close (stale, non-positive, or a replayed round id)</li>
-        <li>the settlement window <code>lockTs + bufferSeconds</code> elapsed without settlement</li>
-        <li>the admin called <code>pause()</code> while the round was live</li>
+        <li>no usable Chainlink print existed at the lock boundary or at the close boundary</li>
+        <li>the round's settlement window — its own boundary plus its snapshotted <code>bufferSeconds</code> — elapsed without settlement</li>
+        <li>the admin called <code>pause()</code> while the round was live — it can no longer be
+          executed, so it runs out its buffer and refunds in full</li>
       </ul>
       <p>
         A voided round pays every participant exactly their stake back. Void and settled are mutually
-        exclusive for payout purposes: no round is ever both payable and refundable, and no round is
-        ever neither.
+        exclusive for payout purposes: once a round resolves it is exactly one of the two — never both
+        payable and refundable, and never a round whose stakes are stuck as neither.
       </p>
 
       <h3>Otherwise — the parimutuel split</h3>
@@ -937,13 +979,13 @@ closePrice == lockPrice  →  平局  →  该轮作废，全额退款，零手�
       <ul>
         <li>平局——<code>closePrice == lockPrice</code></li>
         <li>单边盘——<code>up == 0 || down == 0</code>：没有交易对手，因此无从赢起，也不会拿走任何人的钱</li>
-        <li>锁定或结算时预言机数据不可用（过期、非正数、或轮次 ID 被重放）</li>
-        <li>结算窗口 <code>lockTs + bufferSeconds</code> 已过而仍未结算</li>
-        <li>管理员在该轮进行期间调用了 <code>pause()</code></li>
+        <li>在锁定边界或结算边界上找不到可用的 Chainlink 报价</li>
+        <li>该轮的结算窗口——自身边界加上快照的 <code>bufferSeconds</code>——已过而仍未结算</li>
+        <li>管理员在该轮进行期间调用了 <code>pause()</code>——该轮从此无法执行，会耗尽缓冲期后全额退款</li>
       </ul>
       <p>
-        作废轮次会把每个参与者的本金原数退回。就赔付而言，「作废」与「已结算」互斥：不存在既可领奖又可退款的
-        轮次，也不存在两者皆不可、资金卡死的轮次。
+        作废轮次会把每个参与者的本金原数退回。就赔付而言，「作废」与「已结算」互斥：一轮一旦有了结果，就必然
+        落在两者之一——既不会既可领奖又可退款，也不会两者皆不可、把本金卡死在合约里。
       </p>
 
       <h3>其余情况——平价池分配</h3>
@@ -980,7 +1022,7 @@ upImpliedProb = 1 / upMultiple                    <span class="c">Polymarket 式
         <dt>奖池 rewardPool</dt><dd>1,100 + 3,000 − 90 = 4,010 USDT</dd>
         <dt>分配基数（赢方池）</dt><dd>1,100 USDT</dd>
         <dt>Alice 的赔付</dt><dd class="hi">100 × 4,010 / 1,100 = 364.5 USDT</dd>
-        <dt>Alice 的净利润</dt><dd class="hi">100 本金获利 +264.5 USDT——3.645 倍</dd>
+        <dt>Alice 的净利润</dt><dd class="hi">100 本金净赚 +264.5 USDT——即 3.645 倍</dd>
         <dt>每个看跌方参与者</dt><dd>恰好损失本金，不会更多</dd>
         <dt>协议金库</dt><dd>90 USDT</dd>
       </dl></div>
@@ -997,23 +1039,45 @@ upImpliedProb = 1 / upMultiple                    <span class="c">Polymarket 式
 
     <div class="l-en">
       <p>
-        Both the strike and the settlement come from a Chainlink <code>AggregatorV3</code> feed read
-        on-chain, at 8 decimals. A read is <strong>usable</strong> only if every one of these holds:
+        Both the strike and the settlement are Chainlink <code>AggregatorV3</code> prints read
+        on-chain at 8 decimals. A boundary timestamp <code>T</code> resolves to the answer of the
+        Chainlink round whose <code>updatedAt</code> is the <strong>last one at or before
+        <code>T</code></strong>. The caller supplies that round id and the contract proves it.
       </p>
+
+      <h3>What the contract checks before it accepts a price</h3>
       <ul>
-        <li><code>latestRoundData()</code> does not revert (the call is wrapped in <code>try/catch</code>)</li>
-        <li><code>answer &gt; 0</code></li>
-        <li><code>updatedAt != 0</code> and <code>updatedAt &lt;= block.timestamp</code> — no future prints</li>
-        <li><code>block.timestamp - updatedAt &lt;= oracleMaxAge</code> — the print is fresh enough</li>
-        <li><code>roundId &gt; lastOracleRoundId</code> for this market — strictly monotonic, which blocks
-          the replay of an aggregator round that was already consumed</li>
-        <li>the call itself arrives no later than <code>lockTs + bufferSeconds</code></li>
+        <li><code>getRoundData(roundId)</code> returns that exact id, a positive answer, and a
+          non-zero <code>updatedAt</code> that is not in the future — the call is wrapped in
+          <code>try/catch</code>, so a reverting feed simply fails the check</li>
+        <li><code>updatedAt &lt;= T</code> — the print is at or before the boundary, never after it</li>
+        <li><code>T - updatedAt &lt;= oracleMaxAge</code>, against the round's own snapshot — the feed
+          was genuinely alive at the boundary rather than merely last seen at some point</li>
+        <li>it is the <em>last</em> qualifying print: either it is the feed's latest round, or
+          <code>getRoundData(roundId + 1)</code> exists and its <code>updatedAt</code> is already past
+          <code>T</code></li>
+        <li>the transaction itself arrives no later than the boundary plus the round's snapshotted
+          <code>bufferSeconds</code></li>
       </ul>
       <p>
-        If a read is unusable at lock or at close, the affected round is voided and becomes fully
-        refundable. The contract never falls back to a stale price, an interpolated price, or an
-        admin-supplied price.
+        If any check fails, the affected round is voided and becomes fully refundable. The contract
+        never falls back to a stale price, an interpolated price, or an admin-supplied price. A gap in
+        the round-id sequence — an aggregator phase change — is treated conservatively as unusable and
+        voids the round rather than guessing.
       </p>
+      <div class="note">
+        <div class="t">Why a dead feed cannot manufacture a fake tie</div>
+        <p>
+          <code>oracleMaxAge &lt; interval</code> is enforced in the constructor. Two consecutive
+          boundaries are one <code>interval</code> apart, so they can never both resolve to the same
+          Chainlink print. A frozen feed therefore voids the round into refunds instead of producing
+          <code>closePrice == lockPrice</code> and calling it a tie.
+        </p>
+      </div>
+
+      <h3>Helper views for whoever turns the crank</h3>
+<pre><code>boundaryTimestamp()                            <span class="c">// the boundary the next call must price</span>
+findRoundIdAt(targetTs, startFrom, maxSteps)   <span class="c">// walks back to the right round id; eth_call only</span></code></pre>
 
       <h3>Verified BSC feed addresses</h3>
       <p class="small">
@@ -1040,31 +1104,52 @@ upImpliedProb = 1 / upMultiple                    <span class="c">Polymarket 式
         <p>
           BSC testnet's own Chainlink feeds update far too infrequently to drive 5-minute rounds —
           BNB/USD was measured 1,480 seconds stale on 2026-08-26, which would void every short round
-          and prove nothing. Testnet therefore deploys <code>RelayAggregator</code>, a Chainlink-shaped
-          feed that the keeper pushes a real spot price into. It keeps testnet behaviour representative
-          of mainnet. It is a testnet-only contract and the deploy script refuses to put it on mainnet.
+          and prove nothing. Testnet therefore deploys <code>RelayAggregator</code>: a Chainlink-shaped
+          feed <em>with round history</em>, so <code>getRoundData</code> behaves exactly as the real
+          aggregator does, fed a real spot price by the keeper. Writes are restricted to the owner and
+          one updater address, so nobody can front-run a testnet settlement with an invented price. It
+          is a testnet-only contract: <code>Deploy.s.sol</code> only ever instantiates it on chain 97,
+          and wires the real Chainlink feeds on mainnet.
         </p>
       </div>
     </div>
 
     <div class="l-zh">
       <p>
-        行权价与结算价都来自链上读取的 Chainlink <code>AggregatorV3</code> 喂价，精度为 8 位小数。
-        一次读取只有在下列条件<strong>全部</strong>满足时才被视为<strong>可用</strong>：
+        行权价与结算价都来自链上读取的 Chainlink <code>AggregatorV3</code> 报价，精度为 8 位小数。
+        一个边界时间戳 <code>T</code> 所对应的价格，被定义为 <code>updatedAt</code>
+        <strong>在 <code>T</code> 之前（含）的最后一条</strong> Chainlink 报价。该轮次 ID 由调用者提供，
+        并由合约负责证明其正确性。
       </p>
+
+      <h3>合约在接受一个价格之前会检查什么</h3>
       <ul>
-        <li><code>latestRoundData()</code> 未回滚（调用被 <code>try/catch</code> 包裹）</li>
-        <li><code>answer &gt; 0</code></li>
-        <li><code>updatedAt != 0</code> 且 <code>updatedAt &lt;= block.timestamp</code>——不接受未来时间戳</li>
-        <li><code>block.timestamp - updatedAt &lt;= oracleMaxAge</code>——报价足够新鲜</li>
-        <li>相对本市场满足 <code>roundId &gt; lastOracleRoundId</code>——严格单调递增，杜绝重放已被消费过的
-          聚合器轮次</li>
-        <li>调用本身发生在 <code>lockTs + bufferSeconds</code> 之前</li>
+        <li><code>getRoundData(roundId)</code> 返回的 ID 与传入值完全一致、报价为正数、<code>updatedAt</code>
+          非零且不在未来——调用被 <code>try/catch</code> 包裹，因此会回滚的喂价只会导致检查失败</li>
+        <li><code>updatedAt &lt;= T</code>——报价发生在边界之前（含），绝不能在边界之后</li>
+        <li><code>T - updatedAt &lt;= oracleMaxAge</code>，比对该轮自己的快照值——喂价在边界时刻确实是活的，
+          而不只是「某个时点曾经更新过」</li>
+        <li>它必须是符合条件的<em>最后</em>一条：要么它就是喂价的最新轮次，要么
+          <code>getRoundData(roundId + 1)</code> 存在且其 <code>updatedAt</code> 已经晚于 <code>T</code></li>
+        <li>交易本身不得晚于「边界 + 该轮快照的 <code>bufferSeconds</code>」</li>
       </ul>
       <p>
-        若锁定或结算时读取不可用，相关轮次会被作废并转为全额可退款。合约绝不会退而使用过期价格、插值价格，
-        或由管理员手工提供的价格。
+        任一检查未通过，相关轮次即被作废并转为全额可退款。合约绝不会退而使用过期价格、插值价格，或由管理员
+        手工提供的价格。轮次 ID 序列出现断层（聚合器换代 phase change）时，合约保守地视为不可用，宁可作废
+        也不做任何猜测。
       </p>
+      <div class="note">
+        <div class="t">为什么「死掉的喂价」无法伪造出平局</div>
+        <p>
+          构造函数强制 <code>oracleMaxAge &lt; interval</code>。相邻两个边界相隔正好一个 <code>interval</code>，
+          因此它们不可能解析到同一条 Chainlink 报价。喂价冻结时，该轮会作废退款，而不会得出
+          <code>closePrice == lockPrice</code> 并被当成平局。
+        </p>
+      </div>
+
+      <h3>为调用者提供的辅助只读接口</h3>
+<pre><code>boundaryTimestamp()                            <span class="c">// 下一次调用需要定价的边界时间戳</span>
+findRoundIdAt(targetTs, startFrom, maxSteps)   <span class="c">// 回溯查找对应的轮次 ID；仅供 eth_call 使用</span></code></pre>
 
       <h3>已核验的 BSC 喂价地址</h3>
       <p class="small">
@@ -1090,8 +1175,10 @@ upImpliedProb = 1 / upMultiple                    <span class="c">Polymarket 式
         <p>
           BSC 测试网自带的 Chainlink 喂价更新频率过低，根本无法支撑 5 分钟轮次——2026-08-26 实测 BNB/USD 已经
           陈旧了 1,480 秒，这会让每一轮短周期市场都作废，什么也验证不了。因此测试网改为部署
-          <code>RelayAggregator</code>：一个与 Chainlink 接口一致、由 keeper 推送真实现货价格的喂价合约，
-          使测试网行为与主网保持一致。它是仅限测试网的合约，部署脚本拒绝将其部署到主网。
+          <code>RelayAggregator</code>：一个与 Chainlink 接口一致、<em>带轮次历史</em>的喂价合约，使
+          <code>getRoundData</code> 的行为与真实聚合器完全一致，并由 keeper 推送真实现货价格。写入权限被限制为
+          owner 与单一 updater 地址，因此没有人能用凭空捏造的价格抢跑测试网结算。它是仅限测试网的合约，
+          <code>Deploy.s.sol</code> 只在 97 链上创建它，主网分支接的是真实的 Chainlink 喂价。
         </p>
       </div>
     </div>
@@ -1109,12 +1196,14 @@ upImpliedProb = 1 / upMultiple                    <span class="c">Polymarket 式
           <tr><th><code>maxBetAmount</code></th><td>5,000 USDT · 10 BNB per tx</td><td>Limits whale concentration in one transaction</td></tr>
           <tr><th><code>maxSideAmount</code></th><td>100,000 USDT · 500 BNB per side per round</td><td>Caps the payoff from manipulating the settlement print — the exact attack surface criticised in Polymarket's 5m markets</td></tr>
           <tr><th><code>feeBps</code></th><td>300 (3%), hard cap 1000 (10%)</td><td>Protocol revenue; the cap is a constant, not an admin setting</td></tr>
-          <tr><th><code>bufferSeconds</code></th><td>60s (5m rounds) · 300s (1h rounds)</td><td>Bounds how late a round may still settle; after it, only voiding is possible</td></tr>
-          <tr><th><code>oracleMaxAge</code></th><td>120s (5m rounds) · 600s (1h rounds)</td><td>Staleness limit; the constructor forces it to be ≤ <code>interval</code></td></tr>
-          <tr><th><code>pause()</code></th><td>admin</td><td>Halts betting; live rounds become refundable. <code>claim()</code> is deliberately not pausable</td></tr>
+          <tr><th><code>bufferSeconds</code></th><td>240s (5m rounds) · 1800s (1h rounds)</td><td>How late a round may still be settled, measured from its own boundary. Past it, the round can only void into refunds. Forced <code>&lt; interval</code></td></tr>
+          <tr><th><code>oracleMaxAge</code></th><td>150s (5m rounds) · 900s (1h rounds)</td><td>How stale the boundary print may be. Forced <code>&lt; interval</code>, so two boundaries can never share one print</td></tr>
+          <tr><th>No settlement role</th><td>—</td><td><code>executeRound</code> is permissionless and the price is a pure function of the boundary, so no address holds a settlement or timing option</td></tr>
+          <tr><th><code>pause()</code></th><td>admin</td><td>Halts betting; live rounds run out their buffer and become refundable. <code>claim()</code> is deliberately not pausable</td></tr>
           <tr><th>Treasury withdrawal</th><td>only accrued <code>treasuryAmount</code></td><td>The admin can never touch user principal, by construction</td></tr>
-          <tr><th>Per-round parameter snapshot</th><td><code>feeBps</code>, <code>bufferSeconds</code></td><td>An admin change can never alter a round that is already open, nor un-expire an expired one</td></tr>
+          <tr><th>Per-round parameter snapshot</th><td><code>feeBps</code>, <code>bufferSeconds</code>, <code>oracleMaxAge</code></td><td>An admin change only affects rounds started afterwards — it can never alter a live round nor un-expire an expired one</td></tr>
           <tr><th>Per-user position</th><td>one UP and one DOWN balance per epoch</td><td>Repeat bets accumulate, which keeps claim accounting O(1)</td></tr>
+          <tr><th>ERC20 strictness</th><td>exact-amount transfers only</td><td>A fee-on-transfer or rebasing asset reverts with <code>UnsupportedAsset</code> at bet time rather than silently under-collateralising a round</td></tr>
           <tr><th><code>recoverToken</code></th><td>admin</td><td>Rescues stray tokens only; the settlement asset can never be withdrawn this way</td></tr>
         </tbody>
       </table></div>
@@ -1129,9 +1218,17 @@ upImpliedProb = 1 / upMultiple                    <span class="c">Polymarket 式
 
 <span class="c">outstanding = Σ unsettled stakes + Σ unclaimed payouts</span></code></pre>
       <p>
+        It is deliberately an upper bound rather than an exact figure: per-winner floor division can
+        leave at most one settlement unit (1 wei) per winner in the contract. That residue is never
+        paid out and is not withdrawable by anyone, including the admin, which keeps the solvency
+        check conservative in the users' favour.
+      </p>
+      <p>
         Funds only ever leave by <strong>pull payment</strong> — the user calls
-        <code>claim(epochs[])</code>. The contract never pushes money to a user during settlement, so
-        one hostile or broken recipient can never block settlement for everyone else.
+        <code>claim(epochs[])</code>, or <code>claimTo(epochs[], to)</code> if they are a contract
+        account that cannot receive the settlement asset itself. The contract never pushes money to a
+        user during settlement, so one hostile or broken recipient can never block settlement for
+        everyone else.
       </p>
     </div>
 
@@ -1139,16 +1236,18 @@ upImpliedProb = 1 / upMultiple                    <span class="c">Polymarket 式
       <div class="tw"><table>
         <thead><tr><th>控制项</th><th>默认值</th><th>作用</th></tr></thead>
         <tbody>
-          <tr><th><code>minBetAmount</code></th><td>1 USDT · 0.005 BNB</td><td>阻止粉尘下注与 Gas 骚扰</td></tr>
+          <tr><th><code>minBetAmount</code></th><td>1 USDT · 0.005 BNB</td><td>挡住粉尘下注与借最小额下注制造的 gas 消耗攻击</td></tr>
           <tr><th><code>maxBetAmount</code></th><td>单笔 5,000 USDT · 10 BNB</td><td>限制单笔巨鲸集中度</td></tr>
           <tr><th><code>maxSideAmount</code></th><td>每轮每边 100,000 USDT · 500 BNB</td><td>限制操纵结算价所能获得的收益上限——这正是 Polymarket 5 分钟市场被诟病的攻击面</td></tr>
           <tr><th><code>feeBps</code></th><td>300（3%），硬上限 1000（10%）</td><td>协议收入；上限是常量，管理员无法调高</td></tr>
-          <tr><th><code>bufferSeconds</code></th><td>5 分钟轮次 60 秒 · 1 小时轮次 300 秒</td><td>限定轮次最晚可结算的时间；超时之后只能作废</td></tr>
-          <tr><th><code>oracleMaxAge</code></th><td>5 分钟轮次 120 秒 · 1 小时轮次 600 秒</td><td>报价过期阈值；构造函数强制其 ≤ <code>interval</code></td></tr>
-          <tr><th><code>pause()</code></th><td>管理员</td><td>暂停下注，进行中的轮次转为可退款。<code>claim()</code> 有意不受暂停影响</td></tr>
+          <tr><th><code>bufferSeconds</code></th><td>5 分钟轮次 240 秒 · 1 小时轮次 1800 秒</td><td>自该轮自身边界起算，最晚仍可完成结算的时限。超过之后该轮只能作废退款。强制 <code>&lt; interval</code></td></tr>
+          <tr><th><code>oracleMaxAge</code></th><td>5 分钟轮次 150 秒 · 1 小时轮次 900 秒</td><td>边界报价允许的最大陈旧程度。强制 <code>&lt; interval</code>，因此两个边界不可能共用同一条报价</td></tr>
+          <tr><th>不存在结算角色</th><td>—</td><td><code>executeRound</code> 无需许可，且价格是边界的纯函数，因此没有任何地址握有结算权或时机期权</td></tr>
+          <tr><th><code>pause()</code></th><td>管理员</td><td>暂停下注；进行中的轮次会耗尽缓冲期并转为可退款。<code>claim()</code> 有意不受暂停影响</td></tr>
           <tr><th>金库提取</th><td>仅限已计提的 <code>treasuryAmount</code></td><td>从结构上保证管理员永远碰不到用户本金</td></tr>
-          <tr><th>逐轮参数快照</th><td><code>feeBps</code>、<code>bufferSeconds</code></td><td>管理员改参数不会影响已开启的轮次，也无法让已过期的轮次「复活」</td></tr>
+          <tr><th>逐轮参数快照</th><td><code>feeBps</code>、<code>bufferSeconds</code>、<code>oracleMaxAge</code></td><td>管理员改参数只对此后新开的轮次生效——既不会影响进行中的轮次，也无法让已过期的轮次「复活」</td></tr>
           <tr><th>用户持仓记账</th><td>每轮每人各一个看涨 / 看跌余额</td><td>多次下注累加合并，使领取逻辑保持 O(1)</td></tr>
+          <tr><th>ERC20 严格性</th><td>只接受足额到账的转账</td><td>转账扣费型或 rebasing 代币会在下注时以 <code>UnsupportedAsset</code> 直接回滚，而不是悄悄造成轮次抵押不足</td></tr>
           <tr><th><code>recoverToken</code></th><td>管理员</td><td>仅用于取回误转入的代币；结算资产永远无法通过它取走</td></tr>
         </tbody>
       </table></div>
@@ -1162,7 +1261,12 @@ upImpliedProb = 1 / upMultiple                    <span class="c">Polymarket 式
 
 <span class="c">outstanding = Σ 未结算的下注 + Σ 未领取的赔付</span></code></pre>
       <p>
-        资金只通过<strong>拉取式提款</strong>离开合约——由用户自己调用 <code>claim(epochs[])</code>。
+        这里刻意取「上界」而非精确值：逐个赢家的向下取整最多会在合约里各留下一个结算单位（1 wei）的零头。
+        这部分零头永远不会被支付，也不会被任何人（包括管理员）提走，从而使偿付能力校验始终保守地偏向用户一侧。
+      </p>
+      <p>
+        资金只通过<strong>拉取式提款</strong>离开合约——由用户自己调用 <code>claim(epochs[])</code>；
+        若下注者是无法接收结算资产的合约账户，则调用 <code>claimTo(epochs[], to)</code> 指定收款地址。
         合约在结算过程中从不主动向用户打款，因此单个恶意或异常的收款地址永远无法阻塞其他所有人的结算。
       </p>
     </div>
@@ -1177,16 +1281,18 @@ upImpliedProb = 1 / upMultiple                    <span class="c">Polymarket 式
    ├─ <b>UpDownMarketERC20</b>          <span class="cm">settlement asset is an ERC20 (USDT on BSC, 18 decimals)</span>
    └─ <b>UpDownMarketNative</b>         <span class="cm">settlement asset is native BNB</span>
 <b>UpDownRegistry</b>                   <span class="cm">on-chain directory of markets — one address the UI reads</span>
-<b>RelayAggregator</b>   (testnet)      <span class="cm">keeper-fed, Chainlink-shaped price feed</span>
+<b>RelayAggregator</b>   (testnet)      <span class="cm">keeper-fed Chainlink-shaped feed, with round history</span>
 <b>TestUSDT</b>          (testnet)      <span class="cm">faucet USDT, 18 decimals, matching BSC-USDT</span></div></div>
       <ul>
         <li>Solidity 0.8.28 with OpenZeppelin 5 — <code>Ownable2Step</code>, <code>Pausable</code>,
           <code>ReentrancyGuard</code>, <code>SafeERC20</code>.</li>
+        <li>There is <strong>no operator or settler role</strong> on a market. The only privileged
+          address is the owner, and its powers are bounded by the previous section.</li>
         <li>The registry is deliberately a <strong>registry and not a factory</strong>: embedding
           market creation bytecode would push it past the 24 KB contract-size limit, and markets are
           deployed and source-verified individually anyway.</li>
-        <li>ERC20 deposits credit the <strong>measured balance delta</strong>, so a fee-on-transfer
-          asset can never under-collateralise a round.</li>
+        <li>ERC20 deposits must arrive <strong>in full</strong>; a fee-on-transfer or rebasing asset
+          reverts at bet time instead of quietly under-collateralising a round.</li>
         <li>Ownership transfers are two-step (<code>Ownable2Step</code>), so a typo in an address can
           never orphan a market.</li>
         <li>The admin is intended to be a <strong>multisig behind a Timelock</strong> at mainnet launch.</li>
@@ -1202,15 +1308,19 @@ function betDown(uint256 epoch) external payable;
 
 <span class="c">// collecting: winnings and refunds together; reverts if any epoch is not collectable</span>
 function claim(uint256[] calldata epochs) external;
+function claimTo(uint256[] calldata epochs, address to) external;
 
-<span class="c">// the round engine</span>
-function executeRound() external;
+<span class="c">// the round engine — permissionless</span>
+function executeRound(uint80 boundaryRoundId) external;
+function boundaryTimestamp() external view returns (uint256);
+function findRoundIdAt(uint256 targetTs, uint80 startFrom, uint256 maxSteps)
+    external view returns (uint80 roundId, bool found);
 function genesisStart() external;                <span class="c">// owner, opens the first round</span>
 
 <span class="c">// views</span>
 function currentEpoch() external view returns (uint256);            <span class="c">// the epoch accepting bets</span>
 function getRound(uint256 epoch) external view returns (Round memory);
-function odds(uint256 epoch) external view returns (uint256 upBps, uint256 downBps);
+function odds(uint256 epoch) external view returns (uint256 upMultipleBps, uint256 downMultipleBps);
 function claimable(uint256 epoch, address user) external view returns (bool);
 function refundable(uint256 epoch, address user) external view returns (bool);
 function pendingPayout(uint256 epoch, address user) external view returns (uint256);
@@ -1218,7 +1328,9 @@ function settlementAsset() external view returns (address);         <span class=
       <p class="small">
         <code>currentEpoch()</code> is the epoch currently accepting bets; <code>currentEpoch() - 1</code>
         is the one that is locked and live. Prices in <code>Round</code> are <code>int256</code> with
-        8 decimals, matching Chainlink.
+        8 decimals, matching Chainlink. <code>claim</code> reverts if <em>any</em> epoch in the array
+        is not collectable, so callers should pass only epochs where <code>claimable</code> or
+        <code>refundable</code> is true.
       </p>
     </div>
 
@@ -1227,15 +1339,17 @@ function settlementAsset() external view returns (address);         <span class=
    ├─ <b>UpDownMarketERC20</b>          <span class="cm">以 ERC20 结算（BSC 上的 USDT，18 位小数）</span>
    └─ <b>UpDownMarketNative</b>         <span class="cm">以原生 BNB 结算</span>
 <b>UpDownRegistry</b>                   <span class="cm">市场的链上目录——前端只需读取这一个地址</span>
-<b>RelayAggregator</b>   （测试网）     <span class="cm">由 keeper 推送、接口与 Chainlink 一致的喂价合约</span>
+<b>RelayAggregator</b>   （测试网）     <span class="cm">由 keeper 推送、带轮次历史、接口与 Chainlink 一致的喂价</span>
 <b>TestUSDT</b>          （测试网）     <span class="cm">水龙头 USDT，18 位小数，与 BSC-USDT 对齐</span></div></div>
       <ul>
         <li>Solidity 0.8.28 + OpenZeppelin 5——<code>Ownable2Step</code>、<code>Pausable</code>、
           <code>ReentrancyGuard</code>、<code>SafeERC20</code>。</li>
+        <li>市场合约中<strong>不存在 operator 或结算者角色</strong>。唯一的特权地址是 owner，
+          而它的权限边界见上一节。</li>
         <li>这里刻意采用<strong>注册表而非工厂</strong>：把市场创建字节码内嵌进去会超过 24 KB 的合约体积上限，
           而且每个市场本来就要单独部署与源码验证。</li>
-        <li>ERC20 存入按<strong>实际到账余额差额</strong>入账，因此转账带手续费的代币也绝不会导致轮次
-          抵押不足。</li>
+        <li>ERC20 存入必须<strong>足额到账</strong>；转账扣费型或 rebasing 代币会在下注时直接回滚，
+          而不是悄悄造成轮次抵押不足。</li>
         <li>所有权转移采用两步式（<code>Ownable2Step</code>），地址写错也不会让市场变成无主合约。</li>
         <li>主网上线时，管理员身份应为<strong>时间锁背后的多签钱包</strong>。</li>
       </ul>
@@ -1250,15 +1364,19 @@ function betDown(uint256 epoch) external payable;
 
 <span class="c">// 领取：奖金与退款一并领取；数组中任一轮次不可领取则整笔回滚</span>
 function claim(uint256[] calldata epochs) external;
+function claimTo(uint256[] calldata epochs, address to) external;
 
-<span class="c">// 轮次引擎</span>
-function executeRound() external;
+<span class="c">// 轮次引擎 —— 无需许可</span>
+function executeRound(uint80 boundaryRoundId) external;
+function boundaryTimestamp() external view returns (uint256);
+function findRoundIdAt(uint256 targetTs, uint80 startFrom, uint256 maxSteps)
+    external view returns (uint80 roundId, bool found);
 function genesisStart() external;                <span class="c">// 仅限 owner，开启第一轮</span>
 
 <span class="c">// 只读接口</span>
 function currentEpoch() external view returns (uint256);            <span class="c">// 当前接受下注的轮次</span>
 function getRound(uint256 epoch) external view returns (Round memory);
-function odds(uint256 epoch) external view returns (uint256 upBps, uint256 downBps);
+function odds(uint256 epoch) external view returns (uint256 upMultipleBps, uint256 downMultipleBps);
 function claimable(uint256 epoch, address user) external view returns (bool);
 function refundable(uint256 epoch, address user) external view returns (bool);
 function pendingPayout(uint256 epoch, address user) external view returns (uint256);
@@ -1266,6 +1384,8 @@ function settlementAsset() external view returns (address);         <span class=
       <p class="small">
         <code>currentEpoch()</code> 是当前正在接受下注的轮次；<code>currentEpoch() - 1</code> 则是已锁定、
         正在进行中的那一轮。<code>Round</code> 中的价格为 <code>int256</code>、8 位小数，与 Chainlink 一致。
+        只要数组中<em>任意</em>一轮不可领取，<code>claim</code> 就会整笔回滚，因此调用方应只传入
+        <code>claimable</code> 或 <code>refundable</code> 为 true 的轮次。
       </p>
     </div>
   </section>
@@ -1277,13 +1397,16 @@ function settlementAsset() external view returns (address);         <span class=
     <div class="l-en">
       <div class="cards">
         <div class="card"><div class="k">Keeper</div><div class="v">
-          TypeScript + viem. Calls <code>executeRound()</code> once per <code>interval</code> with
-          retry, gas bumping, balance alerting and an idempotent catch-up path. On testnet it also
-          relays a real spot price into <code>RelayAggregator</code>. Because of the permissionless
-          fallback, a keeper outage degrades to refunds — never to loss.</div></div>
+          TypeScript + viem. Once per <code>interval</code> it reads <code>boundaryTimestamp()</code>,
+          resolves the boundary round id with <code>findRoundIdAt</code> over <code>eth_call</code>,
+          and sends <code>executeRound(roundId)</code> — with retry, gas bumping, balance alerting and
+          an idempotent catch-up path. On testnet it also relays a real spot price into
+          <code>RelayAggregator</code>. It holds <b>no privilege</b>: anyone can do exactly what it
+          does, and the outcome does not depend on who calls or when.</div></div>
         <div class="card"><div class="k">Web</div><div class="v">
-          Next.js + wagmi + viem. Live round card with countdown, odds shown in both vocabularies,
-          bet UP/DOWN, an open-position and claim list, and round history read from event logs.</div></div>
+          React + Vite + wagmi + viem + Tailwind, shipped as a static bundle. Live round card with
+          countdown, odds shown in both vocabularies, bet UP/DOWN, an open-position and claim list,
+          and round history read from event logs.</div></div>
         <div class="card"><div class="k">Deploy scripts</div><div class="v">
           Foundry. Deterministic deploy, BscScan source verification, and a JSON deployment artifact
           per chain id that the keeper and the web app both read.</div></div>
@@ -1293,12 +1416,14 @@ function settlementAsset() external view returns (address);         <span class=
     <div class="l-zh">
       <div class="cards">
         <div class="card"><div class="k">Keeper（轮次执行机器人）</div><div class="v">
-          TypeScript + viem。每个 <code>interval</code> 调用一次 <code>executeRound()</code>，具备重试、
-          Gas 提价、余额告警与幂等追平逻辑。在测试网上还负责把真实现货价格中继进
-          <code>RelayAggregator</code>。由于存在无许可兜底，keeper 停机只会降级为退款，绝不会造成损失。</div></div>
+          TypeScript + viem。每个 <code>interval</code> 读取一次 <code>boundaryTimestamp()</code>，
+          通过 <code>eth_call</code> 调用 <code>findRoundIdAt</code> 解析出边界轮次 ID，然后发送
+          <code>executeRound(roundId)</code>——具备重试、Gas 提价、余额告警与幂等追平逻辑。在测试网上还负责把
+          真实现货价格中继进 <code>RelayAggregator</code>。它<b>不持有任何特权</b>：任何人都能做完全相同的事，
+          而结果不取决于由谁调用、何时调用。</div></div>
         <div class="card"><div class="k">Web（前端）</div><div class="v">
-          Next.js + wagmi + viem。含倒计时的实时轮次卡片、以两种语汇展示的赔率、看涨/看跌下注、
-          持仓与可领取列表，以及基于事件日志的历史轮次记录。</div></div>
+          React + Vite + wagmi + viem + Tailwind，构建为纯静态资源。含倒计时的实时轮次卡片、
+          以两种语汇展示的赔率、看涨/看跌下注、持仓与可领取列表，以及基于事件日志的历史轮次记录。</div></div>
         <div class="card"><div class="k">部署脚本</div><div class="v">
           Foundry。确定性部署、BscScan 源码验证，并按链 ID 输出一份 JSON 部署产物，供 keeper 与前端共同读取。</div></div>
       </div>
@@ -1317,7 +1442,7 @@ function settlementAsset() external view returns (address);         <span class=
         <li>Deployed and source-verified on <strong>BSC testnet (97)</strong>, with a real end-to-end
           round — bet both sides, lock, close, claim — proven by on-chain transaction hashes.</li>
         <li>The web app is publicly reachable and driving that testnet deployment.</li>
-        <li>Cross-vendor review returns APPROVED with an empty OPEN list.</li>
+        <li>Cross-vendor review (Codex <code>gpt-5.6-sol</code>) returns APPROVED with an empty OPEN list.</li>
         <li class="gate"><strong>Mainnet (56) deployment is a separate, owner-gated step.</strong>
           It spends real funds and is irreversible, so it requires the owner's explicit go-ahead and
           a funded deployer key. Nothing in this repository deploys to mainnet on its own.</li>
@@ -1331,11 +1456,89 @@ function settlementAsset() external view returns (address);         <span class=
         <li>在 <strong>BSC 测试网（97）</strong>完成部署与源码验证，并跑通一轮真实的端到端流程——双边下注、
           锁定、结算、领取——以链上交易哈希为证。</li>
         <li>前端可公开访问，并驱动该测试网部署。</li>
-        <li>跨厂商交叉评审返回 APPROVED，且 OPEN 列表为空。</li>
+        <li>跨厂商交叉评审（Codex <code>gpt-5.6-sol</code>）返回 APPROVED，且 OPEN 列表为空。</li>
         <li class="gate"><strong>主网（56）部署是一个独立的、需业主授权的步骤。</strong>
           它会花费真实资金且不可撤销，因此必须获得业主明确许可并配备已充值的部署私钥。本仓库中的任何流程
           都不会自行部署到主网。</li>
       </ol>
+    </div>
+  </section>
+
+  <!-- ══════════════ 11 ══════════════ -->
+  <section id="s11">
+    <h2><span class="num">11</span><span class="l-en">Security review log</span><span class="l-zh">安全评审记录</span></h2>
+
+    <div class="l-en">
+      <h3>Round 1 — Codex (<code>gpt-5.6-sol</code>), 2026-08-26 → <b>CHANGES-REQUIRED, all fixed</b></h3>
+      <p>
+        An adversarial cross-vendor audit of the whole contract surface. Every finding below is
+        closed, and each carries a named regression test so it cannot come back silently.
+      </p>
+      <div class="tw"><table class="rev">
+        <thead><tr><th>Sev</th><th>Finding</th><th>Resolution</th></tr></thead>
+        <tbody>
+          <tr><td><span class="sev sev-h">high</span></td>
+            <td>Settlement of epoch <code>N−1</code> used epoch <code>N</code>'s buffer snapshot. Widening the buffer let an already-refundable round settle afterwards, paying winners out of liabilities that had already been refunded away.</td>
+            <td><code>_lockRound</code> / <code>_endRound</code> now judge each round against <b>its own</b> snapshot, mirroring <code>_isExpired</code> exactly. Regression: <code>test_wideningBufferCannotSettleAnAlreadyExpiredRound</code>.</td></tr>
+          <tr><td><span class="sev sev-h">high</span></td>
+            <td>The operator chose <em>which</em> within-buffer print settled a round, and could withhold execution to force a refund — a free option.</td>
+            <td>The settlement price is now a <b>pure function of the boundary timestamp</b> (the last print at or before it, proved on-chain), <code>executeRound</code> is permissionless, and the operator role is removed entirely. Regressions: <code>test_settlementPriceIsIndependentOfWhenExecuteIsCalled</code>, <code>test_supplyingAStalerRoundIdIsRejected</code>.</td></tr>
+          <tr><td><span class="sev sev-m">medium</span></td>
+            <td><code>oracleMaxAge</code> was global, so an admin could widen it just before execution to make a favourable stale print settle a live round.</td>
+            <td>Snapshotted per round. Regression: <code>test_wideningOracleMaxAgeCannotAlterAnOpenRound</code>.</td></tr>
+          <tr><td><span class="sev sev-m">medium</span></td>
+            <td>Measured-delta crediting did not make arbitrary ERC20s safe (negative rebase, outbound transfer fee).</td>
+            <td>Deposits now <b>require</b> the balance delta to equal the stake; non-conforming assets revert at bet time. Documented as a deployment constraint. Regression: <code>test_feeOnTransferAssetIsRejected</code>.</td></tr>
+          <tr><td><span class="sev sev-m">medium</span></td>
+            <td>Native payouts could only pay <code>msg.sender</code>, stranding a contract bettor with no payable receive.</td>
+            <td>Added <code>claimTo(epochs, to)</code>. Regression: <code>test_contractBettorCanCollectViaClaimTo</code>.</td></tr>
+          <tr><td><span class="sev sev-m">medium</span></td>
+            <td>The invariant suite never mutated admin parameters and swallowed failed claims, so it could not reach the first finding.</td>
+            <td>The handler now churns <code>setParams</code> / <code>setLimits</code>, and a new invariant asserts that anything advertised as <code>claimable</code> / <code>refundable</code> really pays the quoted amount. Coverage is proved deterministically by <code>test_handlerReachesTheInterestingStates</code>.</td></tr>
+          <tr><td><span class="sev sev-l">low</span></td>
+            <td>Floor-division residue is recorded in <code>outstanding</code> forever and is unclaimable.</td>
+            <td>Kept deliberately: the residue stays in the contract and is withdrawable by nobody, which keeps the solvency invariant conservative. <code>outstanding</code> is now documented as an upper bound.</td></tr>
+          <tr><td><span class="sev sev-l">low</span></td>
+            <td>The test <code>MockAggregator</code>'s setters were public.</td>
+            <td>Owner-gated, and the deployed testnet feed is the separately access-controlled <code>RelayAggregator</code>.</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="l-zh">
+      <h3>第 1 轮 —— Codex（<code>gpt-5.6-sol</code>），2026-08-26 → <b>要求整改，已全部修复</b></h3>
+      <p>
+        针对整个合约攻击面的对抗式跨厂商审计。下列问题均已关闭，且每一项都配有具名回归测试，以确保它不会悄悄复发。
+      </p>
+      <div class="tw"><table class="rev">
+        <thead><tr><th>等级</th><th>问题</th><th>修复方式</th></tr></thead>
+        <tbody>
+          <tr><td><span class="sev sev-h">高</span></td>
+            <td>结算轮次 <code>N−1</code> 时误用了轮次 <code>N</code> 的缓冲期快照。管理员调大缓冲期后，一个本已转为可退款的轮次仍可被结算，等于用已经退还出去的负债去支付赢家。</td>
+            <td><code>_lockRound</code> / <code>_endRound</code> 现在一律按<b>该轮自身</b>的快照判定，与 <code>_isExpired</code> 完全一致。回归测试：<code>test_wideningBufferCannotSettleAnAlreadyExpiredRound</code>。</td></tr>
+          <tr><td><span class="sev sev-h">高</span></td>
+            <td>operator 可以挑选缓冲期内的<em>哪一条</em>报价来结算，也可以干脆不执行以强制退款——这相当于一份免费期权。</td>
+            <td>结算价现在是<b>边界时间戳的纯函数</b>（边界之前含边界的最后一条报价，并在链上加以证明）；<code>executeRound</code> 改为无需许可，operator 角色被彻底移除。回归测试：<code>test_settlementPriceIsIndependentOfWhenExecuteIsCalled</code>、<code>test_supplyingAStalerRoundIdIsRejected</code>。</td></tr>
+          <tr><td><span class="sev sev-m">中</span></td>
+            <td><code>oracleMaxAge</code> 原为全局参数，管理员可在执行前临时调大，使一条对自己有利的陈旧报价得以结算进行中的轮次。</td>
+            <td>改为逐轮快照。回归测试：<code>test_wideningOracleMaxAgeCannotAlterAnOpenRound</code>。</td></tr>
+          <tr><td><span class="sev sev-m">中</span></td>
+            <td>按余额差额入账并不能让任意 ERC20 都变得安全（负向 rebase、转出时扣费等）。</td>
+            <td>存入现在<b>要求</b>余额差额与下注额完全相等；不符合规范的资产在下注时直接回滚，并作为部署约束写入文档。回归测试：<code>test_feeOnTransferAssetIsRejected</code>。</td></tr>
+          <tr><td><span class="sev sev-m">中</span></td>
+            <td>原生 BNB 赔付只能付给 <code>msg.sender</code>，没有 payable receive 的合约下注者会被卡住取不出钱。</td>
+            <td>新增 <code>claimTo(epochs, to)</code>。回归测试：<code>test_contractBettorCanCollectViaClaimTo</code>。</td></tr>
+          <tr><td><span class="sev sev-m">中</span></td>
+            <td>不变量测试从不改动管理参数，且吞掉了失败的领取调用，因此根本覆盖不到上面第一个问题。</td>
+            <td>Handler 现在会随机调用 <code>setParams</code> / <code>setLimits</code>；并新增一条不变量：凡是被标记为 <code>claimable</code> / <code>refundable</code> 的，必须真的按标价付款。覆盖度由 <code>test_handlerReachesTheInterestingStates</code> 确定性地证明。</td></tr>
+          <tr><td><span class="sev sev-l">低</span></td>
+            <td>向下取整的零头会永久计入 <code>outstanding</code> 且无法领取。</td>
+            <td>刻意保留：零头留在合约内且任何人都无法提走，使偿付能力不变量始终偏保守。<code>outstanding</code> 现已明确记为上界。</td></tr>
+          <tr><td><span class="sev sev-l">低</span></td>
+            <td>测试用 <code>MockAggregator</code> 的写入函数是公开的。</td>
+            <td>已改为仅限 owner；且测试网实际部署的喂价是独立做了访问控制的 <code>RelayAggregator</code>。</td></tr>
+        </tbody>
+      </table></div>
     </div>
   </section>
 

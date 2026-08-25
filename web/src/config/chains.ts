@@ -4,7 +4,8 @@ import { deployment } from './deployment'
 export const BSC_MAINNET_RPC = 'https://bsc-dataseed1.bnbchain.org'
 export const BSC_TESTNET_RPC = 'https://data-seed-prebsc-1-s1.bnbchain.org:8545'
 
-export const CHAIN_ID = deployment.chainId
+/** Narrowed to the two supported chain ids so wagmi's `chainId` inputs typecheck. */
+export const CHAIN_ID: typeof bsc.id | typeof bscTestnet.id = deployment.chainId === bsc.id ? bsc.id : bscTestnet.id
 export const activeChain = CHAIN_ID === bsc.id ? bsc : bscTestnet
 export const isTestnet = activeChain.id === bscTestnet.id
 

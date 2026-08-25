@@ -56,6 +56,10 @@ contract Deploy is Script {
 
     function run() external {
         uint256 pk = vm.envUint("PRIVATE_KEY");
+        // Never read `msg.sender` here: inside a script frame it is Foundry's default sender, not
+        // the account the broadcast is actually signed by, which would hand ownership to the wrong
+        // address and make the first `register` revert.
+        address deployer = vm.addr(pk);
         owner = vm.envAddress("OWNER");
         operator = vm.envAddress("OPERATOR");
         require(owner != address(0) && operator != address(0), "OWNER/OPERATOR unset");
@@ -75,6 +79,9 @@ contract Deploy is Script {
             btcFeed = BSC_BTC_USD;
             bnbFeed = BSC_BNB_USD;
             usdt = BSC_USDT;
+            // The settlement asset is immutable and the market only supports standard ERC20s, so
+            // pin it rather than trusting an env var.
+            require(usdt == BSC_USDT, "mainnet asset must be BSC-USDT");
         } else {
             // testnet-only substitutes
             btcFeed = address(new RelayAggregator(owner, operator, 8, "BTC / USD", 80_000e8));
@@ -82,7 +89,7 @@ contract Deploy is Script {
             usdt = address(new TestUSDT());
         }
 
-        UpDownRegistry registry = new UpDownRegistry(msg.sender); // ownership handed over below
+        UpDownRegistry registry = new UpDownRegistry(deployer); // ownership handed over below
 
         address btc5m = address(
             new UpDownMarketERC20(owner, btcFeed, usdt, I5M, FEE_BPS, BUF5M, AGE5M, USDT_MIN, USDT_MAX, USDT_SIDE)
@@ -112,6 +119,7 @@ contract Deploy is Script {
         console2.log("btcFeed       ", btcFeed);
         console2.log("bnbFeed       ", bnbFeed);
         console2.log("");
+        console2.log("deployer      ", deployer);
         console2.log("NEXT: owner must call registry.acceptOwnership(), then genesisStart() on each market.");
         console2.log("executeRound is permissionless; the keeper simply turns the crank.");
     }

@@ -1,8 +1,31 @@
 /** viem client construction for BNB Smart Chain. */
 
-import { createPublicClient, createWalletClient, http, webSocket, type Chain, type Transport } from 'viem';
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  webSocket,
+  type Chain,
+  type PublicClient,
+  type Transport,
+  type WalletClient,
+} from 'viem';
 import { bsc, bscTestnet } from 'viem/chains';
+import type { PrivateKeyAccount } from 'viem/accounts';
 import type { KeeperConfig } from './config.js';
+
+/**
+ * The client types are pinned explicitly rather than inferred: `declaration: true` cannot name
+ * viem's inferred client type without leaking absolute paths into the emitted .d.ts.
+ */
+export type KeeperPublicClient = PublicClient<Transport, Chain>;
+export type KeeperWalletClient = WalletClient<Transport, Chain, PrivateKeyAccount>;
+
+export interface Clients {
+  chain: Chain;
+  publicClient: KeeperPublicClient;
+  walletClient: KeeperWalletClient;
+}
 
 function chainFor(chainId: number): Chain {
   if (chainId === bsc.id) return bsc;
@@ -18,17 +41,13 @@ function transportFor(rpcUrl: string): Transport {
   return http(rpcUrl, { retryCount: 2, retryDelay: 250, timeout: 15_000, batch: { wait: 8 } });
 }
 
-export function createClients(config: KeeperConfig) {
+export function createClients(config: KeeperConfig): Clients {
   const chain = chainFor(config.chainId);
   const transport = transportFor(config.rpcUrl);
-  const publicClient = createPublicClient({ chain, transport });
-  const walletClient = createWalletClient({ chain, transport, account: config.account });
+  const publicClient: KeeperPublicClient = createPublicClient({ chain, transport });
+  const walletClient: KeeperWalletClient = createWalletClient({ chain, transport, account: config.account });
   return { chain, publicClient, walletClient };
 }
-
-export type Clients = ReturnType<typeof createClients>;
-export type KeeperPublicClient = Clients['publicClient'];
-export type KeeperWalletClient = Clients['walletClient'];
 
 /** Chain clock in Unix seconds — never trust the container's own clock for a `TooEarly` guard. */
 export async function chainTimestamp(publicClient: KeeperPublicClient): Promise<number> {

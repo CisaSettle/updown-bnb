@@ -80,15 +80,24 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
 
     uint256 public constant MAX_FEE_BPS = 1000; // 10% hard cap
     uint256 private constant BPS = 10_000;
+    /// @dev Chainlink proxy round ids are `phaseId << 64 | aggregatorRoundId`.
+    uint256 private constant PHASE_SHIFT = 64;
+    uint256 private constant MAX_PHASE_LOOKAHEAD = 8;
 
     /// @notice Round duration in seconds (betting phase and holding phase are each `interval`).
     uint256 public immutable interval;
     /// @notice Chainlink feed used for both the strike and the settlement print.
     IAggregatorV3 public oracle;
+    /**
+     * @notice How stale the boundary print may be, in seconds. Immutable on purpose: two rounds
+     *         that share a boundary must agree on whether a given proof is valid, otherwise a
+     *         mutable value could make one of them demand a proof the other rejects and stall the
+     *         market. It also removes the last parameter an admin could tune to steer an outcome.
+     */
+    uint32 public immutable oracleMaxAge;
 
     uint16 public feeBps;
     uint16 public bufferSeconds;
-    uint32 public oracleMaxAge;
     uint256 public minBetAmount;
     uint256 public maxBetAmount;
     uint256 public maxSideAmount;
@@ -132,7 +141,7 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     event Claimed(address indexed user, uint256 indexed epoch, address to, uint256 amount, bool refund);
     event TreasuryClaimed(address indexed to, uint256 amount);
     event OracleUpdated(address indexed oracle);
-    event ParamsUpdated(uint16 feeBps, uint16 bufferSeconds, uint32 oracleMaxAge);
+    event ParamsUpdated(uint16 feeBps, uint16 bufferSeconds);
     event LimitsUpdated(uint256 minBet, uint256 maxBet, uint256 maxSide);
     event TokenRecovered(address indexed token, address indexed to, uint256 amount);
 
@@ -170,6 +179,7 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     error EmptyInput();
     error TimestampOverflow();
     error UnsupportedAsset();
+    error InvalidBoundaryProof();
 
     // ─────────────────────────────────────────────────────────────────────────
     // Construction
@@ -194,9 +204,9 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
 
         interval = interval_;
         oracle = IAggregatorV3(oracle_);
+        oracleMaxAge = oracleMaxAge_;
         feeBps = feeBps_;
         bufferSeconds = bufferSeconds_;
-        oracleMaxAge = oracleMaxAge_;
         minBetAmount = minBetAmount_;
         maxBetAmount = maxBetAmount_;
         maxSideAmount = maxSideAmount_;
@@ -334,10 +344,19 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
 
         uint256 cur = currentEpoch;
         Round storage lockR = _rounds[cur];
-        if (block.timestamp < lockR.lockTs) revert TooEarly();
+        uint256 boundaryTs = lockR.lockTs;
+        if (block.timestamp < boundaryTs) revert TooEarly();
 
-        if (cur > epochAnchor) _endRound(cur - 1, boundaryRoundId);
-        _lockRound(cur, boundaryRoundId);
+        (bool priceOk, int256 price) = _priceAt(boundaryTs, boundaryRoundId);
+
+        bool endNeedsProof =
+            cur > epochAnchor ? _endRound(cur - 1, boundaryTs, priceOk, price, boundaryRoundId) : false;
+        bool lockNeedsProof = _lockRound(cur, priceOk, price, boundaryRoundId);
+        // A round still inside its own settlement window may only be resolved by a VALID boundary
+        // proof. Reverting rather than voiding is what stops a losing bettor from front-running an
+        // honest call with a bogus round id to force the whole round into refunds: a bad proof now
+        // costs the griefer gas and changes nothing. Voiding is reserved for a genuine timeout.
+        if (endNeedsProof || lockNeedsProof) revert InvalidBoundaryProof();
 
         // `bufferSeconds < interval` guarantees a successful lock implies `block.timestamp` is still
         // inside round `cur`'s own life, so `bettable` can only run ahead of `cur + 1` when the lock
@@ -367,46 +386,53 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
         emit RoundStarted(epoch, r.startTs, r.lockTs, r.closeTs, r.feeBps);
     }
 
-    function _lockRound(uint256 epoch, uint80 roundId) internal {
+    /// @return needsProof True when the round is still inside its window and therefore may only be
+    ///         resolved by a valid boundary proof, which the caller did not supply.
+    function _lockRound(uint256 epoch, bool priceOk, int256 price, uint80 roundId)
+        internal
+        returns (bool needsProof)
+    {
         Round storage r = _rounds[epoch];
-        if (r.startTs == 0 || r.locked || r.voided) return;
+        if (r.startTs == 0 || r.locked || r.voided) return false;
         if (block.timestamp > uint256(r.lockTs) + r.bufferSeconds) {
             r.voided = true;
             emit RoundVoided(epoch, VOID_WINDOW);
-            return;
+            return false;
         }
-        (bool ok, int256 price) = _priceAt(r.lockTs, roundId, r.oracleMaxAge);
-        if (!ok) {
-            r.voided = true;
-            emit RoundVoided(epoch, VOID_ORACLE);
-            return;
-        }
+        if (!priceOk) return true;
         r.lockPrice = price;
         r.lockOracleId = roundId;
         r.locked = true;
         emit RoundLocked(epoch, price, roundId);
+        return false;
     }
 
-    function _endRound(uint256 epoch, uint80 roundId) internal {
+    /// @return needsProof See `_lockRound`.
+    function _endRound(uint256 epoch, uint256 boundaryTs, bool priceOk, int256 price, uint80 roundId)
+        internal
+        returns (bool needsProof)
+    {
         Round storage r = _rounds[epoch];
-        if (r.startTs == 0 || r.settled || r.voided) return;
+        if (r.startTs == 0 || r.settled || r.voided) return false;
         if (!r.locked) {
             r.voided = true;
             emit RoundVoided(epoch, VOID_NOT_LOCKED);
-            return;
+            return false;
         }
         // judged against this round's own snapshot, never a neighbour's
         if (block.timestamp > uint256(r.closeTs) + r.bufferSeconds) {
             r.voided = true;
             emit RoundVoided(epoch, VOID_WINDOW);
-            return;
+            return false;
         }
-        (bool ok, int256 price) = _priceAt(r.closeTs, roundId, r.oracleMaxAge);
-        if (!ok) {
+        // defensive: the grid guarantees closeTs(e) == lockTs(e+1), so the one resolved price is
+        // this round's boundary too. If that ever failed to hold, price it as unusable.
+        if (uint256(r.closeTs) != boundaryTs) {
             r.voided = true;
             emit RoundVoided(epoch, VOID_ORACLE);
-            return;
+            return false;
         }
+        if (!priceOk) return true;
 
         r.closePrice = price;
         r.closeOracleId = roundId;
@@ -418,12 +444,12 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
         if (up == 0 || down == 0) {
             r.voided = true; // no counterparty: nothing to win, so nothing is taken
             emit RoundVoided(epoch, VOID_ONE_SIDED);
-            return;
+            return false;
         }
         if (price == r.lockPrice) {
             r.voided = true; // tie: both sides refunded, zero fee
             emit RoundVoided(epoch, VOID_TIE);
-            return;
+            return false;
         }
 
         bool upWins = price > r.lockPrice;
@@ -436,6 +462,7 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
         outstanding -= fee; // the fee leaves the user-liability pool and becomes protocol revenue
 
         emit RoundSettled(epoch, price, roundId, winPool, r.rewardPoolAmount, fee);
+        return false;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -447,24 +474,47 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
      *      is at or before `targetTs`. `roundId` is supplied by the caller and *proved* here, so the
      *      result is a pure function of `targetTs` — settlement carries no timing discretion.
      */
-    function _priceAt(uint256 targetTs, uint80 roundId, uint32 maxAge) internal view returns (bool, int256) {
+    function _priceAt(uint256 targetTs, uint80 roundId) internal view returns (bool, int256) {
         (bool got, int256 answer, uint256 updatedAt) = _tryRound(roundId);
         if (!got) return (false, 0);
         if (updatedAt > targetTs) return (false, 0); // print is after the boundary
-        if (targetTs - updatedAt > maxAge) return (false, 0); // feed was effectively dead at the boundary
+        if (targetTs - updatedAt > oracleMaxAge) return (false, 0); // feed was dead at the boundary
 
         (bool gotLatest, uint80 latestId) = _tryLatestRoundId();
         if (!gotLatest) return (false, 0);
+        if (latestId == roundId) return (true, answer); // trivially the last print in existence
 
-        if (latestId != roundId) {
-            // there is a newer print somewhere; prove the very next one is already past the boundary
-            if (roundId == type(uint80).max) return (false, 0);
-            (bool gotNext,, uint256 nextUpdatedAt) = _tryRound(roundId + 1);
-            // a gap here means an aggregator phase change; be conservative and void the round
-            if (!gotNext) return (false, 0);
-            if (nextUpdatedAt <= targetTs) return (false, 0); // caller supplied a stale round
-        }
+        // a newer print exists somewhere; prove the very next one already sits past the boundary
+        (bool gotNext, uint256 nextUpdatedAt) = _successorUpdatedAt(roundId, latestId);
+        if (!gotNext) return (false, 0);
+        if (nextUpdatedAt <= targetTs) return (false, 0); // caller supplied a non-final round
         return (true, answer);
+    }
+
+    /**
+     * @dev Chainlink proxies encode `roundId = phaseId << 64 | aggregatorRoundId`, so the successor
+     *      of the last round of a phase is the *first round of the next phase*, not `roundId + 1`.
+     *      Walking phases keeps settlement deterministic across an aggregator upgrade instead of
+     *      making the outcome depend on whether the call landed before or after it.
+     */
+    function _successorUpdatedAt(uint80 roundId, uint80 latestId) private view returns (bool, uint256) {
+        if (roundId != type(uint80).max) {
+            (bool got,, uint256 updatedAt) = _tryRound(roundId + 1);
+            if (got) return (true, updatedAt);
+        }
+        uint256 phase = uint256(roundId) >> PHASE_SHIFT;
+        uint256 latestPhase = uint256(latestId) >> PHASE_SHIFT;
+        if (latestPhase <= phase) return (false, 0);
+        uint256 limit = phase + MAX_PHASE_LOOKAHEAD;
+        if (latestPhase < limit) limit = latestPhase;
+        for (uint256 p = phase + 1; p <= limit; ++p) {
+            uint256 candidate = (p << PHASE_SHIFT) | 1;
+            if (candidate > type(uint80).max) break;
+            // forge-lint: disable-next-line(unsafe-typecast)
+            (bool got,, uint256 updatedAt) = _tryRound(uint80(candidate));
+            if (got) return (true, updatedAt);
+        }
+        return (false, 0);
     }
 
     function _tryRound(uint80 roundId) private view returns (bool, int256, uint256) {
@@ -492,6 +542,10 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
      *         `executeRound` for `targetTs`. Intended for `eth_call` only.
      * @param startFrom Round id to start from; pass 0 to start at the feed's latest round.
      * @param maxSteps Bound on the walk so the call always terminates.
+     * @dev Convenience only, and phase-local: it decrements the round id, so it stops at the first
+     *      round of an aggregator phase and reports `found = false` rather than crossing backwards
+     *      into the previous phase. `executeRound` itself handles phase boundaries correctly; a
+     *      caller that hits this limit should resolve the id off-chain from feed history.
      */
     function findRoundIdAt(uint256 targetTs, uint80 startFrom, uint256 maxSteps)
         external
@@ -619,13 +673,13 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     /// @dev Only ever affects rounds started *after* this call — live rounds keep their snapshots.
-    function setParams(uint16 feeBps_, uint16 bufferSeconds_, uint32 oracleMaxAge_) external onlyOwner {
+    ///      `oracleMaxAge` is deliberately absent: it is immutable.
+    function setParams(uint16 feeBps_, uint16 bufferSeconds_) external onlyOwner {
         if (feeBps_ > MAX_FEE_BPS) revert InvalidFee();
-        _validateWindows(interval, bufferSeconds_, oracleMaxAge_);
+        _validateWindows(interval, bufferSeconds_, oracleMaxAge);
         feeBps = feeBps_;
         bufferSeconds = bufferSeconds_;
-        oracleMaxAge = oracleMaxAge_;
-        emit ParamsUpdated(feeBps_, bufferSeconds_, oracleMaxAge_);
+        emit ParamsUpdated(feeBps_, bufferSeconds_);
     }
 
     function setLimits(uint256 minBet, uint256 maxBet, uint256 maxSide) external onlyOwner {

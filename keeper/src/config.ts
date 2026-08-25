@@ -262,7 +262,10 @@ export function loadConfig(options: LoadConfigOptions = {}): KeeperConfig {
   let account: ReturnType<typeof privateKeyToAccount> | undefined;
   const pkRaw = readString(env, 'KEEPER_PRIVATE_KEY');
   if (pkRaw === undefined) {
-    issues.add('KEEPER_PRIVATE_KEY is required (32-byte hex key of the account registered as `operator`)');
+    issues.add(
+      'KEEPER_PRIVATE_KEY is required (32-byte hex key). `executeRound` is permissionless, so on ' +
+        'mainnet this key only needs gas; on testnet it must also be the RelayAggregator `updater`.',
+    );
   } else {
     try {
       account = privateKeyToAccount(normalisePrivateKey(pkRaw));

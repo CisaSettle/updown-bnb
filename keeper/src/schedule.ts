@@ -120,11 +120,15 @@ export function computeNextWake(nowMs: number, round: RoundTiming, options: Wake
   if (options.relayEnabled) {
     const lead = clampRelayLead(options.relayLeadMs, round.oracleMaxAge);
     const relayTargetMs = boundaryMs - lead;
-    // Only worth relaying while the print can still land at or before the boundary.
     if (nowMs < relayTargetMs) {
       const { delayMs, capped } = clampDelay(relayTargetMs - nowMs, options);
       if (capped) return { action: 'refresh', kind: 'capped', delayMs, targetMs: relayTargetMs };
       return { action: 'relay', kind: 'on-time', delayMs, targetMs: relayTargetMs };
+    }
+    // Past the ideal instant but still before the boundary: a print landing now can still qualify,
+    // so relaying immediately beats giving up and letting the round void.
+    if (nowMs <= boundaryMs) {
+      return { action: 'relay', kind: 'catch-up', delayMs: Math.max(0, options.minTimerMs), targetMs: relayTargetMs };
     }
   }
 
@@ -138,6 +142,36 @@ export function computeNextWake(nowMs: number, round: RoundTiming, options: Wake
     return { action: 'execute', kind: 'past-window', delayMs, targetMs: executeTargetMs };
   }
   return { action: 'execute', kind: 'catch-up', delayMs, targetMs: executeTargetMs };
+}
+
+/**
+ * Default margin kept between a backed-off relay retry and the boundary it must beat.
+ */
+export const RELAY_DEADLINE_MARGIN_MS = 3_000;
+
+/**
+ * Combine a wake's delay with the idle backoff, without ever letting the backoff push the wake past
+ * a deadline it cannot come back from.
+ *
+ * A relay print only counts for a boundary if it lands at or before `lockTs`. A relay that is
+ * backing off — a failing price API, say — must therefore still fire inside that window, or a
+ * handful of failed fetches would grow the cooldown past the boundary and void the very round the
+ * backoff exists to protect. `execute` has no such deadline: once the settlement window is gone it
+ * is gone, and the call is still worth making to unstick the grid, so it takes the cooldown
+ * unclamped.
+ */
+export function applyCooldown(
+  plan: WakePlan,
+  cooldownMs: number,
+  nowMs: number,
+  round: RoundTiming,
+  marginMs: number = RELAY_DEADLINE_MARGIN_MS,
+): number {
+  if (cooldownMs <= 0) return plan.delayMs;
+  if (plan.action !== 'relay') return Math.max(plan.delayMs, cooldownMs);
+  const headroomMs = round.lockTs * 1000 - nowMs - marginMs;
+  if (headroomMs <= 0) return plan.delayMs;
+  return Math.max(plan.delayMs, Math.min(cooldownMs, headroomMs));
 }
 
 /**

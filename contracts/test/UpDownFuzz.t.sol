@@ -13,7 +13,7 @@ contract UpDownFuzzTest is UpDownBaseTest {
         fee = uint16(bound(fee, 0, market.MAX_FEE_BPS()));
 
         vm.prank(owner);
-        market.setParams(fee, BUFFER, MAX_AGE);
+        market.setParams(fee, BUFFER);
         // the fee snapshot is taken when a round starts, so roll to a round opened under `fee`
         _advance(P0);
 
@@ -71,9 +71,11 @@ contract UpDownFuzzTest is UpDownBaseTest {
         if (voidKind == 0) {
             _advance(P0); // tie
         } else if (voidKind == 1) {
+            // the feed is dead through the whole window, so the round times out into refunds
             UpDownMarketBase.Round memory r = _round(market.currentEpoch());
             vm.warp(r.lockTs);
-            uint80 rid = feed.setAnswerAt(P0 + 5e8, block.timestamp - MAX_AGE - 1); // stale at the boundary
+            uint80 rid = feed.setAnswerAt(P0 + 5e8, block.timestamp - MAX_AGE - 1);
+            vm.warp(uint256(r.lockTs) + BUFFER + 1);
             vm.prank(keeper);
             market.executeRound(rid);
         } else {

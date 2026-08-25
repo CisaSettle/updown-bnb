@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { erc20Abi, zeroAddress } from 'viem'
 import { useBalance, useReadContracts } from 'wagmi'
-import { CHAIN_ID, nativeSymbol } from '../config/chains'
+import { activeChain, CHAIN_ID, nativeSymbol } from '../config/chains'
 import type { Address } from '../config/deployment'
 import { asBigInt, asNumber, asString, pick } from '../lib/read'
 
@@ -13,6 +13,12 @@ export interface SettlementToken {
   balance: bigint
   /** Always `maxUint256` for a native market — there is nothing to approve. */
   allowance: bigint
+  /**
+   * True once `decimals` is a fact rather than a default. Nothing that turns a typed amount into
+   * base units may run before this flips: parsing "10" at 18dp when the asset is 6dp would send a
+   * number a million times too big.
+   */
+  ready: boolean
   isLoading: boolean
   refetch: () => void
 }
@@ -58,21 +64,25 @@ export function useSettlementToken(
         address: zeroAddress as Address,
         isNative: true,
         symbol: native.data?.symbol ?? nativeSymbol,
-        decimals: native.data?.decimals ?? 18,
+        // The native currency's decimals are a property of the chain, known at build time.
+        decimals: activeChain.nativeCurrency.decimals,
         balance: native.data?.value ?? 0n,
         allowance: MAX_UINT256,
+        ready: true,
         isLoading: Boolean(owner) && native.isLoading,
         refetch: () => void native.refetch(),
       }
     }
     const data = token.data as readonly unknown[] | undefined
+    const decimals = asNumber(pick(data, 0))
     return {
       address: (asset ?? zeroAddress) as Address,
       isNative: false,
       symbol: asString(pick(data, 1)) ?? 'TOKEN',
-      decimals: asNumber(pick(data, 0)) ?? 18,
+      decimals: decimals ?? 18,
       balance: asBigInt(pick(data, 2)) ?? 0n,
       allowance: asBigInt(pick(data, 3)) ?? 0n,
+      ready: decimals !== undefined,
       isLoading: token.isLoading,
       refetch: () => void token.refetch(),
     }

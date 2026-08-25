@@ -76,6 +76,15 @@ oracle read, so there is never a price gap between consecutive rounds:
 Betting on epoch N is open during `[startTs(N), lockTs(N))`. At any wall-clock moment exactly
 one epoch is bettable and one epoch is live.
 
+### Invalid proof ≠ dead feed
+
+A caller who supplies a boundary proof that does not stand up gets a **revert**, not a void. This
+matters because execution is permissionless: without it, a bettor who could see they were about to
+lose could front-run the honest call with a bogus round id, void the round, and walk away with a
+full refund. Voiding is reserved for a genuine **timeout** — when nobody produced a valid proof
+before the round's own `bufferSeconds` elapsed, at which point the round can no longer be settled
+honestly by anyone. A griefer therefore pays gas and changes nothing.
+
 ### Deterministic settlement — why nobody holds a settlement option
 
 The price of a boundary is the **last Chainlink print at or before that boundary timestamp**, not
@@ -166,8 +175,11 @@ A boundary price at `targetTs` is **usable** only if all hold, for the round id 
 - `getRoundData(id)` returns `answer > 0`, `updatedAt != 0`, `updatedAt <= block.timestamp`
 - `updatedAt <= targetTs` — the print is at or before the boundary
 - `targetTs - updatedAt <= oracleMaxAge` (per-round snapshot) — the feed was actually alive there
-- it is the **last** such print: either `id == latestRoundId`, or `getRoundData(id + 1)` exists and
-  has `updatedAt > targetTs`. A gap (aggregator phase change) is treated conservatively as unusable.
+- it is the **last** such print: either `id == latestRoundId`, or its successor has
+  `updatedAt > targetTs`. Chainlink proxies encode `roundId = phaseId << 64 | aggregatorRoundId`, so
+  the successor of a phase's last round is the *first round of the next phase*, not `id + 1`; the
+  contract walks phases to find it, which keeps an aggregator upgrade from changing the settled
+  price depending on whether the call landed before or after it.
 
 `oracleMaxAge < interval` is enforced, which guarantees two consecutive boundaries can never resolve
 to the same print — a flat feed voids rather than manufacturing a fake tie.
@@ -190,7 +202,7 @@ keeper `updater`, fed from a real spot price. It is never deployed on mainnet.
 | `maxSideAmount` | 100,000 USDT per side per round | caps the payoff from manipulating the settlement print — the exact attack surface criticised in Polymarket's 5m markets |
 | `feeBps` | 300 (3%), hard-capped at 1000 | revenue |
 | `bufferSeconds` | 240s (5m rounds) | how late a round may still settle before it voids into refunds; snapshotted per round; must be `< interval` |
-| `oracleMaxAge` | 150s (5m rounds) | how stale the boundary print may be; snapshotted per round; must be `< interval` |
+| `oracleMaxAge` | 150s (5m rounds) | how stale the boundary print may be. **Immutable** — two rounds sharing a boundary must agree on what a valid proof is, and it removes the last parameter an admin could tune to steer an outcome |
 | `pause()` | admin | halt betting; live rounds become refundable |
 | Treasury withdrawal | only `treasuryAmount` accrued | admin can never touch user principal |
 | Settlement privilege | none | `executeRound` is permissionless and price-deterministic, so no address holds a settlement option |
@@ -295,3 +307,27 @@ function currentBettableEpoch() external view returns (uint256);
 | medium | The invariant suite never mutated admin parameters and swallowed failed claims, so it could not reach the first finding. | Handler now churns `setParams`/`setLimits`, and a new invariant asserts that anything advertised as `claimable`/`refundable` really pays the quoted amount. Coverage is proved deterministically by `test_handlerReachesTheInterestingStates`. |
 | low | Floor-division residue is recorded in `outstanding` forever and is unclaimable. | Kept deliberately: the residue stays in the contract and is withdrawable by nobody, which keeps the solvency invariant conservative. `outstanding` is now documented as an upper bound. |
 | low | The test `MockAggregator`'s setters were public. | Owner-gated, and the deployed testnet feed is the separately access-controlled `RelayAggregator`. |
+
+### Round 2 — Codex (`gpt-5.6-sol`), 2026-08-26 → CHANGES-REQUIRED, all fixed
+
+Round 2 confirmed findings 2, 3, 5, 6, 7 and 8 closed, and found that the round-1 redesign had
+opened a new hole of its own.
+
+| Sev | Finding | Resolution |
+|---|---|---|
+| high | Permissionless execution + "void on unusable proof" meant a **losing bettor could front-run an honest call with a bogus round id and force a full refund** — escaping their loss for the price of gas. | An invalid proof now **reverts** (`InvalidBoundaryProof`); voiding is reserved for a genuine timeout. Regression: `test_bogusRoundIdCannotForceARefund`, `test_deadOracleVoidsOnlyAfterTheWindowElapses`. |
+| medium | The successor proof used `roundId + 1`, which breaks across a Chainlink aggregator **phase change**, making the result depend on when the call landed. | `_successorUpdatedAt` walks phases (`phaseId << 64 \| aggRoundId`). Regression: `test_aggregatorPhaseChangeDoesNotChangeSettlement`, `test_phaseChangeStillRejectsANonFinalRound`. |
+| medium | Only *inbound* ERC20 transfers were checked, so a token charging on the way out would mark a claim paid in full while the user received less. | `_pushFunds` now checks the outbound delta too and reverts (`UnsupportedAsset`). A market deployed with a non-conforming asset breaks on its first payout instead of quietly shortchanging everyone; the mainnet asset is pinned in the deploy script. Regression: `test_outboundFeeAssetIsRejectedOnPayout`. |
+| medium | `Deploy.s.sol` read `msg.sender` inside the script frame, which is Foundry's default sender, not the broadcast signer — registry ownership would land on the wrong address and the first `register` would revert. | Both scripts resolve the signer with `vm.addr(pk)`. This would have broken the very first deployment. |
+| medium | `Genesis.s.sol` had the same `msg.sender` bug, so `acceptOwnership` would silently be skipped. | Same fix. |
+
+Also changed as a consequence: `oracleMaxAge` is now **immutable** (`setParams` takes only
+`feeBps` and `bufferSeconds`), so two rounds sharing a boundary can never disagree about whether a
+proof is valid — which would otherwise stall the market.
+
+**Live-fork evidence.** `contracts/test/ChainlinkFork.t.sol` runs a full round — bet, lock, settle,
+claim — against the **real** Chainlink BTC/USD aggregator on a BNB Chain mainnet fork, rolling
+through real blocks so the feed genuinely updates underneath the market. It verifies the strike and
+settlement are the feed's own answers, that the boundaries resolve to distinct rounds, and that the
+payout maths and solvency hold on real data. It reports SKIPPED (never PASSED) when `FORK_RPC_URL`
+is unset.

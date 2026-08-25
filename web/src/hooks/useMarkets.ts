@@ -75,12 +75,15 @@ export function useMarkets() {
     },
   })
 
-  const markets = useMemo(() => {
-    if (!enabled) return []
+  const { markets, usingFallback } = useMemo(() => {
+    if (!enabled) return { markets: [] as Market[], usingFallback: false }
     const raw = query.data as readonly RawMarketInfo[] | undefined
-    if (raw && raw.length > 0) return normalize(raw)
-    if (query.isError || (query.isFetched && (!raw || raw.length === 0))) return fallbackMarkets()
-    return []
+    if (raw && raw.length > 0) return { markets: normalize(raw), usingFallback: false }
+    if (query.isError || (query.isFetched && (!raw || raw.length === 0))) {
+      const fallback = fallbackMarkets()
+      return { markets: fallback, usingFallback: fallback.length > 0 }
+    }
+    return { markets: [] as Market[], usingFallback: false }
   }, [enabled, query.data, query.isError, query.isFetched])
 
   const enabledMarkets = useMemo(() => markets.filter((m) => m.enabled), [markets])
@@ -89,8 +92,8 @@ export function useMarkets() {
     markets: enabledMarkets,
     allMarkets: markets,
     isLoading: enabled && query.isLoading,
-    /** True when the registry read failed and we are showing the deployment-file fallback. */
-    usingFallback: query.isError && markets.length > 0,
+    /** True when the registry could not be used and we are showing the deployment-file fallback. */
+    usingFallback,
     error: query.error ?? undefined,
   }
 }

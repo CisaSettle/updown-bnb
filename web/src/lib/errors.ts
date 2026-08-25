@@ -47,6 +47,7 @@ const ERROR_COPY: Record<string, string> = {
   OwnableInvalidOwner: 'Invalid owner address.',
   NotOperator: 'Only the keeper can settle a round this early. Anyone may settle it once the buffer passes.',
   NotUpdater: 'Only the price relay updater can push a price.',
+  NoData: 'The price feed has no data for that round.',
   BadAnswer: 'The price feed rejected that value.',
 
   // ── config ──

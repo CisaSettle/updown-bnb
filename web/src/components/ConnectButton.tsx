@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { useAccount, useChainId, useConnect, useDisconnect, useSwitchChain } from 'wagmi'
+import { useAccount, useConnect, useDisconnect } from 'wagmi'
 import { activeChain, addressUrl } from '../config/chains'
+import { useActiveChain } from '../hooks/useActiveChain'
 import { humanizeError } from '../lib/errors'
 import { shortAddress } from '../lib/format'
 import { pushToast } from '../lib/toast'
@@ -12,10 +13,9 @@ function hasInjectedProvider(): boolean {
 
 export function ConnectButton() {
   const { address, isConnected } = useAccount()
-  const chainId = useChainId()
+  const { wrongChain, isSwitching, switchToActiveChain } = useActiveChain()
   const { connectors, connect, isPending } = useConnect()
   const { disconnect } = useDisconnect()
-  const { switchChain, isPending: isSwitching } = useSwitchChain()
   const [open, setOpen] = useState(false)
   const wrapper = useRef<HTMLDivElement>(null)
 
@@ -35,20 +35,13 @@ export function ConnectButton() {
     }
   }, [open])
 
-  const wrongNetwork = isConnected && chainId !== activeChain.id
-
-  if (isConnected && wrongNetwork) {
+  if (wrongChain) {
     return (
       <button
         type="button"
         className="btn bg-amber-500 text-amber-950 hover:bg-amber-400"
         disabled={isSwitching}
-        onClick={() =>
-          switchChain(
-            { chainId: activeChain.id },
-            { onError: (err) => pushToast({ kind: 'error', title: 'Could not switch network', body: humanizeError(err) }) },
-          )
-        }
+        onClick={switchToActiveChain}
       >
         {isSwitching ? 'Switching…' : `Switch to ${activeChain.name}`}
       </button>

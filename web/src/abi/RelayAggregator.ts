@@ -59,6 +59,58 @@ export const relayAggregatorAbi = [
   },
   {
     "type": "function",
+    "name": "getRoundData",
+    "inputs": [
+      {
+        "name": "roundId",
+        "type": "uint80",
+        "internalType": "uint80"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint80",
+        "internalType": "uint80"
+      },
+      {
+        "name": "",
+        "type": "int256",
+        "internalType": "int256"
+      },
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "",
+        "type": "uint80",
+        "internalType": "uint80"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "latestId",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint80",
+        "internalType": "uint80"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "latestRoundData",
     "inputs": [],
     "outputs": [
@@ -113,7 +165,13 @@ export const relayAggregatorAbi = [
         "internalType": "int256"
       }
     ],
-    "outputs": [],
+    "outputs": [
+      {
+        "name": "roundId",
+        "type": "uint80",
+        "internalType": "uint80"
+      }
+    ],
     "stateMutability": "nonpayable"
   },
   {
@@ -222,6 +280,11 @@ export const relayAggregatorAbi = [
   {
     "type": "error",
     "name": "BadAnswer",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "NoData",
     "inputs": []
   },
   {

@@ -4,7 +4,7 @@ import { useReadContract, useReadContracts } from 'wagmi'
 import { marketViewAbi } from '../abi'
 import { CHAIN_ID } from '../config/chains'
 import type { Address } from '../config/deployment'
-import { positionStatus, toRound, type BetInfo, type PositionStatus, type Round } from '../lib/market'
+import { positionStatus, settledPayout, toRound, type BetInfo, type PositionStatus, type Round } from '../lib/market'
 import { asBigInt, asBigIntArray, asBool, pick } from '../lib/read'
 
 /** How many of the user's most recent epochs to show. */
@@ -15,7 +15,11 @@ export interface Position {
   round?: Round
   bet: BetInfo
   status: PositionStatus
-  /** What `claim` would pay for this epoch right now. */
+  /**
+   * What `claim` pays for this epoch — or, once the round has been collected, what it paid.
+   * `pendingPayout` drops back to 0 the moment `claimed` is set, so a collected win would
+   * otherwise be rendered as "0".
+   */
   payout: bigint
   claimable: boolean
   refundable: boolean
@@ -112,12 +116,13 @@ export function usePositions(market: Address | undefined, user: Address | undefi
         : EMPTY_BET
       const claimable = asBool(pick(data, base + 3)) ?? false
       const refundable = asBool(pick(data, base + 4)) ?? false
+      const pending = asBigInt(pick(data, base + 2)) ?? 0n
       return {
         epoch,
         round,
         bet,
         status: positionStatus(round, bet, nowSeconds),
-        payout: asBigInt(pick(data, base + 2)) ?? 0n,
+        payout: bet.claimed ? settledPayout(round, bet, nowSeconds) : pending,
         claimable,
         refundable,
         collectable: claimable || refundable,

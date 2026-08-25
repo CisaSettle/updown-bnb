@@ -47,5 +47,6 @@ export function useHistory(market: Address | undefined, currentEpoch: bigint | u
     rows,
     isLoading: query.isLoading,
     error: query.error ?? undefined,
+    refetch: () => void query.refetch(),
   }
 }

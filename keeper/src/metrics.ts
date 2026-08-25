@@ -137,7 +137,7 @@ export const HELP: Readonly<Record<string, string>> = Object.freeze({
   [M.currentEpoch]: 'The epoch currently accepting bets, by market.',
   [M.marketActive]: '1 when the market is unpaused and genesis-started, else 0.',
   [M.marketHealthy]: '1 when the market is within its execution budget, else 0.',
-  [M.balanceWei]: 'Keeper account balance in wei.',
+  [M.balanceWei]: 'Keeper account balance in wei (float64, so approximate above ~0.009 BNB; use updown_keeper_balance_native for alerting).',
   [M.balanceNative]: 'Keeper account balance in BNB.',
   [M.balanceLow]: '1 when the keeper balance is below the configured floor, else 0.',
   [M.priceFetches]: 'Spot price fetches, by symbol and outcome.',

@@ -88,6 +88,28 @@ const TERMINAL_PATTERNS: readonly RegExp[] = [
 ];
 
 /**
+ * Nonce slots that have already been consumed — by an earlier attempt of ours that landed, or by
+ * some other transaction from the same key. Retrying the *same* nonce can then never succeed, so
+ * the sender has to re-read it; without that, every remaining attempt is guaranteed to fail.
+ *
+ * Deliberately excludes `already known` and `replacement transaction underpriced`: those mean the
+ * nonce is still ours and still pending, and the answer there is a higher gas price, not a new
+ * nonce.
+ */
+const NONCE_PATTERNS: readonly RegExp[] = [
+  /nonce too low/i,
+  /nonce too high/i,
+  /invalid nonce/i,
+  /nonce has already been used/i,
+  /OldNonce/i,
+];
+
+export function isNonceError(error: unknown): boolean {
+  const text = errorText(error);
+  return NONCE_PATTERNS.some((re) => re.test(text));
+}
+
+/**
  * Classify a thrown error. Terminal patterns win over retryable ones, because a revert whose
  * message also mentions a timeout is still a revert.
  */

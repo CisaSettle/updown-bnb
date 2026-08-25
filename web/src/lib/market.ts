@@ -19,6 +19,7 @@ export interface Round {
   closePrice: bigint
   lockOracleId: bigint
   closeOracleId: bigint
+  oracleMaxAge: number
   upAmount: bigint
   downAmount: bigint
   rewardBaseAmount: bigint
@@ -43,6 +44,7 @@ export function toRound(raw: unknown): Round | undefined {
     closePrice: r.closePrice as bigint,
     lockOracleId: r.lockOracleId as bigint,
     closeOracleId: r.closeOracleId as bigint,
+    oracleMaxAge: Number(r.oracleMaxAge ?? 0),
     upAmount: r.upAmount as bigint,
     downAmount: r.downAmount as bigint,
     rewardBaseAmount: r.rewardBaseAmount as bigint,
@@ -67,9 +69,12 @@ export function roundPhase(round: Round | undefined, nowSeconds: number): RoundP
   const now = BigInt(Math.floor(nowSeconds))
   if (now < round.startTs) return 'upcoming'
   if (now < round.lockTs) return 'betting'
+  // Past lock. `expired` has to be judged with the same deadline the contract uses, which is
+  // `lockTs + buffer` for a round that never received a strike — not `closeTs + buffer`. Getting
+  // this wrong would show "Settling" on a round that is already refundable.
+  if (isExpired(round, nowSeconds)) return 'expired'
   if (now < round.closeTs) return 'live'
-  const deadline = round.closeTs + BigInt(round.bufferSeconds)
-  return now > deadline ? 'expired' : 'settling'
+  return 'settling'
 }
 
 /** Mirrors `_isExpired`: a started round whose settlement window has fully elapsed. */
@@ -124,6 +129,24 @@ export function quotePayout(
   const rewardPool = winPool + losePool - fee
   const payout = (stake * rewardPool) / winPool
   return { payout, profit: payout - stake, refundOnly: false }
+}
+
+/**
+ * The amount `claim` pays (or already paid) for a resolved round — the exact mirror of `_claim`.
+ *
+ * `pendingPayout` returns 0 once `claimed` is set, so a collected winning round would otherwise
+ * render as "0". This recomputes it from the round's own settlement snapshot.
+ */
+export function settledPayout(round: Round | undefined, bet: BetInfo, nowSeconds: number): bigint {
+  if (!round || round.startTs === 0n) return 0n
+  if (round.settled && !round.voided) {
+    if (round.rewardBaseAmount === 0n) return 0n
+    const winStake = round.closePrice > round.lockPrice ? bet.upAmount : bet.downAmount
+    if (winStake === 0n) return 0n
+    return (winStake * round.rewardPoolAmount) / round.rewardBaseAmount
+  }
+  if (round.voided || isExpired(round, nowSeconds)) return bet.upAmount + bet.downAmount
+  return 0n
 }
 
 /** The user's stake on each side of an epoch. */

@@ -6,7 +6,14 @@
  */
 
 import type { Hex } from 'viem';
-import { classifyFailure, computeBackoff, bumpGasPrice, errorText, type BackoffOptions } from './backoff.js';
+import {
+  classifyFailure,
+  computeBackoff,
+  bumpGasPrice,
+  errorText,
+  isNonceError,
+  type BackoffOptions,
+} from './backoff.js';
 
 /** Serialises async work onto a single chain. One queue per signing key. */
 export class TxQueue {
@@ -78,7 +85,7 @@ export interface AttemptEvent {
   gasPriceWei: bigint;
   nonce: number;
   hash?: Hex;
-  outcome: 'sent' | 'mined' | 'reverted' | 'timeout' | 'error' | 'recovered';
+  outcome: 'sent' | 'mined' | 'reverted' | 'timeout' | 'error' | 'recovered' | 'renonced';
   error?: unknown;
   latencyMs: number;
 }
@@ -116,7 +123,9 @@ export class ExhaustedTxError extends Error {
  *
  * Every retry re-uses the **same nonce** with a strictly higher gas price, so a stuck attempt is
  * replaced rather than duplicated. Before each retry the hashes already broadcast are checked: if
- * one of them landed after all, that receipt is the result.
+ * one of them landed after all, that receipt is the result. The one exception is a node telling us
+ * the nonce itself is spent, which is the single case where reusing it cannot work: then, and only
+ * then, the nonce is re-read.
  */
 export async function sendWithRetry<R extends MinimalReceipt>(
   policy: SendPolicy,
@@ -124,7 +133,7 @@ export async function sendWithRetry<R extends MinimalReceipt>(
 ): Promise<SendResult<R>> {
   const startedAt = deps.now();
   const baseGasPrice = await deps.getBaseGasPrice();
-  const nonce = await deps.getNonce();
+  let nonce = await deps.getNonce();
   const broadcast: Hex[] = [];
   let lastError: unknown;
 
@@ -199,6 +208,28 @@ export async function sendWithRetry<R extends MinimalReceipt>(
 
       const isLast = attempt === policy.maxAttempts - 1;
       if (isLast) break;
+
+      // The nonce slot is gone (an external transaction from the same key took it, or one of our
+      // own attempts landed and was not visible as a receipt yet). Re-reading it is the only thing
+      // that can make the remaining attempts anything other than guaranteed failures.
+      if (isNonceError(error)) {
+        try {
+          const refreshed = await deps.getNonce();
+          if (refreshed !== nonce) {
+            deps.onAttempt?.({
+              attempt,
+              gasPriceWei,
+              nonce: refreshed,
+              outcome: 'renonced',
+              latencyMs: deps.now() - attemptStart,
+            });
+            nonce = refreshed;
+          }
+        } catch {
+          // Keep the old nonce; the next attempt fails the same way and the tick re-plans.
+        }
+      }
+
       await deps.sleep(computeBackoff(attempt, policy.backoff, deps.random));
     }
   }

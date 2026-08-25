@@ -1,0 +1,71 @@
+# UpDown keeper — systemd unit.
+#
+# Install:
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin updown
+#   sudo mkdir -p /opt/updown-keeper /etc/updown
+#   sudo rsync -a --delete ./ /opt/updown-keeper/        # package.json, dist/, node_modules/
+#   sudo install -m 0600 -o updown -g updown .env /etc/updown/keeper.env
+#   sudo cp updown-keeper.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now updown-keeper
+#
+# Logs:  journalctl -u updown-keeper -f -o cat | jq .
+
+[Unit]
+Description=UpDown Protocol keeper (executeRound driver for BNB Smart Chain)
+Documentation=https://github.com/updown-protocol/updown
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=updown
+Group=updown
+WorkingDirectory=/opt/updown-keeper
+
+# KEEPER_PRIVATE_KEY lives here. Keep it 0600 and owned by the service user.
+EnvironmentFile=/etc/updown/keeper.env
+Environment=NODE_ENV=production
+
+ExecStart=/usr/bin/node /opt/updown-keeper/dist/index.js
+
+# The keeper drains its in-flight transaction on SIGTERM before exiting.
+KillSignal=SIGTERM
+TimeoutStopSec=45
+Restart=always
+RestartSec=5
+
+# A configuration error (exit 78 / EX_CONFIG) is not fixed by restarting.
+RestartPreventExitStatus=78
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=updown-keeper
+
+# ── hardening ───────────────────────────────────────────────────────────────
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=false
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

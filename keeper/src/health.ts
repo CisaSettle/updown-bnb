@@ -6,9 +6,14 @@
  * reported as inactive rather than unhealthy — the keeper is doing its job; the market is closed.
  * A market whose activity is unknown (its state has never been read) is unhealthy: silence about a
  * market is a keeper failure, not a market state.
+ *
+ * A market can also be `degraded`: executing on schedule, and yet structurally unable to produce a
+ * correct settlement — the keeper key not being the relay feed's `updater` is the case that matters,
+ * because every round then voids into refunds while the execution budget stays perfectly green.
+ * That is precisely the shape of failure a health check exists to catch, so it is unhealthy.
  */
 
-export type MarketHealthState = 'ok' | 'stale' | 'inactive' | 'unknown';
+export type MarketHealthState = 'ok' | 'stale' | 'inactive' | 'degraded' | 'unknown';
 
 export interface MarketHealthInput {
   name: string;
@@ -22,6 +27,12 @@ export interface MarketHealthInput {
   active: boolean;
   /** False until the keeper has successfully read this market's on-chain state at least once. */
   observed: boolean;
+  /**
+   * Non-null when a keeper-side condition guarantees this market cannot be served correctly — a
+   * relay feed this key may not write, for instance. Such a market still "executes" on time, so
+   * the execution budget alone would report it green while every round it settles voids.
+   */
+  degraded?: string | null;
 }
 
 export interface MarketHealth {
@@ -69,6 +80,16 @@ export function evaluateMarketHealth(
       reason: 'market state has never been read successfully',
     };
   }
+  if (input.degraded) {
+    return {
+      name: input.name,
+      state: 'degraded',
+      healthy: false,
+      secondsSinceExecution,
+      budgetSec,
+      reason: input.degraded,
+    };
+  }
   if (!input.active) {
     return {
       name: input.name,
@@ -83,6 +104,8 @@ export function evaluateMarketHealth(
   // Before the first execution the budget runs from when supervision began, so a fresh boot on a
   // 1h market is not reported unhealthy for its first hour.
   const since = input.lastExecutionMs ?? input.supervisedSinceMs;
+  // One-second granularity, deliberately: the same figure drives the verdict and the reason text,
+  // so a report can never say "600s ago, budget is 600s" while calling the market stale.
   const ageSec = Math.max(0, Math.floor((nowMs - since) / 1000));
   if (ageSec > budgetSec) {
     return {

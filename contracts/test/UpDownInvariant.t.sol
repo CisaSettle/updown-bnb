@@ -180,13 +180,12 @@ contract UpDownHandler is Test {
 
     // ── admin churn: the actions that reach the parameter-snapshot bugs ──────
 
-    function mutateParams(uint256 feeSeed, uint256 bufferSeed, uint256 ageSeed) external {
+    function mutateParams(uint256 feeSeed, uint256 bufferSeed) external {
         uint256 interval = market.interval();
         uint16 fee = uint16(bound(feeSeed, 0, market.MAX_FEE_BPS()));
         uint16 buffer = uint16(bound(bufferSeed, 1, interval - 1));
-        uint32 age = uint32(bound(ageSeed, 1, interval - 1));
         vm.prank(owner);
-        try market.setParams(fee, buffer, age) {
+        try market.setParams(fee, buffer) {
             paramChanges++;
         } catch {}
     }
@@ -305,7 +304,7 @@ contract UpDownInvariantTest is Test {
     ///         it really can reach the states the invariants above are meant to police — including a
     ///         genuinely settled (not voided) round while admin parameters are being churned.
     function test_handlerReachesTheInterestingStates() public {
-        handler.mutateParams(150, 90, 100);
+        handler.mutateParams(150, 90);
         assertGt(handler.paramChanges(), 0, "parameters were never churned");
 
         handler.betUp(0, 1_000e18);

@@ -17,8 +17,13 @@ contract MockAggregator is IAggregatorV3 {
     address public owner;
 
     uint80 public latestId;
+    uint80 public phase = 1;
+    uint80 public aggRound;
     mapping(uint80 => RoundData) private _history;
     bool public shouldRevert;
+
+    /// @dev Chainlink proxy round ids are `phaseId << 64 | aggregatorRoundId`.
+    uint80 private constant PHASE_SHIFT = 64;
 
     error NotOwner();
 
@@ -31,8 +36,20 @@ contract MockAggregator is IAggregatorV3 {
         decimals = decimals_;
         description = description_;
         owner = msg.sender;
-        latestId = 1;
-        _history[1] = RoundData(initialAnswer, block.timestamp);
+        aggRound = 1;
+        latestId = _compose(1, 1);
+        _history[latestId] = RoundData(initialAnswer, block.timestamp);
+    }
+
+    function _compose(uint80 phase_, uint80 aggRound_) internal pure returns (uint80) {
+        return uint80((uint256(phase_) << PHASE_SHIFT) | uint256(aggRound_));
+    }
+
+    /// @dev Simulates an aggregator upgrade: ids jump to the next phase and restart at 1, which is
+    ///      exactly where a naive `roundId + 1` successor check breaks.
+    function startNewPhase() external onlyOwner {
+        phase += 1;
+        aggRound = 0;
     }
 
     function setOwner(address o) external onlyOwner {
@@ -57,7 +74,8 @@ contract MockAggregator is IAggregatorV3 {
     }
 
     function _push(int256 answer, uint256 updatedAt) internal returns (uint80) {
-        latestId += 1;
+        aggRound += 1;
+        latestId = _compose(phase, aggRound);
         _history[latestId] = RoundData(answer, updatedAt);
         return latestId;
     }

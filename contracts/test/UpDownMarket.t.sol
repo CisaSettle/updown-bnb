@@ -185,33 +185,83 @@ contract UpDownMarketTest is UpDownBaseTest {
         assertEq(usdt.balanceOf(alice), a0, "one-sided book must be a clean refund");
     }
 
-    function test_staleOracleVoidsRound() public {
+    /// @notice Regression for the griefing hole that permissionless execution opened: a losing
+    ///         bettor must not be able to force everyone into a refund by front-running an honest
+    ///         call with a bogus boundary proof. A bad proof costs them gas and changes nothing.
+    function test_bogusRoundIdCannotForceARefund() public {
+        _betUp(alice, 1_000e18);
+        _betDown(bob, 1_000e18);
+        _advance(P0); // epoch 1 locked
+
+        UpDownMarketBase.Round memory r2 = _round(2);
+        vm.warp(r2.lockTs);
+        uint80 honest = feed.setAnswer(81_000e8); // UP wins; bob is about to lose
+
+        // bob tries every shape of bad proof
+        vm.startPrank(bob);
+        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        market.executeRound(type(uint80).max); // a round that does not exist
+        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        market.executeRound(0); // the zero round
+        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        market.executeRound(honest - 1); // a real but non-final round
+        vm.stopPrank();
+
+        assertFalse(_round(1).voided, "griefing must not void the round");
+        assertFalse(_round(1).settled, "and must not settle it either");
+
+        // the honest call still lands and bob still loses
+        vm.prank(carol);
+        market.executeRound(honest);
+        assertTrue(_round(1).settled && !_round(1).voided);
+        assertFalse(market.refundable(1, bob), "the loser must not escape into a refund");
+        assertTrue(market.claimable(1, alice));
+    }
+
+    /// @notice A genuinely dead feed cannot be settled, so nothing happens until the round's own
+    ///         window elapses — and only then does it void into refunds.
+    function test_deadOracleVoidsOnlyAfterTheWindowElapses() public {
         _betUp(alice, 100e18);
         _betDown(bob, 100e18);
         _advance(P0); // lock epoch 1
 
-        UpDownMarketBase.Round memory r = _round(2);
-        vm.warp(r.lockTs);
+        UpDownMarketBase.Round memory r2 = _round(2);
+        vm.warp(r2.lockTs);
         uint80 rid = feed.setAnswerAt(81_000e8, block.timestamp - MAX_AGE - 1); // too old at the boundary
+
+        vm.prank(keeper);
+        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        market.executeRound(rid);
+        assertFalse(_round(1).voided, "still inside the window: nothing decided yet");
+
+        vm.warp(uint256(r2.lockTs) + BUFFER + 1);
         vm.prank(keeper);
         market.executeRound(rid);
-
-        assertTrue(_round(1).voided, "stale close must void");
-        assertTrue(_round(2).voided, "stale lock must void");
+        assertTrue(_round(1).voided, "timeout must void");
+        assertTrue(_round(2).voided);
         assertTrue(market.refundable(1, alice));
+        _claim(alice, 1);
+        _claim(bob, 1);
+        _assertSolvent();
     }
 
-    function test_revertingOracleVoidsRound() public {
+    function test_revertingOracleCannotSettleAndEventuallyVoids() public {
         _betUp(alice, 100e18);
         _betDown(bob, 100e18);
         _advance(P0);
 
-        vm.warp(_round(2).lockTs);
+        UpDownMarketBase.Round memory r2 = _round(2);
+        vm.warp(r2.lockTs);
         uint80 rid = feed.setAnswer(81_000e8);
         feed.setShouldRevert(true);
-        vm.prank(keeper);
-        market.executeRound(rid); // must not revert — must void
 
+        vm.prank(keeper);
+        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        market.executeRound(rid);
+
+        vm.warp(uint256(r2.lockTs) + BUFFER + 1);
+        vm.prank(keeper);
+        market.executeRound(rid); // the timeout path needs no oracle at all
         assertTrue(_round(1).voided);
         _claim(alice, 1);
     }
@@ -227,12 +277,59 @@ contract UpDownMarketTest is UpDownBaseTest {
         vm.warp(uint256(r2.lockTs) - 10);
         uint80 early = feed.setAnswer(70_000e8); // an earlier print, still before the boundary
         vm.warp(r2.lockTs);
-        feed.setAnswer(90_000e8); // the real boundary print
+        uint80 real = feed.setAnswer(90_000e8); // the real boundary print
         vm.prank(keeper);
-        market.executeRound(early); // cherry-picking the earlier one must not settle
+        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        market.executeRound(early);
 
-        assertTrue(_round(1).voided, "a non-final boundary round must void, never settle");
-        assertEq(_round(1).closePrice, 0);
+        vm.prank(keeper);
+        market.executeRound(real);
+        assertEq(_round(1).closePrice, 90_000e8, "only the final boundary print may settle");
+    }
+
+    /// @notice A Chainlink aggregator upgrade renumbers round ids (`phaseId << 64 | aggRoundId`), so
+    ///         the successor of a phase's last round is the first round of the NEXT phase. The
+    ///         settled price must not depend on whether the call landed before or after the upgrade.
+    function test_aggregatorPhaseChangeDoesNotChangeSettlement() public {
+        _betUp(alice, 1_000e18);
+        _betDown(bob, 1_000e18);
+        _advance(P0);
+
+        UpDownMarketBase.Round memory r2 = _round(2);
+        vm.warp(r2.lockTs);
+        uint80 boundaryId = feed.setAnswer(81_000e8); // last print of the current phase
+
+        // the feed is upgraded and starts a fresh round-id sequence after the boundary
+        vm.warp(uint256(r2.lockTs) + 30);
+        feed.startNewPhase();
+        uint80 newPhaseId = feed.setAnswer(95_000e8);
+        assertGt(newPhaseId >> 64, boundaryId >> 64, "mock did not actually change phase");
+        assertNotEq(newPhaseId, boundaryId + 1, "successor is not the numeric increment");
+
+        vm.prank(keeper);
+        market.executeRound(boundaryId);
+        assertTrue(_round(1).settled && !_round(1).voided, "phase change must not void the round");
+        assertEq(_round(1).closePrice, 81_000e8, "settled at the boundary print, as always");
+    }
+
+    /// @notice ...and a post-upgrade print that still precedes the boundary must still disqualify an
+    ///         earlier candidate, exactly as it would within one phase.
+    function test_phaseChangeStillRejectsANonFinalRound() public {
+        _betUp(alice, 100e18);
+        _betDown(bob, 100e18);
+        _advance(P0);
+
+        UpDownMarketBase.Round memory r2 = _round(2);
+        vm.warp(uint256(r2.lockTs) - 20);
+        uint80 oldPhaseId = feed.setAnswer(70_000e8);
+        feed.startNewPhase();
+        vm.warp(uint256(r2.lockTs) - 5);
+        feed.setAnswer(88_000e8); // newer, and still at or before the boundary
+        vm.warp(r2.lockTs);
+
+        vm.prank(keeper);
+        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        market.executeRound(oldPhaseId);
     }
 
     /// @notice The settlement price is a pure function of the boundary, so *when* the crank is
@@ -259,7 +356,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         assertTrue(_round(1).settled && !_round(1).voided);
     }
 
-    function test_negativeOraclePriceVoidsRound() public {
+    function test_negativeOraclePriceIsRejected() public {
         _betUp(alice, 100e18);
         _betDown(bob, 100e18);
         _advance(P0);
@@ -267,8 +364,8 @@ contract UpDownMarketTest is UpDownBaseTest {
         vm.warp(_round(2).lockTs);
         uint80 rid = feed.setAnswerAt(-1, block.timestamp);
         vm.prank(keeper);
+        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
         market.executeRound(rid);
-        assertTrue(_round(1).voided);
     }
 
     function test_settlementAfterBufferVoidsInsteadOfMisSettling() public {
@@ -422,7 +519,7 @@ contract UpDownMarketTest is UpDownBaseTest {
     ///         paying winners out of liabilities that had already been refunded away.
     function test_wideningBufferCannotSettleAnAlreadyExpiredRound() public {
         vm.prank(owner);
-        market.setParams(FEE_BPS, 299, MAX_AGE); // the NEXT round will get the longer buffer
+        market.setParams(FEE_BPS, 299); // the NEXT round will get the longer buffer
 
         _betUp(alice, 1_000e18);
         _betDown(bob, 1_000e18);
@@ -453,24 +550,44 @@ contract UpDownMarketTest is UpDownBaseTest {
         _assertSolvent();
     }
 
-    /// @notice Regression: `oracleMaxAge` is snapshotted per round, so an admin cannot widen it to
-    ///         make a previously unusable — and conveniently favourable — old print settle a round.
-    function test_wideningOracleMaxAgeCannotAlterAnOpenRound() public {
+    /// @notice `oracleMaxAge` is immutable, so there is no admin lever that could make a stale —
+    ///         and conveniently favourable — print settle a round. `setParams` cannot touch it and
+    ///         every round always agrees on what a valid proof is.
+    function test_oracleMaxAgeIsImmutable() public {
+        assertEq(market.oracleMaxAge(), MAX_AGE);
+        assertEq(_round(1).oracleMaxAge, MAX_AGE);
+
+        vm.prank(owner);
+        market.setParams(1000, 299); // the only knobs left
+        assertEq(market.oracleMaxAge(), MAX_AGE, "max age must not be reachable from setParams");
+
         _betUp(alice, 1_000e18);
         _betDown(bob, 1_000e18);
-        _advance(P0); // epoch 1 locked with a 150s max age
+        _advance(P0);
 
         UpDownMarketBase.Round memory r2 = _round(2);
         vm.warp(r2.lockTs);
-        uint80 rid = feed.setAnswerAt(99_000e8, block.timestamp - 200); // 200s stale at the boundary
-
-        vm.prank(owner);
-        market.setParams(FEE_BPS, BUFFER, 299); // widen well past 200s
-
+        uint80 rid = feed.setAnswerAt(99_000e8, block.timestamp - uint256(MAX_AGE) - 1);
         vm.prank(keeper);
+        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
         market.executeRound(rid);
-        assertTrue(_round(1).voided, "epoch 1 must be judged by its own snapshot");
         assertEq(market.treasuryAmount(), 0);
+    }
+
+    /// @notice A token that charges a fee only on the way out must break loudly on the first payout
+    ///         rather than quietly paying every user less than the contract recorded.
+    function test_outboundFeeAssetIsRejectedOnPayout() public {
+        _betUp(alice, 1_000e18);
+        _betDown(bob, 1_000e18);
+        _advance(P0);
+        _advance(81_000e8);
+
+        usdt.setTransferFeeBps(100); // the asset turns hostile after the round settled
+        uint256[] memory e = new uint256[](1);
+        e[0] = 1;
+        vm.prank(alice);
+        vm.expectRevert(UpDownMarketBase.UnsupportedAsset.selector);
+        market.claim(e);
     }
 
     function test_findRoundIdAtLocatesTheBoundaryPrint() public {
@@ -506,7 +623,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         _betUp(alice, 1_000e18);
         _betDown(bob, 1_000e18);
         vm.prank(owner);
-        market.setParams(1000, BUFFER, MAX_AGE); // raise fee to 10% mid-round
+        market.setParams(1000, BUFFER); // raise fee to 10% mid-round
 
         _advance(P0);
         _advance(81_000e8);
@@ -521,7 +638,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         assertTrue(market.refundable(1, alice));
 
         vm.prank(owner);
-        market.setParams(FEE_BPS, 299, MAX_AGE); // much longer buffer
+        market.setParams(FEE_BPS, 299); // much longer buffer
         assertTrue(market.refundable(1, alice), "an open round must not be un-expired");
     }
 
@@ -588,7 +705,7 @@ contract UpDownMarketTest is UpDownBaseTest {
     function test_onlyOwnerAdmin() public {
         vm.prank(carol);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, carol));
-        market.setParams(100, BUFFER, MAX_AGE);
+        market.setParams(100, BUFFER);
 
         vm.prank(carol);
         vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, carol));

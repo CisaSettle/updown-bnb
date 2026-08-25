@@ -7,6 +7,9 @@ import {UpDownMarketBase} from "./UpDownMarketBase.sol";
 
 /// @title UpDownMarketERC20
 /// @notice Binary Up/Down rounds settled in an ERC20 asset (USDT on BNB Chain, 18 decimals).
+/// @dev Supports standard ERC20s only. Both directions of every transfer are checked to move
+///      exactly the stated amount, so fee-on-transfer tokens are rejected; rebasing tokens are
+///      unsupported and must never be used as the settlement asset.
 contract UpDownMarketERC20 is UpDownMarketBase {
     using SafeERC20 for IERC20;
 
@@ -63,8 +66,15 @@ contract UpDownMarketERC20 is UpDownMarketBase {
         if (asset.balanceOf(address(this)) - balanceBefore != amount) revert UnsupportedAsset();
     }
 
+    /// @dev Also checks the *outbound* delta. A token that charges a fee only when this contract
+    ///      sends would otherwise let the market mark a claim paid in full while the recipient got
+    ///      less. Such a market is broken by construction, so it fails on its very first payout
+    ///      rather than silently shortchanging every user; the settlement asset is immutable and the
+    ///      deploy script pins it to a known-conforming token.
     function _pushFunds(address to, uint256 amount) internal override {
+        uint256 balanceBefore = asset.balanceOf(to);
         asset.safeTransfer(to, amount);
+        if (asset.balanceOf(to) - balanceBefore != amount) revert UnsupportedAsset();
     }
 
     /// @inheritdoc UpDownMarketBase

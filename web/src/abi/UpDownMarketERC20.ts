@@ -14,11 +14,6 @@ export const upDownMarketERC20Abi = [
         "internalType": "address"
       },
       {
-        "name": "operator_",
-        "type": "address",
-        "internalType": "address"
-      },
-      {
         "name": "asset_",
         "type": "address",
         "internalType": "address"
@@ -145,6 +140,19 @@ export const upDownMarketERC20Abi = [
   },
   {
     "type": "function",
+    "name": "boundaryTimestamp",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "bufferSeconds",
     "inputs": [],
     "outputs": [
@@ -164,6 +172,24 @@ export const upDownMarketERC20Abi = [
         "name": "epochs",
         "type": "uint256[]",
         "internalType": "uint256[]"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "claimTo",
+    "inputs": [
+      {
+        "name": "epochs",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      },
+      {
+        "name": "to",
+        "type": "address",
+        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -248,7 +274,13 @@ export const upDownMarketERC20Abi = [
   {
     "type": "function",
     "name": "executeRound",
-    "inputs": [],
+    "inputs": [
+      {
+        "name": "boundaryRoundId",
+        "type": "uint80",
+        "internalType": "uint80"
+      }
+    ],
     "outputs": [],
     "stateMutability": "nonpayable"
   },
@@ -261,6 +293,40 @@ export const upDownMarketERC20Abi = [
         "name": "",
         "type": "uint16",
         "internalType": "uint16"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "findRoundIdAt",
+    "inputs": [
+      {
+        "name": "targetTs",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "startFrom",
+        "type": "uint80",
+        "internalType": "uint80"
+      },
+      {
+        "name": "maxSteps",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "roundId",
+        "type": "uint80",
+        "internalType": "uint80"
+      },
+      {
+        "name": "found",
+        "type": "bool",
+        "internalType": "bool"
       }
     ],
     "stateMutability": "view"
@@ -360,6 +426,11 @@ export const upDownMarketERC20Abi = [
             "name": "closeOracleId",
             "type": "uint80",
             "internalType": "uint80"
+          },
+          {
+            "name": "oracleMaxAge",
+            "type": "uint32",
+            "internalType": "uint32"
           },
           {
             "name": "upAmount",
@@ -463,6 +534,11 @@ export const upDownMarketERC20Abi = [
             "internalType": "uint80"
           },
           {
+            "name": "oracleMaxAge",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
             "name": "upAmount",
             "type": "uint256",
             "internalType": "uint256"
@@ -496,19 +572,6 @@ export const upDownMarketERC20Abi = [
         "name": "",
         "type": "uint256",
         "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "lastOracleRoundId",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint80",
-        "internalType": "uint80"
       }
     ],
     "stateMutability": "view"
@@ -606,19 +669,6 @@ export const upDownMarketERC20Abi = [
         "name": "downMultipleBps",
         "type": "uint256",
         "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "operator",
-    "inputs": [],
-    "outputs": [
-      {
-        "name": "",
-        "type": "address",
-        "internalType": "address"
       }
     ],
     "stateMutability": "view"
@@ -811,19 +861,6 @@ export const upDownMarketERC20Abi = [
   },
   {
     "type": "function",
-    "name": "setOperator",
-    "inputs": [
-      {
-        "name": "operator_",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
     "name": "setOracle",
     "inputs": [
       {
@@ -986,6 +1023,12 @@ export const upDownMarketERC20Abi = [
         "internalType": "uint256"
       },
       {
+        "name": "to",
+        "type": "address",
+        "indexed": false,
+        "internalType": "address"
+      },
+      {
         "name": "amount",
         "type": "uint256",
         "indexed": false,
@@ -1040,19 +1083,6 @@ export const upDownMarketERC20Abi = [
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "OperatorUpdated",
-    "inputs": [
-      {
-        "name": "operator",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
       }
     ],
     "anonymous": false
@@ -1399,11 +1429,6 @@ export const upDownMarketERC20Abi = [
   },
   {
     "type": "error",
-    "name": "NotOperator",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "NotResolved",
     "inputs": []
   },
@@ -1478,6 +1503,11 @@ export const upDownMarketERC20Abi = [
   {
     "type": "error",
     "name": "TransferFailed",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "UnsupportedAsset",
     "inputs": []
   },
   {

@@ -11,6 +11,71 @@ export function isLogLevel(value: string): value is LogLevel {
 
 export type LogFields = Record<string, unknown>;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Secret scrubbing
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Values that must never reach stdout, scrubbed from every emitted line.
+ *
+ * This is not belt-and-braces: viem stamps the full RPC URL into `error.message`
+ * (`HttpRequestError` -> `metaMessages: ["URL: <url>"]`) and its own `getUrl` only strips
+ * `user:pass@` basic-auth, not an API key in the path or query. A provider URL such as
+ * `https://…/v2/<KEY>` therefore leaks verbatim on every RPC hiccup unless it is scrubbed here.
+ */
+const SECRETS = new Set<string>();
+
+/** Shortest string worth registering; below this, scrubbing would mangle ordinary text. */
+const MIN_SECRET_LENGTH = 8;
+
+/**
+ * Register a value to redact. A URL is decomposed as well as registered whole, so a partially
+ * rendered form (just the API-key path segment, just a query value) is still caught.
+ */
+export function registerSecret(value: string | undefined | null): void {
+  if (typeof value !== 'string') return;
+  const trimmed = value.trim();
+  if (trimmed.length >= MIN_SECRET_LENGTH) SECRETS.add(trimmed);
+  for (const part of secretPartsOf(trimmed)) {
+    if (part.length >= MIN_SECRET_LENGTH) SECRETS.add(part);
+  }
+}
+
+/** The credential-bearing pieces of a URL: basic-auth, opaque path segments, query values. */
+function secretPartsOf(raw: string): string[] {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return [];
+  }
+  const parts: string[] = [];
+  if (url.password) parts.push(url.password);
+  if (url.username) parts.push(url.username);
+  for (const value of url.searchParams.values()) parts.push(value);
+  for (const segment of url.pathname.split('/')) {
+    // Long, opaque segments are API keys; short readable ones ("v2", "bsc") are not.
+    if (segment.length >= 16 && /^[A-Za-z0-9_-]+$/.test(segment)) parts.push(segment);
+  }
+  return parts;
+}
+
+/** Test seam only. */
+export function clearSecrets(): void {
+  SECRETS.clear();
+}
+
+/** Replace every registered secret in `text` with `***`. Longest first, so overlaps are safe. */
+export function scrubSecrets(text: string): string {
+  if (SECRETS.size === 0) return text;
+  let out = text;
+  for (const secret of [...SECRETS].sort((a, b) => b.length - a.length)) {
+    if (out.includes(secret)) out = out.split(secret).join('***');
+  }
+  return out;
+}
+
+
 /**
  * Make an arbitrary value JSON-safe.
  * bigint -> decimal string (an epoch or a wei amount must never be lossy-cast to a number),
@@ -79,7 +144,7 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     } catch {
       line = JSON.stringify({ level: recordLevel, ts: record['ts'], msg, logError: 'unserialisable-fields' });
     }
-    write(line);
+    write(scrubSecrets(line));
   };
 
   return {
