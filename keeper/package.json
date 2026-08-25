@@ -1,0 +1,31 @@
+{
+  "name": "@updown/keeper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "UpDown Protocol keeper — drives executeRound() (and testnet price relays) for every deployed market on BNB Smart Chain.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "dist/index.js",
+  "bin": {
+    "updown-keeper": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js",
+    "dev": "node --experimental-strip-types --watch src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}

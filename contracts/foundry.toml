@@ -1,0 +1,47 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+test = "test"
+script = "script"
+solc_version = "0.8.28"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 1000
+via_ir = false
+bytecode_hash = "none"
+cbor_metadata = false
+fs_permissions = [{ access = "read-write", path = "./deployments" }]
+
+# Round boundaries are intentionally wall-clock based. On BSC a validator can nudge
+# block.timestamp by a few seconds at most, which is absorbed by `bufferSeconds`; a shift large
+# enough to matter only ever voids a round into full refunds, never mis-settles one.
+[lint]
+exclude_lints = ["block-timestamp"]
+
+[profile.ci]
+verbosity = 3
+fuzz = { runs = 2000 }
+invariant = { runs = 512, depth = 64 }
+
+[fuzz]
+runs = 512
+
+[invariant]
+runs = 128
+depth = 48
+fail_on_revert = false
+
+[rpc_endpoints]
+bsc = "${BSC_RPC_URL}"
+bsc_testnet = "${BSC_TESTNET_RPC_URL}"
+
+[etherscan]
+bsc = { key = "${ETHERSCAN_API_KEY}", chain = 56, url = "https://api.etherscan.io/v2/api" }
+bsc_testnet = { key = "${ETHERSCAN_API_KEY}", chain = 97, url = "https://api.etherscan.io/v2/api" }
+
+[fmt]
+line_length = 110
+tab_width = 4
+bracket_spacing = false
+int_types = "long"

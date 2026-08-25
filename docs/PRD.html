@@ -1,0 +1,1377 @@
+<!DOCTYPE html>
+<html lang="zh-Hans" data-lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UpDown Protocol — Product Spec / 产品规格</title>
+<script>
+  // Restore the reader's last choice before first paint. Default is 中文.
+  (function () {
+    try {
+      var v = localStorage.getItem('updown-lang');
+      if (v === 'en' || v === 'zh') {
+        document.documentElement.setAttribute('data-lang', v);
+        document.documentElement.setAttribute('lang', v === 'en' ? 'en' : 'zh-Hans');
+      }
+    } catch (e) { /* private mode: keep the 中文 default */ }
+  })();
+</script>
+<style>
+/* ─────────────────────────────────────────────────────────────
+   Palette — light first, dark via prefers-color-scheme
+   ───────────────────────────────────────────────────────────── */
+:root{
+  --bg:#faf9f6;
+  --bg-band:#f2f0e9;
+  --surface:#ffffff;
+  --surface-2:#f6f5f0;
+  --text:#181a1f;
+  --muted:#5b6070;
+  --faint:#8a8f9c;
+  --line:#e4e1d9;
+  --line-strong:#d3cfc4;
+  --accent:#8f6410;
+  --accent-ink:#6d4c0b;
+  --accent-soft:#f6ecd7;
+  --up:#0d7a52;
+  --up-soft:#e2f2ea;
+  --down:#ad3626;
+  --down-soft:#fbe8e3;
+  --code-bg:#f4f2ec;
+  --code-ink:#3a3d46;
+  --bar-bg:rgba(250,249,246,.85);
+  --shadow:0 1px 2px rgba(24,20,10,.05), 0 10px 28px -16px rgba(24,20,10,.28);
+  --grid-bet:#e9e5da;
+  --grid-live:#dfe8e4;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#101117;
+    --bg-band:#15171f;
+    --surface:#171a23;
+    --surface-2:#1c1f2a;
+    --text:#e9e7e2;
+    --muted:#a3a9b6;
+    --faint:#7c8293;
+    --line:#292c37;
+    --line-strong:#3a3e4c;
+    --accent:#e0b055;
+    --accent-ink:#f0cb85;
+    --accent-soft:#2a2416;
+    --up:#4ec18d;
+    --up-soft:#122a20;
+    --down:#f0876f;
+    --down-soft:#2e1a16;
+    --code-bg:#1a1d26;
+    --code-ink:#c3c8d4;
+    --bar-bg:rgba(16,17,23,.86);
+    --shadow:0 1px 2px rgba(0,0,0,.45), 0 12px 32px -18px rgba(0,0,0,.85);
+    --grid-bet:#262a35;
+    --grid-live:#1f2c2a;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Language switching — exactly one language is ever visible
+   ───────────────────────────────────────────────────────────── */
+html[data-lang="zh"] .l-en{display:none !important}
+html[data-lang="en"] .l-zh{display:none !important}
+
+/* ─────────────────────────────────────────────────────────────
+   Base
+   ───────────────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Arial,
+    "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  font-size:17px;
+  line-height:1.72;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+html[data-lang="zh"] body{line-height:1.85}
+code,kbd,pre,.mono{
+  font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+}
+a{color:var(--accent-ink);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* ── Top bar ─────────────────────────────────────────────── */
+.topbar{
+  position:sticky;top:0;z-index:60;
+  background:var(--bar-bg);
+  -webkit-backdrop-filter:saturate(180%) blur(12px);
+  backdrop-filter:saturate(180%) blur(12px);
+  border-bottom:1px solid var(--line);
+}
+.topbar-in{
+  max-width:1180px;margin:0 auto;padding:10px 28px;
+  display:flex;align-items:center;gap:16px;
+}
+.brand{display:flex;align-items:baseline;gap:9px;min-width:0}
+.brand-mark{
+  font-weight:700;letter-spacing:-.015em;font-size:15px;white-space:nowrap;
+}
+.brand-mark .up{color:var(--up)}
+.brand-mark .dn{color:var(--down)}
+.brand-sub{
+  font-size:12.5px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.spacer{flex:1 1 auto}
+.langtoggle{
+  display:inline-flex;align-items:stretch;flex:0 0 auto;
+  border:1px solid var(--line-strong);border-radius:999px;
+  background:var(--surface);overflow:hidden;
+}
+.langtoggle button{
+  appearance:none;border:0;background:transparent;color:var(--muted);
+  font:inherit;font-size:13px;line-height:1;
+  padding:7px 14px;cursor:pointer;transition:background .15s,color .15s;
+  font-family:inherit;
+}
+.langtoggle button + button{border-left:1px solid var(--line)}
+.langtoggle button:hover{color:var(--text)}
+.langtoggle button[aria-pressed="true"]{
+  background:var(--accent-soft);color:var(--accent-ink);font-weight:600;
+}
+
+/* ── Hero ────────────────────────────────────────────────── */
+.hero{
+  background:linear-gradient(180deg,var(--bg-band) 0%,var(--bg) 100%);
+  border-bottom:1px solid var(--line);
+}
+.hero-in{max-width:1180px;margin:0 auto;padding:56px 28px 44px}
+.eyebrow{
+  font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--accent-ink);font-weight:650;margin:0 0 14px;
+}
+html[data-lang="zh"] .eyebrow{letter-spacing:.08em}
+h1{
+  margin:0 0 14px;font-size:clamp(1.85rem,4.2vw,2.7rem);line-height:1.18;
+  letter-spacing:-.02em;font-weight:700;max-width:20ch;
+}
+html[data-lang="zh"] h1{max-width:24ch;letter-spacing:0}
+.lede{margin:0;font-size:clamp(1.02rem,1.6vw,1.19rem);color:var(--muted);max-width:62ch;line-height:1.62}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px}
+.chip{
+  font-size:12.5px;padding:4px 11px;border-radius:999px;
+  border:1px solid var(--line-strong);color:var(--muted);background:var(--surface);
+}
+.chip strong{color:var(--text);font-weight:600}
+
+/* ── Layout ──────────────────────────────────────────────── */
+.wrap{
+  max-width:1180px;margin:0 auto;padding:0 28px 110px;
+  display:grid;grid-template-columns:212px minmax(0,1fr);gap:52px;
+  align-items:start;
+}
+nav.toc{
+  position:sticky;top:70px;padding-top:44px;font-size:13.5px;line-height:1.5;
+}
+nav.toc .toc-h{
+  font-size:11px;letter-spacing:.13em;text-transform:uppercase;color:var(--faint);
+  font-weight:650;margin-bottom:12px;
+}
+nav.toc ol{list-style:none;margin:0;padding:0;counter-reset:toc}
+nav.toc li{counter-increment:toc;margin:0 0 2px}
+nav.toc a{
+  display:flex;gap:9px;padding:5px 8px;border-radius:7px;color:var(--muted);
+  border-left:2px solid transparent;
+}
+nav.toc a::before{
+  content:counter(toc,decimal-leading-zero);
+  color:var(--faint);font-variant-numeric:tabular-nums;font-size:11.5px;padding-top:2px;
+}
+nav.toc a:hover{background:var(--surface-2);color:var(--text);text-decoration:none}
+main{padding-top:44px;max-width:820px;min-width:0}
+
+/* ── Sections & type ─────────────────────────────────────── */
+section{margin:0 0 60px;scroll-margin-top:76px}
+h2{
+  margin:0 0 20px;font-size:clamp(1.32rem,2.3vw,1.62rem);line-height:1.3;
+  letter-spacing:-.012em;font-weight:680;
+  display:flex;align-items:baseline;gap:12px;
+  padding-bottom:12px;border-bottom:1px solid var(--line);
+}
+h2 .num{
+  font-size:12px;color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums;
+  letter-spacing:.06em;flex:0 0 auto;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+h3{margin:34px 0 12px;font-size:1.05rem;font-weight:650;letter-spacing:-.005em}
+h4{margin:24px 0 8px;font-size:.94rem;font-weight:650;color:var(--muted)}
+p{margin:0 0 16px}
+ul,ol{margin:0 0 16px;padding-left:1.35em}
+li{margin:0 0 8px}
+li::marker{color:var(--faint)}
+strong{font-weight:650}
+em{font-style:italic;color:var(--muted)}
+.small{font-size:14px;color:var(--muted)}
+hr{border:0;border-top:1px solid var(--line);margin:34px 0}
+
+/* inline code */
+p code,li code,td code,th code,h3 code,h4 code,.small code{
+  background:var(--code-bg);color:var(--code-ink);
+  padding:1px 5px;border-radius:5px;font-size:.875em;
+  border:1px solid var(--line);white-space:nowrap;
+}
+
+/* ── Code / formula blocks ───────────────────────────────── */
+pre{
+  margin:0 0 20px;background:var(--code-bg);border:1px solid var(--line);
+  border-radius:10px;padding:16px 18px;overflow-x:auto;
+  font-size:13.5px;line-height:1.65;color:var(--code-ink);
+  -webkit-overflow-scrolling:touch;
+}
+pre code{background:none;border:0;padding:0;font-size:inherit;color:inherit;white-space:pre}
+pre .c{color:var(--faint)}
+pre .k{color:var(--accent-ink);font-weight:600}
+
+/* ── Tables ──────────────────────────────────────────────── */
+.tw{
+  overflow-x:auto;margin:0 0 22px;border:1px solid var(--line);border-radius:11px;
+  background:var(--surface);box-shadow:var(--shadow);-webkit-overflow-scrolling:touch;
+}
+table{border-collapse:collapse;width:100%;font-size:14.5px;line-height:1.55}
+th,td{padding:11px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+thead th{
+  background:var(--surface-2);font-weight:650;font-size:12.5px;
+  letter-spacing:.03em;text-transform:uppercase;color:var(--muted);white-space:nowrap;
+}
+html[data-lang="zh"] thead th{text-transform:none;letter-spacing:0;font-size:13px}
+tbody tr:last-child td{border-bottom:0}
+tbody th{font-weight:600;background:var(--surface-2);white-space:nowrap}
+td.num,th.num{font-variant-numeric:tabular-nums}
+table.cmp td:last-child{background:var(--accent-soft);font-weight:550}
+table.cmp thead th:last-child{background:var(--accent-soft);color:var(--accent-ink)}
+table.addr td{font-size:13px}
+table.addr .mono{font-size:12.5px;letter-spacing:-.01em;color:var(--code-ink)}
+
+/* ── Callouts ────────────────────────────────────────────── */
+.note{
+  border-left:3px solid var(--accent);background:var(--accent-soft);
+  border-radius:0 10px 10px 0;padding:14px 18px;margin:0 0 22px;
+}
+.note p:last-child{margin-bottom:0}
+.note .t{
+  font-size:11.5px;letter-spacing:.11em;text-transform:uppercase;font-weight:700;
+  color:var(--accent-ink);margin-bottom:6px;
+}
+html[data-lang="zh"] .note .t{letter-spacing:.04em;text-transform:none;font-size:12.5px}
+
+/* ── Cards ───────────────────────────────────────────────── */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(212px,1fr));gap:14px;margin:0 0 24px}
+.card{
+  background:var(--surface);border:1px solid var(--line);border-radius:11px;
+  padding:15px 17px;box-shadow:var(--shadow);
+}
+.card .k{
+  font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);
+  font-weight:650;margin-bottom:5px;
+}
+html[data-lang="zh"] .card .k{letter-spacing:.03em;text-transform:none;font-size:12.5px}
+.card .v{font-size:15px;line-height:1.5}
+.card .v b{font-weight:650}
+
+/* worked example */
+.calc{
+  background:var(--surface);border:1px solid var(--line);border-radius:11px;
+  padding:4px 18px;margin:0 0 22px;box-shadow:var(--shadow);
+}
+.calc dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:0 18px;font-size:14.5px}
+.calc dt{
+  padding:10px 0;border-bottom:1px solid var(--line);color:var(--muted);white-space:nowrap;
+}
+.calc dd{
+  margin:0;padding:10px 0;border-bottom:1px solid var(--line);
+  font-variant-numeric:tabular-nums;
+}
+.calc dt:last-of-type,.calc dd:last-of-type{border-bottom:0}
+.calc .hi{color:var(--up);font-weight:650}
+
+/* ── Diagram ─────────────────────────────────────────────── */
+figure{margin:0 0 22px}
+.diagram{
+  background:var(--surface);border:1px solid var(--line);border-radius:11px;
+  padding:16px 10px 10px;box-shadow:var(--shadow);overflow-x:auto;
+  -webkit-overflow-scrolling:touch;
+}
+.diagram svg{display:block;width:100%;min-width:660px;height:auto}
+svg .ax{stroke:var(--line-strong);stroke-width:1}
+svg .tick{stroke:var(--line-strong);stroke-width:1}
+svg .guide{stroke:var(--line-strong);stroke-width:1;stroke-dasharray:3 4;opacity:.8}
+svg .guide-hot{stroke:var(--accent);stroke-width:1.5;stroke-dasharray:4 4;opacity:.95}
+svg .bar-bet{fill:var(--grid-bet);stroke:var(--line-strong);stroke-width:1}
+svg .bar-live{fill:var(--grid-live);stroke:var(--line-strong);stroke-width:1}
+svg .bar-buf{fill:var(--accent-soft);stroke:var(--accent);stroke-width:1}
+svg .bar-void{fill:var(--down-soft);stroke:var(--down);stroke-width:1;stroke-dasharray:4 3}
+svg text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;fill:var(--text)}
+svg .t-lbl{font-size:12.5px;fill:var(--muted)}
+svg .t-row{font-size:12.5px;font-weight:600;fill:var(--text)}
+svg .t-in{font-size:12px;fill:var(--muted)}
+svg .t-tick{font-size:11.5px;fill:var(--faint);font-family:ui-monospace,Menlo,monospace}
+svg .t-hot{font-size:12.5px;font-weight:650;fill:var(--accent-ink)}
+svg .t-price{font-size:12px;font-weight:600;fill:var(--accent-ink)}
+svg .dot{fill:var(--accent)}
+.legend{
+  display:flex;flex-wrap:wrap;gap:16px;margin-top:12px;padding:0 8px;
+  font-size:13px;color:var(--muted);
+}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.legend i{width:13px;height:13px;border-radius:3px;display:inline-block;border:1px solid var(--line-strong)}
+.legend .i-bet{background:var(--grid-bet)}
+.legend .i-live{background:var(--grid-live)}
+.legend .i-buf{background:var(--accent-soft);border-color:var(--accent)}
+.legend .i-void{background:var(--down-soft);border-color:var(--down)}
+figcaption{font-size:13px;color:var(--faint);margin-top:10px;padding:0 8px}
+
+/* ── Tree ────────────────────────────────────────────────── */
+.tree{
+  background:var(--code-bg);border:1px solid var(--line);border-radius:11px;
+  padding:18px 20px;margin:0 0 22px;font-size:13.5px;line-height:1.85;overflow-x:auto;
+}
+.tree .mono{color:var(--code-ink);white-space:pre}
+.tree b{color:var(--text);font-weight:650}
+.tree .cm{color:var(--faint)}
+
+/* ── Checklist ───────────────────────────────────────────── */
+ol.dod{list-style:none;padding:0;counter-reset:dod}
+ol.dod li{
+  counter-increment:dod;position:relative;padding-left:38px;margin-bottom:14px;
+}
+ol.dod li::before{
+  content:counter(dod);position:absolute;left:0;top:2px;
+  width:24px;height:24px;border-radius:50%;
+  background:var(--surface);border:1px solid var(--line-strong);color:var(--muted);
+  font-size:12px;font-weight:650;display:flex;align-items:center;justify-content:center;
+}
+ol.dod li.gate::before{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-ink)}
+
+/* ── Footer ──────────────────────────────────────────────── */
+footer{
+  border-top:1px solid var(--line);background:var(--bg-band);
+  padding:26px 28px;font-size:13px;color:var(--faint);
+}
+.footer-in{max-width:1180px;margin:0 auto;display:flex;flex-wrap:wrap;gap:8px 20px}
+
+/* ── Responsive ──────────────────────────────────────────── */
+@media (max-width:980px){
+  .wrap{grid-template-columns:minmax(0,1fr);gap:0;padding:0 22px 80px}
+  nav.toc{position:static;padding-top:32px;border-bottom:1px solid var(--line);padding-bottom:20px}
+  nav.toc ol{columns:2;column-gap:20px}
+  main{padding-top:32px}
+  .hero-in{padding:40px 22px 34px}
+  .topbar-in{padding:9px 22px}
+}
+@media (max-width:620px){
+  body{font-size:16px}
+  nav.toc ol{columns:1}
+  .brand-sub{display:none}
+  .calc dl{grid-template-columns:1fr;gap:0}
+  .calc dt{padding-bottom:0;border-bottom:0}
+  .calc dd{padding-top:2px}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none !important}}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-in">
+    <div class="brand">
+      <span class="brand-mark"><span class="up">Up</span><span class="dn">Down</span> Protocol</span>
+      <span class="brand-sub l-en">Product spec v1.0 · BNB Smart Chain</span>
+      <span class="brand-sub l-zh">产品规格 v1.0 · BNB 智能链</span>
+    </div>
+    <span class="spacer"></span>
+    <div class="langtoggle" role="group" aria-label="Language / 语言">
+      <button type="button" id="btn-zh" aria-pressed="true" lang="zh-Hans">中文</button>
+      <button type="button" id="btn-en" aria-pressed="false" lang="en">English</button>
+    </div>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="hero-in">
+    <p class="eyebrow l-en">Product Specification · v1.0 · 2026-08-26</p>
+    <p class="eyebrow l-zh">产品规格说明 · v1.0 · 2026-08-26</p>
+
+    <h1 class="l-en">Decentralized binary options on BNB Smart Chain</h1>
+    <h1 class="l-zh">BNB 智能链上的去中心化二元期权</h1>
+
+    <p class="lede l-en">
+      Non-custodial Up/Down markets on BTC and BNB. The strike and the settlement both come from a
+      Chainlink price feed that anyone can verify on-chain. Prices are set by a parimutuel pool of
+      the traders themselves — there is no house, no market maker and no order book, and nobody can
+      lose more than their stake.
+    </p>
+    <p class="lede l-zh">
+      面向 BTC 与 BNB 的非托管涨/跌市场。行权价与结算价均取自任何人都可以在链上核验的 Chainlink 预言机喂价。
+      赔率由交易者自身构成的平价池（parimutuel）决定——没有庄家，没有做市商，也没有订单簿；任何人的最大亏损
+      都不会超过本金。
+    </p>
+
+    <div class="chips l-en">
+      <span class="chip"><strong>Chain:</strong> BSC 56 / 97</span>
+      <span class="chip"><strong>Settlement:</strong> USDT (18 dec) &amp; native BNB</span>
+      <span class="chip"><strong>Durations:</strong> 5&nbsp;min / 1&nbsp;hour</span>
+      <span class="chip"><strong>Fee:</strong> 3% of the losing pool</span>
+      <span class="chip"><strong>Custody:</strong> none — funds stay in the market contract</span>
+    </div>
+    <div class="chips l-zh">
+      <span class="chip"><strong>网络：</strong>BSC 主网 56 / 测试网 97</span>
+      <span class="chip"><strong>结算资产：</strong>USDT（18 位小数）与原生 BNB</span>
+      <span class="chip"><strong>轮次周期：</strong>5 分钟 / 1 小时</span>
+      <span class="chip"><strong>手续费：</strong>输方资金池的 3%</span>
+      <span class="chip"><strong>托管：</strong>无托管方，资金只存放于市场合约</span>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <nav class="toc" aria-label="Contents / 目录">
+    <div class="toc-h l-en">Contents</div>
+    <div class="toc-h l-zh">目录</div>
+    <ol>
+      <li><a href="#s1"><span class="l-en">What we are building</span><span class="l-zh">我们在做什么</span></a></li>
+      <li><a href="#s2"><span class="l-en">The two reference products</span><span class="l-zh">两款对标产品</span></a></li>
+      <li><a href="#s3"><span class="l-en">Why parimutuel</span><span class="l-zh">为何选择平价池</span></a></li>
+      <li><a href="#s4"><span class="l-en">Round lifecycle</span><span class="l-zh">轮次生命周期</span></a></li>
+      <li><a href="#s5"><span class="l-en">Settlement &amp; payout maths</span><span class="l-zh">结算与赔付计算</span></a></li>
+      <li><a href="#s6"><span class="l-en">Oracle rules</span><span class="l-zh">预言机规则</span></a></li>
+      <li><a href="#s7"><span class="l-en">Risk controls</span><span class="l-zh">风险控制</span></a></li>
+      <li><a href="#s8"><span class="l-en">Contract architecture</span><span class="l-zh">合约架构</span></a></li>
+      <li><a href="#s9"><span class="l-en">Off-chain components</span><span class="l-zh">链下组件</span></a></li>
+      <li><a href="#s10"><span class="l-en">Definition of done</span><span class="l-zh">完成标准</span></a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+  <!-- ══════════════ 1 ══════════════ -->
+  <section id="s1">
+    <h2><span class="num">01</span><span class="l-en">What we are building</span><span class="l-zh">我们在做什么</span></h2>
+
+    <div class="l-en">
+      <p>
+        A <strong>non-custodial, on-chain binary option (Up/Down) market on BNB Smart Chain</strong>,
+        settled by Chainlink price feeds and priced by a <strong>parimutuel two-sided pool</strong>
+        rather than by a house or an order book.
+      </p>
+      <p>
+        A user picks <strong>UP</strong> or <strong>DOWN</strong> on the price of an asset over a fixed
+        round. When the round locks, the Chainlink price is recorded as the <strong>strike</strong>
+        (<code>lockPrice</code>); when it closes, the Chainlink price is recorded as the
+        <strong>settlement</strong> (<code>closePrice</code>). The winning side splits the losing
+        side's pool pro-rata, minus a protocol fee. Nobody can lose more than their stake, and nobody
+        — including the protocol owner — can touch a user's principal.
+      </p>
+      <div class="cards">
+        <div class="card"><div class="k">Markets in v1</div><div class="v">
+          <b>BTC/USD 5m</b> and <b>BTC/USD 1h</b> settled in USDT, plus <b>BNB/USD 5m</b> settled in
+          native BNB. One contract instance = one (asset, duration) pair.</div></div>
+        <div class="card"><div class="k">Price source</div><div class="v">
+          Chainlink <b>AggregatorV3</b> on BSC, 8 decimals. Read on-chain, verifiable by anyone.</div></div>
+        <div class="card"><div class="k">Pricing</div><div class="v">
+          Parimutuel. Odds are the pool ratio, which <b>is</b> the implied probability.</div></div>
+        <div class="card"><div class="k">Worst case for a user</div><div class="v">
+          Lose the stake. There is no leverage, no liquidation and no margin call.</div></div>
+      </div>
+    </div>
+
+    <div class="l-zh">
+      <p>
+        这是一个部署在 <strong>BNB 智能链</strong>上的<strong>非托管、全链上二元期权（涨/跌）市场</strong>：
+        由 Chainlink 预言机喂价完成结算，由<strong>双边平价池（parimutuel）</strong>决定赔率，而不是由庄家
+        报价或订单簿撮合。
+      </p>
+      <p>
+        用户在一个固定长度的轮次内选择<strong>看涨（UP）</strong>或<strong>看跌（DOWN）</strong>。轮次锁定时，
+        合约记录当时的 Chainlink 价格作为<strong>行权价</strong>（<code>lockPrice</code>）；轮次结束时，记录
+        当时的价格作为<strong>结算价</strong>（<code>closePrice</code>）。获胜一方按下注比例瓜分失败方的资金池，
+        并扣除协议手续费。用户的最大亏损就是本金，而且任何人——包括协议管理员——都无法动用用户本金。
+      </p>
+      <div class="cards">
+        <div class="card"><div class="k">v1 上线的市场</div><div class="v">
+          以 USDT 结算的 <b>BTC/USD 5 分钟</b>与 <b>BTC/USD 1 小时</b>，以及以原生 BNB 结算的
+          <b>BNB/USD 5 分钟</b>。一个合约实例对应一组（资产，周期）。</div></div>
+        <div class="card"><div class="k">价格来源</div><div class="v">
+          BSC 上的 Chainlink <b>AggregatorV3</b> 喂价，8 位小数。链上读取，人人可核验。</div></div>
+        <div class="card"><div class="k">定价方式</div><div class="v">
+          平价池。赔率即资金池比例，也<b>就是</b>市场的隐含概率。</div></div>
+        <div class="card"><div class="k">用户最坏结果</div><div class="v">
+          损失本金。没有杠杆、没有强平、没有追加保证金。</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 2 ══════════════ -->
+  <section id="s2">
+    <h2><span class="num">02</span><span class="l-en">Synthesis of the two reference products</span><span class="l-zh">对两款对标产品的综合</span></h2>
+
+    <div class="l-en">
+      <p>
+        The design is a deliberate synthesis of the two products the owner named as references:
+        Binance Event Contracts (a centralised exchange product) and Polymarket's BTC Up/Down 5m
+        (an on-chain order book). Each column below is what that product actually does.
+      </p>
+      <div class="tw"><table class="cmp">
+        <thead><tr>
+          <th>Dimension</th>
+          <th>Binance Event Contracts (CEX)</th>
+          <th>Polymarket BTC Up/Down 5m (DEX)</th>
+          <th>UpDown (ours)</th>
+        </tr></thead>
+        <tbody>
+          <tr><th>Custody</th><td>Exchange custodial</td><td>On-chain (Polygon)</td><td>On-chain, non-custodial (BSC)</td></tr>
+          <tr><th>Pricing</th><td>House-set fixed payout ratio from an internal volatility model</td><td>CLOB order book; shares priced 0–1 USDC = implied probability</td><td>Parimutuel pool ratio — no house, no market maker, zero cold-start liquidity need</td></tr>
+          <tr><th>Settlement source</th><td>Binance internal Price Index</td><td>Chainlink BTC/USD 60s TWAP data stream</td><td>Chainlink AggregatorV3 on-chain feed (BSC) — verifiable by anyone</td></tr>
+          <tr><th>Durations</th><td>10m / 30m / 1h / 1d</td><td>5m</td><td>5m / 1h in v1, extensible per (asset, duration)</td></tr>
+          <tr><th>Strike</th><td>Index price at order time (per user)</td><td>Price at window start (per market)</td><td>Price at round lock (per round, shared by everyone)</td></tr>
+          <tr><th>Tie handling</th><td>Payout = premium (refund)</td><td><code>&gt;=</code> resolves UP (favours bulls)</td><td>Refund both sides, zero fee — strictly fairer than both</td></tr>
+          <tr><th>Early close</th><td>Not allowed</td><td>Allowed (sell on the book)</td><td>Not in v1 — a parimutuel pool has no counterparty to sell back to</td></tr>
+          <tr><th>Min stake</th><td>5 USDT</td><td>1 share</td><td>1 USDT (0.005 BNB on the native market)</td></tr>
+          <tr><th>Risk control</th><td>Daily loss cap 10,000 USDT per trader</td><td>None</td><td>Per-round side cap, per-tx cap, pause, oracle-staleness void</td></tr>
+          <tr><th>Counterparty</th><td>Binance</td><td>Other traders, via the book</td><td>Other traders, via the pool</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+
+    <div class="l-zh">
+      <p>
+        本设计有意综合了业主指定的两款对标产品：币安「事件合约」（中心化交易所产品）与 Polymarket 的
+        BTC Up/Down 5 分钟市场（链上订单簿）。下表每一列均为该产品的真实做法。
+      </p>
+      <div class="tw"><table class="cmp">
+        <thead><tr>
+          <th>维度</th>
+          <th>币安事件合约（CEX）</th>
+          <th>Polymarket BTC 涨跌 5m（DEX）</th>
+          <th>UpDown（本项目）</th>
+        </tr></thead>
+        <tbody>
+          <tr><th>资金托管</th><td>交易所托管</td><td>链上（Polygon）</td><td>链上、非托管（BSC）</td></tr>
+          <tr><th>定价机制</th><td>平台依据内部波动率模型给出固定赔付倍率</td><td>中央限价订单簿（CLOB），份额价格 0–1 USDC，即隐含概率</td><td>平价池比例定价——无庄家、无做市商，冷启动不需要任何初始流动性</td></tr>
+          <tr><th>结算数据源</th><td>币安内部价格指数</td><td>Chainlink BTC/USD 60 秒 TWAP 数据流</td><td>BSC 上的 Chainlink AggregatorV3 链上喂价——任何人可核验</td></tr>
+          <tr><th>轮次周期</th><td>10 分钟 / 30 分钟 / 1 小时 / 1 天</td><td>5 分钟</td><td>v1 提供 5 分钟 / 1 小时，可按（资产，周期）扩展</td></tr>
+          <tr><th>行权价</th><td>下单时刻的指数价（因人而异）</td><td>窗口开始时的价格（每个市场一个）</td><td>轮次锁定时刻的价格（每轮一个，所有人共用）</td></tr>
+          <tr><th>平局处理</th><td>赔付等于权利金（即退款）</td><td><code>&gt;=</code> 判为看涨获胜（偏向多头）</td><td>双方全额退款、零手续费——严格优于上述两者</td></tr>
+          <tr><th>提前平仓</th><td>不允许</td><td>允许（在订单簿卖出）</td><td>v1 不支持——平价池中不存在可供卖回的交易对手</td></tr>
+          <tr><th>最小下注</th><td>5 USDT</td><td>1 份额</td><td>1 USDT（原生 BNB 市场为 0.005 BNB）</td></tr>
+          <tr><th>风险控制</th><td>单个交易者每日亏损上限 10,000 USDT</td><td>无</td><td>单轮单边上限、单笔上限、暂停开关、预言机过期作废</td></tr>
+          <tr><th>交易对手</th><td>币安</td><td>订单簿上的其他交易者</td><td>资金池中的其他交易者</td></tr>
+        </tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 3 ══════════════ -->
+  <section id="s3">
+    <h2><span class="num">03</span><span class="l-en">Why parimutuel, and not the other two models</span><span class="l-zh">为什么选择平价池，而不是另外两种模式</span></h2>
+
+    <div class="l-en">
+      <ol>
+        <li>
+          <strong>A fixed payout ratio (the Binance model) needs house capital and a volatility model.</strong>
+          Someone has to take the other side of every trade and price it correctly. On-chain, that
+          role either burns capital or gets arbitraged by anyone with a faster price feed. It is not
+          viable for a cold start with no treasury.
+        </li>
+        <li>
+          <strong>A CLOB (the Polymarket model) needs off-chain matching and professional market makers.</strong>
+          Polymarket has liquidity because it has dedicated MMs quoting its books. An empty order book
+          is an empty product, and we cannot bootstrap that relationship on day one.
+        </li>
+        <li>
+          <strong>A parimutuel pool needs exactly zero starting liquidity.</strong> The first two
+          traders make a market for each other. The resulting odds are <em>exactly</em> the implied
+          probability — the same information a Polymarket share price carries — the whole mechanism
+          fits on-chain, there is no counterparty to default, and a bet on BSC costs well under
+          one cent of gas.
+        </li>
+      </ol>
+      <div class="note">
+        <div class="t">The synthesis</div>
+        <p>
+          Polymarket's on-chain, oracle-settled, implied-probability semantics · Binance's
+          multi-duration, one-tap binary UX · and a pool mechanism that actually works on BSC from
+          day one with no treasury and no market maker.
+        </p>
+      </div>
+      <p class="small">
+        The cost of this choice is honest and worth stating: the payout ratio is not known when you
+        bet, because it depends on what everyone else does before lock, and there is no early exit.
+        In exchange, the market can exist at all without a house.
+      </p>
+    </div>
+
+    <div class="l-zh">
+      <ol>
+        <li>
+          <strong>固定赔付倍率（币安模式）需要庄家资本和一套波动率模型。</strong>
+          必须有人为每一笔交易充当对手方并给出正确报价。放到链上，这个角色要么持续烧钱，要么被任何拥有更快
+          价格源的人套利。对一个没有金库的冷启动项目来说不可行。
+        </li>
+        <li>
+          <strong>中央限价订单簿（Polymarket 模式）需要链下撮合和专业做市商。</strong>
+          Polymarket 之所以有流动性，是因为有专职做市商持续挂单。空的订单簿等同于没有产品，而我们无法在第一天
+          就建立起这种合作关系。
+        </li>
+        <li>
+          <strong>平价池所需的初始流动性恰好为零。</strong>最先进场的两个交易者就互为对手方。由此得到的赔率
+          <em>正好</em>等于隐含概率——与 Polymarket 份额价格所承载的信息完全一致；整套机制可以完整放在链上，
+          不存在会违约的交易对手；而在 BSC 上下注一次的 Gas 成本远低于一美分。
+        </li>
+      </ol>
+      <div class="note">
+        <div class="t">综合结论</div>
+        <p>
+          取 Polymarket 的链上化、预言机结算与隐含概率语义 · 取币安的多周期、一键式二元交易体验 ·
+          再加上一套无需金库、无需做市商、在 BSC 上第一天就能跑通的资金池机制。
+        </p>
+      </div>
+      <p class="small">
+        这一选择的代价也应如实说明：下注时并不知道最终赔付倍率，因为它取决于锁定前所有人的下注行为；同时不支持
+        提前离场。换来的是——这个市场根本不需要庄家就能存在。
+      </p>
+    </div>
+  </section>
+
+  <!-- ══════════════ 4 ══════════════ -->
+  <section id="s4">
+    <h2><span class="num">04</span><span class="l-en">Round lifecycle</span><span class="l-zh">轮次生命周期</span></h2>
+
+    <div class="l-en">
+      <p>
+        One market instance = one (asset, duration) pair. <code>interval</code> is the round duration
+        in seconds. Every round has a betting phase of one <code>interval</code> followed by a holding
+        phase of one <code>interval</code>, so <strong>at any wall-clock moment exactly one epoch is
+        accepting bets and exactly one epoch is live</strong>.
+      </p>
+    </div>
+    <div class="l-zh">
+      <p>
+        一个市场实例对应一组（资产，周期）。<code>interval</code> 是以秒计的轮次周期。每一轮先经历一个
+        <code>interval</code> 的下注阶段，再经历一个 <code>interval</code> 的持仓阶段。因此
+        <strong>在任意时刻，恰好有一轮在接受下注，也恰好有一轮正在进行中</strong>。
+      </p>
+    </div>
+
+    <figure>
+      <div class="diagram">
+        <svg viewBox="0 0 900 356" role="img"
+             aria-label="Round lifecycle timeline / 轮次生命周期时间轴">
+
+          <!-- time axis -->
+          <line class="ax" x1="92" y1="56" x2="838" y2="56"/>
+          <g class="tick">
+            <line x1="92"  y1="50" x2="92"  y2="62"/>
+            <line x1="278" y1="50" x2="278" y2="62"/>
+            <line x1="464" y1="50" x2="464" y2="62"/>
+            <line x1="650" y1="50" x2="650" y2="62"/>
+            <line x1="836" y1="50" x2="836" y2="62"/>
+          </g>
+          <text class="t-tick" x="92"  y="42" text-anchor="middle">t₀</text>
+          <text class="t-tick" x="278" y="42" text-anchor="middle">t₀+i</text>
+          <text class="t-tick" x="464" y="42" text-anchor="middle">t₀+2i</text>
+          <text class="t-tick" x="650" y="42" text-anchor="middle">t₀+3i</text>
+          <text class="t-tick" x="836" y="42" text-anchor="middle">t₀+4i</text>
+          <text class="t-lbl l-en" x="92" y="22">time →   (i = interval)</text>
+          <text class="t-lbl l-zh" x="92" y="22">时间 →   （i = 轮次周期 interval）</text>
+
+          <!-- vertical guides -->
+          <line class="guide"     x1="278" y1="62" x2="278" y2="300"/>
+          <line class="guide-hot" x1="464" y1="62" x2="464" y2="330"/>
+          <line class="guide"     x1="650" y1="62" x2="650" y2="300"/>
+
+          <!-- row: epoch N-1 -->
+          <text class="t-row" x="84" y="94" text-anchor="end">epoch N−1</text>
+          <rect class="bar-bet"  x="92"  y="76" width="186" height="30" rx="6"/>
+          <rect class="bar-live" x="278" y="76" width="186" height="30" rx="6"/>
+          <text class="t-in l-en" x="185" y="96" text-anchor="middle">betting open</text>
+          <text class="t-in l-zh" x="185" y="96" text-anchor="middle">开放下注</text>
+          <text class="t-in l-en" x="371" y="96" text-anchor="middle">position held</text>
+          <text class="t-in l-zh" x="371" y="96" text-anchor="middle">持仓等待结算</text>
+
+          <!-- row: epoch N -->
+          <text class="t-row" x="84" y="152" text-anchor="end">epoch N</text>
+          <rect class="bar-bet"  x="278" y="134" width="186" height="30" rx="6"/>
+          <rect class="bar-live" x="464" y="134" width="186" height="30" rx="6"/>
+          <text class="t-in l-en" x="371" y="154" text-anchor="middle">betting open</text>
+          <text class="t-in l-zh" x="371" y="154" text-anchor="middle">开放下注</text>
+          <text class="t-in l-en" x="557" y="154" text-anchor="middle">position held</text>
+          <text class="t-in l-zh" x="557" y="154" text-anchor="middle">持仓等待结算</text>
+
+          <!-- row: epoch N+1 -->
+          <text class="t-row" x="84" y="210" text-anchor="end">epoch N+1</text>
+          <rect class="bar-bet"  x="464" y="192" width="186" height="30" rx="6"/>
+          <rect class="bar-live" x="650" y="192" width="186" height="30" rx="6"/>
+          <text class="t-in l-en" x="557" y="212" text-anchor="middle">betting open</text>
+          <text class="t-in l-zh" x="557" y="212" text-anchor="middle">开放下注</text>
+          <text class="t-in l-en" x="743" y="212" text-anchor="middle">position held</text>
+          <text class="t-in l-zh" x="743" y="212" text-anchor="middle">持仓等待结算</text>
+
+          <!-- shared boundary callout -->
+          <circle class="dot" cx="464" cy="56" r="4.5"/>
+          <text class="t-hot l-en" x="474" y="250">executeRound() at t₀+2i — one oracle read, three effects:</text>
+          <text class="t-hot l-zh" x="474" y="250">在 t₀+2i 调用 executeRound()——一次预言机读取，三件事：</text>
+          <text class="t-price l-en" x="474" y="268">closePrice(N−1) · lockPrice(N) · open betting for N+1</text>
+          <text class="t-price l-zh" x="474" y="268">写入 N−1 的结算价 · 写入 N 的行权价 · 开放 N+1 的下注</text>
+          <text class="t-in l-en" x="474" y="286">so lockTs(N) == closeTs(N−1): consecutive rounds share one price, no gap.</text>
+          <text class="t-in l-zh" x="474" y="286">因此 lockTs(N) == closeTs(N−1)：相邻两轮共用同一个价格，中间没有缝隙。</text>
+
+          <!-- settlement window lane -->
+          <text class="t-row l-en" x="84" y="326" text-anchor="end">who may call</text>
+          <text class="t-row l-zh" x="84" y="326" text-anchor="end">谁可以调用</text>
+          <rect class="bar-buf"  x="464" y="310" width="96"  height="24" rx="5"/>
+          <rect class="bar-void" x="560" y="310" width="276" height="24" rx="5"/>
+          <text class="t-in l-en" x="512" y="326" text-anchor="middle">operator only</text>
+          <text class="t-in l-zh" x="512" y="326" text-anchor="middle">仅限 operator</text>
+          <text class="t-in l-en" x="698" y="326" text-anchor="middle">anyone — but a late call can only void the round</text>
+          <text class="t-in l-zh" x="698" y="326" text-anchor="middle">任何人——但迟到的调用只能将该轮作废退款</text>
+          <text class="t-tick" x="560" y="304" text-anchor="middle">+bufferSeconds</text>
+        </svg>
+        <div class="legend l-en">
+          <span><i class="i-bet"></i>betting phase</span>
+          <span><i class="i-live"></i>holding phase</span>
+          <span><i class="i-buf"></i>operator settlement window</span>
+          <span><i class="i-void"></i>permissionless fallback — void only</span>
+        </div>
+        <div class="legend l-zh">
+          <span><i class="i-bet"></i>下注阶段</span>
+          <span><i class="i-live"></i>持仓阶段</span>
+          <span><i class="i-buf"></i>operator 结算窗口</span>
+          <span><i class="i-void"></i>无许可兜底——只能作废</span>
+        </div>
+      </div>
+      <figcaption class="l-en">
+        Three consecutive epochs on the immutable interval grid. Betting on epoch N is open during
+        <code>[startTs(N), lockTs(N))</code>.
+      </figcaption>
+      <figcaption class="l-zh">
+        固定时间栅格上的三个连续轮次。对轮次 N 的下注窗口为 <code>[startTs(N), lockTs(N))</code>。
+      </figcaption>
+    </figure>
+
+    <div class="l-en">
+      <h3>The timestamp grid</h3>
+      <p>
+        Round boundaries are derived from an immutable anchor rather than from the previous round's
+        actual settlement time, so they can never drift, no matter how late the keeper is:
+      </p>
+<pre><code>startTs(N) = anchorTs + (N - epochAnchor) * interval
+lockTs(N)  = startTs(N) + interval
+closeTs(N) = lockTs(N)  + interval
+
+<span class="c">therefore  lockTs(N) == closeTs(N-1)</span></code></pre>
+      <p>
+        <code>executeRound()</code> is called once per <code>interval</code> and does three things
+        atomically, with a <strong>single</strong> oracle read, so two adjacent rounds always agree
+        on the boundary price:
+      </p>
+      <ol>
+        <li>close epoch <code>N−1</code> — <code>closePrice(N−1) = price</code>, compute the reward pool</li>
+        <li>lock epoch <code>N</code> — <code>lockPrice(N) = price</code>, betting is now shut</li>
+        <li>open epoch <code>N+1</code> for betting</li>
+      </ol>
+
+      <h3>Liveness: the keeper is not a single point of failure</h3>
+      <ul>
+        <li>The <code>operator</code> (the keeper bot) may call <code>executeRound()</code> from
+          <code>lockTs</code> onwards.</li>
+        <li>Once <code>lockTs + bufferSeconds</code> has passed, <strong>anyone</strong> may call it.
+          But a call that late can no longer settle at a price from the right moment, so it can only
+          <strong>void</strong> the affected rounds into full refunds. A stranger can never choose a
+          settlement price.</li>
+        <li>If nobody calls at all, a stuck round becomes refundable on its own timer —
+          <code>refundable()</code> flips to true with no admin action required.</li>
+        <li>A single call also fast-forwards past a long keeper outage: the epoch counter jumps
+          straight to the epoch the wall clock is actually in, in one transaction.</li>
+      </ul>
+      <div class="note">
+        <div class="t">What a keeper outage costs</div>
+        <p>
+          Users get their money back, never less. A keeper outage degrades the product into refunds;
+          it can never produce a wrong settlement or a loss. Keeper punctuality is a
+          <em>product-quality</em> requirement, not a safety one.
+        </p>
+      </div>
+    </div>
+
+    <div class="l-zh">
+      <h3>时间栅格</h3>
+      <p>
+        轮次边界由一个不可变的锚点推导得出，而不是由上一轮的实际结算时刻推导，因此无论 keeper 迟到多久，
+        边界都不会漂移：
+      </p>
+<pre><code>startTs(N) = anchorTs + (N - epochAnchor) * interval
+lockTs(N)  = startTs(N) + interval
+closeTs(N) = lockTs(N)  + interval
+
+<span class="c">由此可得  lockTs(N) == closeTs(N-1)</span></code></pre>
+      <p>
+        <code>executeRound()</code> 每个 <code>interval</code> 调用一次，用<strong>一次</strong>预言机读取
+        原子地完成三件事，从而保证相邻两轮在边界价格上永远一致：
+      </p>
+      <ol>
+        <li>结束轮次 <code>N−1</code>——写入 <code>closePrice(N−1) = price</code>，计算奖池</li>
+        <li>锁定轮次 <code>N</code>——写入 <code>lockPrice(N) = price</code>，下注就此关闭</li>
+        <li>开放轮次 <code>N+1</code> 的下注</li>
+      </ol>
+
+      <h3>活性：keeper 不是单点故障</h3>
+      <ul>
+        <li><code>operator</code>（keeper 机器人）可以从 <code>lockTs</code> 起调用
+          <code>executeRound()</code>。</li>
+        <li>一旦超过 <code>lockTs + bufferSeconds</code>，<strong>任何人</strong>都可以调用。但这么晚的调用
+          已经无法拿到属于正确时刻的价格，因此它只能把相关轮次<strong>作废</strong>并全额退款。陌生人永远
+          无法挑选结算价。</li>
+        <li>即便无人调用，卡住的轮次也会按自身的计时器自动变为可退款——<code>refundable()</code> 会自行
+          转为 true，不需要任何管理员操作。</li>
+        <li>一次调用还能一次性追平长时间的 keeper 停机：轮次计数会在同一笔交易里直接跳到当前墙钟所处的轮次。</li>
+      </ul>
+      <div class="note">
+        <div class="t">keeper 停机的代价</div>
+        <p>
+          用户拿回全部本金，一分不少。keeper 停机只会把产品降级为「退款」，绝不会产生错误结算或资金损失。
+          keeper 的准时性是<em>产品体验</em>要求，而不是安全要求。
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 5 ══════════════ -->
+  <section id="s5">
+    <h2><span class="num">05</span><span class="l-en">Settlement &amp; payout maths</span><span class="l-zh">结算与赔付计算</span></h2>
+
+    <div class="l-en">
+      <p>
+        Let <code>up</code> be the total staked UP, <code>down</code> the total staked DOWN, and
+        <code>feeBps</code> the protocol fee in basis points (default 300 = 3%, hard-capped at 1000 = 10%).
+      </p>
+
+      <h3>Outcome</h3>
+<pre><code>closePrice &gt; lockPrice   →  UP wins
+closePrice &lt; lockPrice   →  DOWN wins
+closePrice == lockPrice  →  tie  →  round is voided, full refund, zero fee</code></pre>
+
+      <h3>When a round is voided (full refund, zero fee)</h3>
+      <ul>
+        <li>a tie — <code>closePrice == lockPrice</code></li>
+        <li>a one-sided book — <code>up == 0 || down == 0</code>: there is no counterparty, so there is
+          nothing to win and nothing is taken</li>
+        <li>the oracle was unusable at lock or at close (stale, non-positive, or a replayed round id)</li>
+        <li>the settlement window <code>lockTs + bufferSeconds</code> elapsed without settlement</li>
+        <li>the admin called <code>pause()</code> while the round was live</li>
+      </ul>
+      <p>
+        A voided round pays every participant exactly their stake back. Void and settled are mutually
+        exclusive for payout purposes: no round is ever both payable and refundable, and no round is
+        ever neither.
+      </p>
+
+      <h3>Otherwise — the parimutuel split</h3>
+<pre><code>fee        = losePool * feeBps / 10000     <span class="c">← charged ONLY on the losing pool</span>
+rewardPool = winPool + losePool - fee
+rewardBase = winPool
+payout     = userStake * rewardPool / rewardBase
+           = userStake + userStake/winPool * losePool * (1 - feeBps/10000)</code></pre>
+
+      <h3>Why the fee is charged only on the losing pool</h3>
+      <p>
+        The common on-chain implementation charges the fee on the <em>total</em> pool, which silently
+        taxes the winner's own principal. On a 1,000 / 1,000 book with a 3% fee, a 100 stake on the
+        winning side returns <strong>194</strong> under fee-on-total, but <strong>197</strong> under
+        our fee-on-loser. The winner is never paid less than their principal, and the odds the UI
+        displayed are the odds actually paid. This is a deliberate, user-favourable deviation.
+      </p>
+
+      <h3>Displayed odds</h3>
+      <p>
+        The same information, expressed in both reference products' vocabularies. <code>odds(epoch)</code>
+        returns basis points of a 1× multiple, where <code>10000</code> = 1.0000×, and returns
+        <code>(0, 0)</code> while either side is still empty.
+      </p>
+<pre><code>upMultiple    = (up + down * (1 - fee)) / up      <span class="c">Binance-style "payout ratio"</span>
+upImpliedProb = 1 / upMultiple                    <span class="c">Polymarket-style "share price", 0..1</span></code></pre>
+
+      <h3>Worked example</h3>
+      <p>
+        A 5-minute BTC round with a 3% fee. Alice stakes 100 USDT on UP; the book closes at
+        1,100 UP against 3,000 DOWN. BTC ends higher, so UP wins.
+      </p>
+      <div class="calc"><dl>
+        <dt>Final book</dt><dd>1,100 UP · 3,000 DOWN</dd>
+        <dt>Fee (3% of the losing pool)</dt><dd>3,000 × 0.03 = 90 USDT</dd>
+        <dt>Reward pool</dt><dd>1,100 + 3,000 − 90 = 4,010 USDT</dd>
+        <dt>Reward base (winning pool)</dt><dd>1,100 USDT</dd>
+        <dt>Alice's payout</dt><dd class="hi">100 × 4,010 / 1,100 = 364.5 USDT</dd>
+        <dt>Alice's profit</dt><dd class="hi">+264.5 USDT on a 100 stake — 3.645×</dd>
+        <dt>Every DOWN staker</dt><dd>loses exactly their stake, and no more</dd>
+        <dt>Treasury</dt><dd>90 USDT</dd>
+      </dl></div>
+      <p class="small">
+        Note that Alice's own stake is part of the winning pool, so adding to a crowded side dilutes
+        its own odds. This is the parimutuel property, and it is why the UI shows live odds that move
+        as the book fills.
+      </p>
+    </div>
+
+    <div class="l-zh">
+      <p>
+        设 <code>up</code> 为看涨方总下注额，<code>down</code> 为看跌方总下注额，<code>feeBps</code> 为以基点
+        计的协议手续费（默认 300，即 3%；硬上限 1000，即 10%）。
+      </p>
+
+      <h3>胜负判定</h3>
+<pre><code>closePrice &gt; lockPrice   →  看涨方获胜
+closePrice &lt; lockPrice   →  看跌方获胜
+closePrice == lockPrice  →  平局  →  该轮作废，全额退款，零手续费</code></pre>
+
+      <h3>哪些情况会导致轮次作废（全额退款、零手续费）</h3>
+      <ul>
+        <li>平局——<code>closePrice == lockPrice</code></li>
+        <li>单边盘——<code>up == 0 || down == 0</code>：没有交易对手，因此无从赢起，也不会拿走任何人的钱</li>
+        <li>锁定或结算时预言机数据不可用（过期、非正数、或轮次 ID 被重放）</li>
+        <li>结算窗口 <code>lockTs + bufferSeconds</code> 已过而仍未结算</li>
+        <li>管理员在该轮进行期间调用了 <code>pause()</code></li>
+      </ul>
+      <p>
+        作废轮次会把每个参与者的本金原数退回。就赔付而言，「作废」与「已结算」互斥：不存在既可领奖又可退款的
+        轮次，也不存在两者皆不可、资金卡死的轮次。
+      </p>
+
+      <h3>其余情况——平价池分配</h3>
+<pre><code>fee        = losePool * feeBps / 10000     <span class="c">← 手续费只从输方资金池扣取</span>
+rewardPool = winPool + losePool - fee
+rewardBase = winPool
+payout     = userStake * rewardPool / rewardBase
+           = userStake + userStake/winPool * losePool * (1 - feeBps/10000)</code></pre>
+
+      <h3>为什么手续费只从输方资金池扣取</h3>
+      <p>
+        链上常见的实现是按<em>总池</em>收取手续费，这实际上悄悄地对赢家自己的本金征了税。以 1,000 / 1,000 的
+        盘口、3% 手续费为例，赢方的 100 本金在「按总池收费」下只拿回 <strong>194</strong>，而在我们的
+        「只对输方池收费」下拿回 <strong>197</strong>。赢家拿到的钱永远不会少于本金，界面显示的赔率也正是
+        实际兑付的赔率。这是一处有意为之、对用户更有利的偏离。
+      </p>
+
+      <h3>界面展示的赔率</h3>
+      <p>
+        同一份信息，用两款对标产品各自的语汇表达。<code>odds(epoch)</code> 返回以基点表示的倍率，
+        <code>10000</code> 即 1.0000 倍；只要有一边尚无下注，就返回 <code>(0, 0)</code>。
+      </p>
+<pre><code>upMultiple    = (up + down * (1 - fee)) / up      <span class="c">币安式「赔付倍率」</span>
+upImpliedProb = 1 / upMultiple                    <span class="c">Polymarket 式「份额价格」，0..1</span></code></pre>
+
+      <h3>完整算例</h3>
+      <p>
+        一轮 5 分钟的 BTC 市场，手续费 3%。Alice 在看涨方下注 100 USDT；锁定时盘口为看涨 1,100、看跌 3,000。
+        BTC 收在更高价位，看涨方获胜。
+      </p>
+      <div class="calc"><dl>
+        <dt>锁定时盘口</dt><dd>看涨 1,100 · 看跌 3,000</dd>
+        <dt>手续费（输方池的 3%）</dt><dd>3,000 × 0.03 = 90 USDT</dd>
+        <dt>奖池 rewardPool</dt><dd>1,100 + 3,000 − 90 = 4,010 USDT</dd>
+        <dt>分配基数（赢方池）</dt><dd>1,100 USDT</dd>
+        <dt>Alice 的赔付</dt><dd class="hi">100 × 4,010 / 1,100 = 364.5 USDT</dd>
+        <dt>Alice 的净利润</dt><dd class="hi">100 本金获利 +264.5 USDT——3.645 倍</dd>
+        <dt>每个看跌方参与者</dt><dd>恰好损失本金，不会更多</dd>
+        <dt>协议金库</dt><dd>90 USDT</dd>
+      </dl></div>
+      <p class="small">
+        请注意 Alice 自己的本金也计入赢方池，因此向人多的一边加注会稀释这一边的赔率。这正是平价池的固有性质，
+        也是界面必须展示随盘口实时变动的赔率的原因。
+      </p>
+    </div>
+  </section>
+
+  <!-- ══════════════ 6 ══════════════ -->
+  <section id="s6">
+    <h2><span class="num">06</span><span class="l-en">Oracle rules</span><span class="l-zh">预言机规则</span></h2>
+
+    <div class="l-en">
+      <p>
+        Both the strike and the settlement come from a Chainlink <code>AggregatorV3</code> feed read
+        on-chain, at 8 decimals. A read is <strong>usable</strong> only if every one of these holds:
+      </p>
+      <ul>
+        <li><code>latestRoundData()</code> does not revert (the call is wrapped in <code>try/catch</code>)</li>
+        <li><code>answer &gt; 0</code></li>
+        <li><code>updatedAt != 0</code> and <code>updatedAt &lt;= block.timestamp</code> — no future prints</li>
+        <li><code>block.timestamp - updatedAt &lt;= oracleMaxAge</code> — the print is fresh enough</li>
+        <li><code>roundId &gt; lastOracleRoundId</code> for this market — strictly monotonic, which blocks
+          the replay of an aggregator round that was already consumed</li>
+        <li>the call itself arrives no later than <code>lockTs + bufferSeconds</code></li>
+      </ul>
+      <p>
+        If a read is unusable at lock or at close, the affected round is voided and becomes fully
+        refundable. The contract never falls back to a stale price, an interpolated price, or an
+        admin-supplied price.
+      </p>
+
+      <h3>Verified BSC feed addresses</h3>
+      <p class="small">
+        Read live from both networks on 2026-08-26 with <code>scripts/verify-feeds.mjs</code>, which
+        checks each feed's <code>description()</code>, <code>decimals()</code> and answer age.
+      </p>
+      <div class="tw"><table class="addr">
+        <thead><tr><th>Feed</th><th>BSC mainnet (56)</th><th>BSC testnet (97)</th><th class="num">Decimals</th></tr></thead>
+        <tbody>
+          <tr><th>BTC/USD</th><td class="mono">0x264990fbd0A4796A3E3d8E37C4d5F87a3aCa5Ebf</td><td class="mono">0x5741306c21795FdCBb9b265Ea0255F499DFe515C</td><td class="num">8</td></tr>
+          <tr><th>ETH/USD</th><td class="mono">0x9ef1B8c0E4F7dc8bF5719Ea496883DC6401d5b2e</td><td class="mono">0x143db3CEEfbdfe5631aDD3E50f7614B6ba708BA7</td><td class="num">8</td></tr>
+          <tr><th>BNB/USD</th><td class="mono">0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE</td><td class="mono">0x2514895c72f50D8bd4B4F9b1110F0D6bD2c97526</td><td class="num">8</td></tr>
+        </tbody>
+      </table></div>
+      <p class="small">
+        v1 wires BTC/USD and BNB/USD into markets; ETH/USD is verified and reserved for the next
+        market. Settlement in USDT uses BSC-USDT at
+        <code>0x55d398326f99059fF775485246999027B3197955</code>, which has <strong>18 decimals</strong>
+        on BNB Chain, not the 6 that USDT has on Ethereum.
+      </p>
+
+      <div class="note">
+        <div class="t">Testnet uses a relayed feed, and why</div>
+        <p>
+          BSC testnet's own Chainlink feeds update far too infrequently to drive 5-minute rounds —
+          BNB/USD was measured 1,480 seconds stale on 2026-08-26, which would void every short round
+          and prove nothing. Testnet therefore deploys <code>RelayAggregator</code>, a Chainlink-shaped
+          feed that the keeper pushes a real spot price into. It keeps testnet behaviour representative
+          of mainnet. It is a testnet-only contract and the deploy script refuses to put it on mainnet.
+        </p>
+      </div>
+    </div>
+
+    <div class="l-zh">
+      <p>
+        行权价与结算价都来自链上读取的 Chainlink <code>AggregatorV3</code> 喂价，精度为 8 位小数。
+        一次读取只有在下列条件<strong>全部</strong>满足时才被视为<strong>可用</strong>：
+      </p>
+      <ul>
+        <li><code>latestRoundData()</code> 未回滚（调用被 <code>try/catch</code> 包裹）</li>
+        <li><code>answer &gt; 0</code></li>
+        <li><code>updatedAt != 0</code> 且 <code>updatedAt &lt;= block.timestamp</code>——不接受未来时间戳</li>
+        <li><code>block.timestamp - updatedAt &lt;= oracleMaxAge</code>——报价足够新鲜</li>
+        <li>相对本市场满足 <code>roundId &gt; lastOracleRoundId</code>——严格单调递增，杜绝重放已被消费过的
+          聚合器轮次</li>
+        <li>调用本身发生在 <code>lockTs + bufferSeconds</code> 之前</li>
+      </ul>
+      <p>
+        若锁定或结算时读取不可用，相关轮次会被作废并转为全额可退款。合约绝不会退而使用过期价格、插值价格，
+        或由管理员手工提供的价格。
+      </p>
+
+      <h3>已核验的 BSC 喂价地址</h3>
+      <p class="small">
+        于 2026-08-26 通过 <code>scripts/verify-feeds.mjs</code> 在两个网络上实时读取核验，脚本会检查每个喂价的
+        <code>description()</code>、<code>decimals()</code> 以及报价新鲜度。
+      </p>
+      <div class="tw"><table class="addr">
+        <thead><tr><th>喂价</th><th>BSC 主网（56）</th><th>BSC 测试网（97）</th><th class="num">小数位</th></tr></thead>
+        <tbody>
+          <tr><th>BTC/USD</th><td class="mono">0x264990fbd0A4796A3E3d8E37C4d5F87a3aCa5Ebf</td><td class="mono">0x5741306c21795FdCBb9b265Ea0255F499DFe515C</td><td class="num">8</td></tr>
+          <tr><th>ETH/USD</th><td class="mono">0x9ef1B8c0E4F7dc8bF5719Ea496883DC6401d5b2e</td><td class="mono">0x143db3CEEfbdfe5631aDD3E50f7614B6ba708BA7</td><td class="num">8</td></tr>
+          <tr><th>BNB/USD</th><td class="mono">0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE</td><td class="mono">0x2514895c72f50D8bd4B4F9b1110F0D6bD2c97526</td><td class="num">8</td></tr>
+        </tbody>
+      </table></div>
+      <p class="small">
+        v1 只把 BTC/USD 与 BNB/USD 接入市场；ETH/USD 已核验，预留给下一个市场。USDT 结算使用 BNB 链上的
+        BSC-USDT，地址 <code>0x55d398326f99059fF775485246999027B3197955</code>，其小数位是
+        <strong>18 位</strong>，而不是以太坊上 USDT 的 6 位。
+      </p>
+
+      <div class="note">
+        <div class="t">测试网为何使用中继喂价</div>
+        <p>
+          BSC 测试网自带的 Chainlink 喂价更新频率过低，根本无法支撑 5 分钟轮次——2026-08-26 实测 BNB/USD 已经
+          陈旧了 1,480 秒，这会让每一轮短周期市场都作废，什么也验证不了。因此测试网改为部署
+          <code>RelayAggregator</code>：一个与 Chainlink 接口一致、由 keeper 推送真实现货价格的喂价合约，
+          使测试网行为与主网保持一致。它是仅限测试网的合约，部署脚本拒绝将其部署到主网。
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 7 ══════════════ -->
+  <section id="s7">
+    <h2><span class="num">07</span><span class="l-en">Risk controls</span><span class="l-zh">风险控制</span></h2>
+
+    <div class="l-en">
+      <div class="tw"><table>
+        <thead><tr><th>Control</th><th>Default</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><th><code>minBetAmount</code></th><td>1 USDT · 0.005 BNB</td><td>Blocks dust and gas-griefing</td></tr>
+          <tr><th><code>maxBetAmount</code></th><td>5,000 USDT · 10 BNB per tx</td><td>Limits whale concentration in one transaction</td></tr>
+          <tr><th><code>maxSideAmount</code></th><td>100,000 USDT · 500 BNB per side per round</td><td>Caps the payoff from manipulating the settlement print — the exact attack surface criticised in Polymarket's 5m markets</td></tr>
+          <tr><th><code>feeBps</code></th><td>300 (3%), hard cap 1000 (10%)</td><td>Protocol revenue; the cap is a constant, not an admin setting</td></tr>
+          <tr><th><code>bufferSeconds</code></th><td>60s (5m rounds) · 300s (1h rounds)</td><td>Bounds how late a round may still settle; after it, only voiding is possible</td></tr>
+          <tr><th><code>oracleMaxAge</code></th><td>120s (5m rounds) · 600s (1h rounds)</td><td>Staleness limit; the constructor forces it to be ≤ <code>interval</code></td></tr>
+          <tr><th><code>pause()</code></th><td>admin</td><td>Halts betting; live rounds become refundable. <code>claim()</code> is deliberately not pausable</td></tr>
+          <tr><th>Treasury withdrawal</th><td>only accrued <code>treasuryAmount</code></td><td>The admin can never touch user principal, by construction</td></tr>
+          <tr><th>Per-round parameter snapshot</th><td><code>feeBps</code>, <code>bufferSeconds</code></td><td>An admin change can never alter a round that is already open, nor un-expire an expired one</td></tr>
+          <tr><th>Per-user position</th><td>one UP and one DOWN balance per epoch</td><td>Repeat bets accumulate, which keeps claim accounting O(1)</td></tr>
+          <tr><th><code>recoverToken</code></th><td>admin</td><td>Rescues stray tokens only; the settlement asset can never be withdrawn this way</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>The non-custodial invariant</h3>
+      <p>
+        The contract tracks <code>outstanding</code>, an upper bound on the user funds it still owes,
+        and this must hold at every block. It is enforced by a Foundry invariant suite, not just
+        asserted here:
+      </p>
+<pre><code>assetBalance(market) &gt;= outstanding + treasuryAmount
+
+<span class="c">outstanding = Σ unsettled stakes + Σ unclaimed payouts</span></code></pre>
+      <p>
+        Funds only ever leave by <strong>pull payment</strong> — the user calls
+        <code>claim(epochs[])</code>. The contract never pushes money to a user during settlement, so
+        one hostile or broken recipient can never block settlement for everyone else.
+      </p>
+    </div>
+
+    <div class="l-zh">
+      <div class="tw"><table>
+        <thead><tr><th>控制项</th><th>默认值</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><th><code>minBetAmount</code></th><td>1 USDT · 0.005 BNB</td><td>阻止粉尘下注与 Gas 骚扰</td></tr>
+          <tr><th><code>maxBetAmount</code></th><td>单笔 5,000 USDT · 10 BNB</td><td>限制单笔巨鲸集中度</td></tr>
+          <tr><th><code>maxSideAmount</code></th><td>每轮每边 100,000 USDT · 500 BNB</td><td>限制操纵结算价所能获得的收益上限——这正是 Polymarket 5 分钟市场被诟病的攻击面</td></tr>
+          <tr><th><code>feeBps</code></th><td>300（3%），硬上限 1000（10%）</td><td>协议收入；上限是常量，管理员无法调高</td></tr>
+          <tr><th><code>bufferSeconds</code></th><td>5 分钟轮次 60 秒 · 1 小时轮次 300 秒</td><td>限定轮次最晚可结算的时间；超时之后只能作废</td></tr>
+          <tr><th><code>oracleMaxAge</code></th><td>5 分钟轮次 120 秒 · 1 小时轮次 600 秒</td><td>报价过期阈值；构造函数强制其 ≤ <code>interval</code></td></tr>
+          <tr><th><code>pause()</code></th><td>管理员</td><td>暂停下注，进行中的轮次转为可退款。<code>claim()</code> 有意不受暂停影响</td></tr>
+          <tr><th>金库提取</th><td>仅限已计提的 <code>treasuryAmount</code></td><td>从结构上保证管理员永远碰不到用户本金</td></tr>
+          <tr><th>逐轮参数快照</th><td><code>feeBps</code>、<code>bufferSeconds</code></td><td>管理员改参数不会影响已开启的轮次，也无法让已过期的轮次「复活」</td></tr>
+          <tr><th>用户持仓记账</th><td>每轮每人各一个看涨 / 看跌余额</td><td>多次下注累加合并，使领取逻辑保持 O(1)</td></tr>
+          <tr><th><code>recoverToken</code></th><td>管理员</td><td>仅用于取回误转入的代币；结算资产永远无法通过它取走</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3>非托管不变量</h3>
+      <p>
+        合约用 <code>outstanding</code> 记录它仍欠用户的资金上界，下面这个关系必须在每个区块都成立。
+        它由 Foundry 不变量测试实际强制验证，而不只是写在文档里：
+      </p>
+<pre><code>assetBalance(market) &gt;= outstanding + treasuryAmount
+
+<span class="c">outstanding = Σ 未结算的下注 + Σ 未领取的赔付</span></code></pre>
+      <p>
+        资金只通过<strong>拉取式提款</strong>离开合约——由用户自己调用 <code>claim(epochs[])</code>。
+        合约在结算过程中从不主动向用户打款，因此单个恶意或异常的收款地址永远无法阻塞其他所有人的结算。
+      </p>
+    </div>
+  </section>
+
+  <!-- ══════════════ 8 ══════════════ -->
+  <section id="s8">
+    <h2><span class="num">08</span><span class="l-en">Contract architecture</span><span class="l-zh">合约架构</span></h2>
+
+    <div class="l-en">
+      <div class="tree"><div class="mono"><b>UpDownMarketBase</b>  (abstract)   <span class="cm">rounds · betting · settlement · claims · admin · oracle</span>
+   ├─ <b>UpDownMarketERC20</b>          <span class="cm">settlement asset is an ERC20 (USDT on BSC, 18 decimals)</span>
+   └─ <b>UpDownMarketNative</b>         <span class="cm">settlement asset is native BNB</span>
+<b>UpDownRegistry</b>                   <span class="cm">on-chain directory of markets — one address the UI reads</span>
+<b>RelayAggregator</b>   (testnet)      <span class="cm">keeper-fed, Chainlink-shaped price feed</span>
+<b>TestUSDT</b>          (testnet)      <span class="cm">faucet USDT, 18 decimals, matching BSC-USDT</span></div></div>
+      <ul>
+        <li>Solidity 0.8.28 with OpenZeppelin 5 — <code>Ownable2Step</code>, <code>Pausable</code>,
+          <code>ReentrancyGuard</code>, <code>SafeERC20</code>.</li>
+        <li>The registry is deliberately a <strong>registry and not a factory</strong>: embedding
+          market creation bytecode would push it past the 24 KB contract-size limit, and markets are
+          deployed and source-verified individually anyway.</li>
+        <li>ERC20 deposits credit the <strong>measured balance delta</strong>, so a fee-on-transfer
+          asset can never under-collateralise a round.</li>
+        <li>Ownership transfers are two-step (<code>Ownable2Step</code>), so a typo in an address can
+          never orphan a market.</li>
+        <li>The admin is intended to be a <strong>multisig behind a Timelock</strong> at mainnet launch.</li>
+      </ul>
+
+      <h3>Key external surface</h3>
+<pre><code><span class="c">// betting — ERC20 market (needs an allowance)</span>
+function betUp(uint256 epoch, uint256 amount) external;
+function betDown(uint256 epoch, uint256 amount) external;
+<span class="c">// betting — native BNB market</span>
+function betUp(uint256 epoch) external payable;
+function betDown(uint256 epoch) external payable;
+
+<span class="c">// collecting: winnings and refunds together; reverts if any epoch is not collectable</span>
+function claim(uint256[] calldata epochs) external;
+
+<span class="c">// the round engine</span>
+function executeRound() external;
+function genesisStart() external;                <span class="c">// owner, opens the first round</span>
+
+<span class="c">// views</span>
+function currentEpoch() external view returns (uint256);            <span class="c">// the epoch accepting bets</span>
+function getRound(uint256 epoch) external view returns (Round memory);
+function odds(uint256 epoch) external view returns (uint256 upBps, uint256 downBps);
+function claimable(uint256 epoch, address user) external view returns (bool);
+function refundable(uint256 epoch, address user) external view returns (bool);
+function pendingPayout(uint256 epoch, address user) external view returns (uint256);
+function settlementAsset() external view returns (address);         <span class="c">// address(0) = native BNB</span></code></pre>
+      <p class="small">
+        <code>currentEpoch()</code> is the epoch currently accepting bets; <code>currentEpoch() - 1</code>
+        is the one that is locked and live. Prices in <code>Round</code> are <code>int256</code> with
+        8 decimals, matching Chainlink.
+      </p>
+    </div>
+
+    <div class="l-zh">
+      <div class="tree"><div class="mono"><b>UpDownMarketBase</b>  （抽象合约） <span class="cm">轮次 · 下注 · 结算 · 领取 · 管理 · 预言机</span>
+   ├─ <b>UpDownMarketERC20</b>          <span class="cm">以 ERC20 结算（BSC 上的 USDT，18 位小数）</span>
+   └─ <b>UpDownMarketNative</b>         <span class="cm">以原生 BNB 结算</span>
+<b>UpDownRegistry</b>                   <span class="cm">市场的链上目录——前端只需读取这一个地址</span>
+<b>RelayAggregator</b>   （测试网）     <span class="cm">由 keeper 推送、接口与 Chainlink 一致的喂价合约</span>
+<b>TestUSDT</b>          （测试网）     <span class="cm">水龙头 USDT，18 位小数，与 BSC-USDT 对齐</span></div></div>
+      <ul>
+        <li>Solidity 0.8.28 + OpenZeppelin 5——<code>Ownable2Step</code>、<code>Pausable</code>、
+          <code>ReentrancyGuard</code>、<code>SafeERC20</code>。</li>
+        <li>这里刻意采用<strong>注册表而非工厂</strong>：把市场创建字节码内嵌进去会超过 24 KB 的合约体积上限，
+          而且每个市场本来就要单独部署与源码验证。</li>
+        <li>ERC20 存入按<strong>实际到账余额差额</strong>入账，因此转账带手续费的代币也绝不会导致轮次
+          抵押不足。</li>
+        <li>所有权转移采用两步式（<code>Ownable2Step</code>），地址写错也不会让市场变成无主合约。</li>
+        <li>主网上线时，管理员身份应为<strong>时间锁背后的多签钱包</strong>。</li>
+      </ul>
+
+      <h3>核心外部接口</h3>
+<pre><code><span class="c">// 下注 —— ERC20 市场（需要先授权 allowance）</span>
+function betUp(uint256 epoch, uint256 amount) external;
+function betDown(uint256 epoch, uint256 amount) external;
+<span class="c">// 下注 —— 原生 BNB 市场</span>
+function betUp(uint256 epoch) external payable;
+function betDown(uint256 epoch) external payable;
+
+<span class="c">// 领取：奖金与退款一并领取；数组中任一轮次不可领取则整笔回滚</span>
+function claim(uint256[] calldata epochs) external;
+
+<span class="c">// 轮次引擎</span>
+function executeRound() external;
+function genesisStart() external;                <span class="c">// 仅限 owner，开启第一轮</span>
+
+<span class="c">// 只读接口</span>
+function currentEpoch() external view returns (uint256);            <span class="c">// 当前接受下注的轮次</span>
+function getRound(uint256 epoch) external view returns (Round memory);
+function odds(uint256 epoch) external view returns (uint256 upBps, uint256 downBps);
+function claimable(uint256 epoch, address user) external view returns (bool);
+function refundable(uint256 epoch, address user) external view returns (bool);
+function pendingPayout(uint256 epoch, address user) external view returns (uint256);
+function settlementAsset() external view returns (address);         <span class="c">// address(0) 表示原生 BNB</span></code></pre>
+      <p class="small">
+        <code>currentEpoch()</code> 是当前正在接受下注的轮次；<code>currentEpoch() - 1</code> 则是已锁定、
+        正在进行中的那一轮。<code>Round</code> 中的价格为 <code>int256</code>、8 位小数，与 Chainlink 一致。
+      </p>
+    </div>
+  </section>
+
+  <!-- ══════════════ 9 ══════════════ -->
+  <section id="s9">
+    <h2><span class="num">09</span><span class="l-en">Off-chain components</span><span class="l-zh">链下组件</span></h2>
+
+    <div class="l-en">
+      <div class="cards">
+        <div class="card"><div class="k">Keeper</div><div class="v">
+          TypeScript + viem. Calls <code>executeRound()</code> once per <code>interval</code> with
+          retry, gas bumping, balance alerting and an idempotent catch-up path. On testnet it also
+          relays a real spot price into <code>RelayAggregator</code>. Because of the permissionless
+          fallback, a keeper outage degrades to refunds — never to loss.</div></div>
+        <div class="card"><div class="k">Web</div><div class="v">
+          Next.js + wagmi + viem. Live round card with countdown, odds shown in both vocabularies,
+          bet UP/DOWN, an open-position and claim list, and round history read from event logs.</div></div>
+        <div class="card"><div class="k">Deploy scripts</div><div class="v">
+          Foundry. Deterministic deploy, BscScan source verification, and a JSON deployment artifact
+          per chain id that the keeper and the web app both read.</div></div>
+      </div>
+    </div>
+
+    <div class="l-zh">
+      <div class="cards">
+        <div class="card"><div class="k">Keeper（轮次执行机器人）</div><div class="v">
+          TypeScript + viem。每个 <code>interval</code> 调用一次 <code>executeRound()</code>，具备重试、
+          Gas 提价、余额告警与幂等追平逻辑。在测试网上还负责把真实现货价格中继进
+          <code>RelayAggregator</code>。由于存在无许可兜底，keeper 停机只会降级为退款，绝不会造成损失。</div></div>
+        <div class="card"><div class="k">Web（前端）</div><div class="v">
+          Next.js + wagmi + viem。含倒计时的实时轮次卡片、以两种语汇展示的赔率、看涨/看跌下注、
+          持仓与可领取列表，以及基于事件日志的历史轮次记录。</div></div>
+        <div class="card"><div class="k">部署脚本</div><div class="v">
+          Foundry。确定性部署、BscScan 源码验证，并按链 ID 输出一份 JSON 部署产物，供 keeper 与前端共同读取。</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 10 ══════════════ -->
+  <section id="s10">
+    <h2><span class="num">10</span><span class="l-en">Definition of done</span><span class="l-zh">完成标准</span></h2>
+
+    <div class="l-en">
+      <ol class="dod">
+        <li><code>forge build</code> clean; <code>forge test</code> green, including the fuzz and
+          invariant suites.</li>
+        <li>The non-custodial invariant holds under invariant testing, not just in review.</li>
+        <li>Deployed and source-verified on <strong>BSC testnet (97)</strong>, with a real end-to-end
+          round — bet both sides, lock, close, claim — proven by on-chain transaction hashes.</li>
+        <li>The web app is publicly reachable and driving that testnet deployment.</li>
+        <li>Cross-vendor review returns APPROVED with an empty OPEN list.</li>
+        <li class="gate"><strong>Mainnet (56) deployment is a separate, owner-gated step.</strong>
+          It spends real funds and is irreversible, so it requires the owner's explicit go-ahead and
+          a funded deployer key. Nothing in this repository deploys to mainnet on its own.</li>
+      </ol>
+    </div>
+
+    <div class="l-zh">
+      <ol class="dod">
+        <li><code>forge build</code> 无警告通过；<code>forge test</code> 全绿，含模糊测试与不变量测试套件。</li>
+        <li>非托管不变量在不变量测试下成立，而不仅仅是在评审中口头确认。</li>
+        <li>在 <strong>BSC 测试网（97）</strong>完成部署与源码验证，并跑通一轮真实的端到端流程——双边下注、
+          锁定、结算、领取——以链上交易哈希为证。</li>
+        <li>前端可公开访问，并驱动该测试网部署。</li>
+        <li>跨厂商交叉评审返回 APPROVED，且 OPEN 列表为空。</li>
+        <li class="gate"><strong>主网（56）部署是一个独立的、需业主授权的步骤。</strong>
+          它会花费真实资金且不可撤销，因此必须获得业主明确许可并配备已充值的部署私钥。本仓库中的任何流程
+          都不会自行部署到主网。</li>
+      </ol>
+    </div>
+  </section>
+
+  </main>
+</div>
+
+<footer>
+  <div class="footer-in">
+    <span class="l-en">UpDown Protocol · Product specification v1.0 · 2026-08-26</span>
+    <span class="l-zh">UpDown 协议 · 产品规格说明 v1.0 · 2026-08-26</span>
+    <span class="l-en">Generated from <code>docs/PRD.md</code>, the engineering source of truth.</span>
+    <span class="l-zh">由工程事实来源 <code>docs/PRD.md</code> 生成。</span>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var zh = document.getElementById('btn-zh');
+  var en = document.getElementById('btn-en');
+
+  function apply(lang) {
+    root.setAttribute('data-lang', lang);
+    root.setAttribute('lang', lang === 'en' ? 'en' : 'zh-Hans');
+    zh.setAttribute('aria-pressed', String(lang === 'zh'));
+    en.setAttribute('aria-pressed', String(lang === 'en'));
+    try { localStorage.setItem('updown-lang', lang); } catch (e) {}
+  }
+
+  // Sync the buttons with whatever the pre-paint script decided (default: zh).
+  apply(root.getAttribute('data-lang') === 'en' ? 'en' : 'zh');
+
+  zh.addEventListener('click', function () { apply('zh'); });
+  en.addEventListener('click', function () { apply('en'); });
+})();
+</script>
+
+</body>
+</html>
