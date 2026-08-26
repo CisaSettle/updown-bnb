@@ -1,0 +1,18 @@
+{
+  "bufferSeconds": 30,
+  "chainId": 97,
+  "feeBps": 300,
+  "feedA": "0xe9B51462fE0Fbe2987109fe3dE06a49820D7F2BE",
+  "feedB": "0xA0eabcA8EE15b8879A94Bc3265673994e8398Dbe",
+  "feedC": "0xBf26DDf2C1e27450d592fe69b478A9571Bc7cb93",
+  "feedD": "0x489a38691c07d0983Ca13937a4e961AdDFa51CC9",
+  "interval": 60,
+  "marketA": "0x056053BD7D63cb3dfcEdCA44717e41b6B7D4bb43",
+  "marketB": "0x53a9d0Ae6bb4CB977085b95B6C782A8a937F5616",
+  "marketC": "0xE48ef078151f4B94069a71e33dEEDe44515bEf99",
+  "marketD": "0xF7b17B606674bC4ade67E07B97ed8EE50912fe65",
+  "oracleMaxAge": 30,
+  "runner": "0x75D0877bFDCFF83D927FB4Da544ac1bb389cAa23",
+  "usdt": "0xBbDFfdf7c1Cf91e21AB42149D3130a6439f89195",
+  "qaBettor": "0x9897edb9Cc5Aa8dF049dEB00ca0Efb776970073F"
+}

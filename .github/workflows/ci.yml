@@ -10,6 +10,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: foundry-rs/foundry-toolchain@v1
+      # lib/ is vendored as plain copies and gitignored, so a fresh checkout installs it.
+      # Versions are pinned here and in scripts/setup.sh; keep the two in step.
+      - name: Install pinned Solidity dependencies
+        run: |
+          forge install foundry-rs/forge-std@v1.16.2 --no-git
+          forge install OpenZeppelin/openzeppelin-contracts@v5.1.0 --no-git
+        working-directory: contracts
       - name: Build
         run: forge build --deny-warnings
         working-directory: contracts

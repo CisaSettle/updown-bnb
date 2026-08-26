@@ -99,6 +99,15 @@ settlement asset to BSC-USDT and refuses to deploy the testnet-only contracts th
 
 ## Quickstart
 
+```bash
+git clone https://github.com/CisaSettle/updown-bnb && cd updown-bnb
+./scripts/setup.sh      # pinned Solidity deps + both Node projects, then a build
+cd contracts && forge test
+```
+
+`contracts/lib/` is vendored as plain copies rather than git submodules and is not committed, so a
+fresh clone installs it — `scripts/setup.sh` and `.github/workflows/ci.yml` pin the same versions.
+
 Prerequisites: **Node ≥ 22** (the repo is developed on Node 26) and
 **Foundry** on `PATH`:
 
