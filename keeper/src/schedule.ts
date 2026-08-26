@@ -80,6 +80,15 @@ export interface WakeOptions {
   relaySlots: number;
   /** True on testnet, where the market's oracle is a keeper-fed `RelayAggregator`. */
   relayEnabled: boolean;
+  /**
+   * Milliseconds between **extra** relay prints published purely for chart density (`RELAY_TICK_MS`).
+   * `0` — the default — is off, and is the only value mainnet ever sees.
+   *
+   * A tick is scheduled only when a whole one fits, with `RELAY_TICK_GUARD_MS` to spare, before the
+   * boundary relay's own wake. The boundary relay is the transaction a round's settlement depends
+   * on; a tick is decoration, and decoration never gets to move it.
+   */
+  relayTickMs?: number;
   /** Upper bound on a single timer, so long rounds still re-derive state periodically. */
   maxTimerMs: number;
   /** Lower bound, so a burst of "already late" wakes cannot become a hot loop. */
@@ -91,14 +100,98 @@ export const DEFAULT_WAKE_OPTIONS: WakeOptions = {
   relayLeadMs: DEFAULT_RELAY_LEAD_MS,
   relaySlots: 1,
   relayEnabled: false,
+  relayTickMs: 0,
   maxTimerMs: 15 * 60_000,
   minTimerMs: 0,
 };
+
+/**
+ * Quiet margin around anything a settlement depends on, inside which a density tick is never
+ * planned, never queued and never broadcast.
+ *
+ * It has to cover the whole life of one tick transaction, because the keeper key has exactly one
+ * transaction queue: a tick still in flight when the boundary relay is dequeued delays that relay
+ * by however long it has left. So the margin is comfortably longer than `RELAY_TICK_RECEIPT_MS`,
+ * the only wait a tick is allowed — and a tick that reaches the front of the queue inside the
+ * margin anyway (a slow RPC, a clock step) is dropped rather than sent.
+ */
+export const RELAY_TICK_GUARD_MS = 25_000;
+
+/**
+ * How long a density tick waits for one attempt's receipt.
+ *
+ * Two attempts at this timeout, plus a backoff between them, is the whole life of a tick, and it
+ * has to fit inside `RELAY_TICK_GUARD_MS` with room to spare — the guard is what keeps a tick from
+ * still being on the wire when a boundary relay needs the queue.
+ */
+export const RELAY_TICK_RECEIPT_MS = 8_000;
+
+/**
+ * Attempts a density tick gets. **Two, not one**, and the reason is the nonce rather than the
+ * print.
+ *
+ * Every transaction from this key shares one nonce chain. A tick that is broadcast and then simply
+ * abandoned leaves a pending transaction at nonce `n`, and the next boundary relay — sent at
+ * `n + 1` — cannot mine until it does. Its own gas-price ladder bumps `n + 1`, which does nothing
+ * about `n`. `sendWithRetry` re-sends the same nonce at a higher gas price, so a second attempt is
+ * how a tick clears its own way rather than leaving one in front of a settlement.
+ */
+export const RELAY_TICK_ATTEMPTS = 2;
+
+/**
+ * The pause between a tick's two attempts.
+ *
+ * Deliberately its own, small, fixed ladder rather than the operator's `BACKOFF_*` one:
+ * `sendWithRetry` sleeps **inside** the shared transaction queue, and `BACKOFF_MAX_MS` may be set
+ * as high as 60 s. A tick that naps for a minute holding the single-key queue is precisely the
+ * thing `RELAY_TICK_GUARD_MS` exists to make impossible. Two attempts, one short sleep: the whole
+ * budget stays inside the guard.
+ */
+export const RELAY_TICK_BACKOFF = { baseMs: 500, factor: 1, maxMs: 1_000, jitter: 0.2 } as const;
+
+/** The stretch of time around one boundary that belongs to settlement, and to nothing else. */
+export interface RelayWindow {
+  /** Wall-clock ms at which that boundary's relay wake fires. */
+  startMs: number;
+  /** The boundary itself, in unix seconds. */
+  boundaryTs: number;
+}
+
+/**
+ * Is `nowMs` far enough from every boundary this feed is about to serve for a density tick?
+ *
+ * Every relay feed is shared: two markets on one aggregator (BTC 5m and BTC 1h, say) publish to the
+ * same contract through the same key. The 1h market's ticks therefore have to keep clear of the 5m
+ * market's boundary, which its own round timing knows nothing about — so the check is made against
+ * every window registered for the feed, not just the caller's.
+ *
+ * `tailMs` keeps the quiet zone open past the boundary as well, because `executeRound` follows it
+ * within seconds and wants the same queue.
+ */
+export function tickAllowedAt(
+  nowMs: number,
+  windows: readonly RelayWindow[],
+  guardMs: number = RELAY_TICK_GUARD_MS,
+  tailMs: number = RELAY_TICK_GUARD_MS,
+): boolean {
+  const guard = Math.max(0, guardMs);
+  const tail = Math.max(0, tailMs);
+  for (const window of windows) {
+    const boundaryMs = window.boundaryTs * 1000;
+    if (nowMs >= window.startMs - guard && nowMs <= boundaryMs + tail) return false;
+  }
+  return true;
+}
 
 /** What the keeper should do when the timer fires. */
 export type WakeAction =
   /** Publish the boundary price to a testnet relay feed. */
   | 'relay'
+  /**
+   * Publish an EXTRA testnet print between boundaries, for feed density only (`RELAY_TICK_MS`).
+   * Never load-bearing: a tick that cannot be taken is dropped, and nothing settles differently.
+   */
+  | 'tick'
   /** Call `executeRound(boundaryRoundId)`. */
   | 'execute'
   /** The real wake is further out than one timer allows — re-read state and re-plan. */
@@ -231,6 +324,15 @@ export function computeNextWake(nowMs: number, round: RoundTiming, options: Wake
     const lead = computeRelayLeadMs(options.relayLeadMs, options.relaySlots, round.oracleMaxAge);
     const relayTargetMs = boundaryMs - lead;
     if (nowMs < relayTargetMs) {
+      // A density tick, but only when a whole one fits before the boundary relay's own wake with
+      // the guard to spare. The boundary relay keeps its instant, its lead and its queue slot; the
+      // tick simply does not happen when there is no room for it.
+      const tickMs = Math.max(0, Math.floor(options.relayTickMs ?? 0));
+      const tickTargetMs = nowMs + tickMs;
+      if (tickMs > 0 && tickTargetMs + RELAY_TICK_GUARD_MS <= relayTargetMs) {
+        const tick = clampDelay(tickMs, options);
+        if (!tick.capped) return { action: 'tick', kind: 'on-time', delayMs: tick.delayMs, targetMs: tickTargetMs };
+      }
       const { delayMs, capped } = clampDelay(relayTargetMs - nowMs, options);
       if (capped) return { action: 'refresh', kind: 'capped', delayMs, targetMs: relayTargetMs };
       return { action: 'relay', kind: 'on-time', delayMs, targetMs: relayTargetMs };
@@ -282,6 +384,12 @@ export function applyCooldown(
   marginMs: number = RELAY_DEADLINE_MARGIN_MS,
 ): number {
   if (cooldownMs <= 0) return plan.delayMs;
+  // A density tick takes NO cooldown at all. The timer chain has one timer, so any delay added to a
+  // tick is a delay added to the re-plan that arms the boundary relay behind it: an idle backoff of
+  // a minute, applied to a tick planned 70s before `lockTs`, arms the relay ten seconds AFTER its
+  // own lead had it going out. The backoff exists to stop a market spinning on failing work, and a
+  // tick already has its own cadence — `RELAY_TICK_MS` is the backoff.
+  if (plan.action === 'tick') return plan.delayMs;
   if (plan.action !== 'relay') return Math.max(plan.delayMs, cooldownMs);
   const headroomMs = round.lockTs * 1000 - nowMs - marginMs;
   if (headroomMs <= 0) return plan.delayMs;

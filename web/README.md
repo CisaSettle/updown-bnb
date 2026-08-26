@@ -158,12 +158,46 @@ Everything comes straight from the contracts — there is no indexer and no back
 | Market params + `currentEpoch` | one multicall of 11 views | 4 s |
 | Live round + odds | `getRound` / `odds` for `currentEpoch` and `currentEpoch - 1` | 3 s |
 | Oracle price | `AggregatorV3.latestRoundData()` | 3 s |
+| Chart history | `AggregatorV3.getRoundData(id)` for a capped window of ids | once per id, ever |
 | Balance / allowance | `balanceOf` / `allowance` | 12 s |
 | Positions | `userEpochs` + per-epoch `getRound`/`ledger`/`pendingPayout`/`claimable`/`refundable` | 12–15 s |
 | History | `getRounds([...20 epochs])` | 30 s |
 
 All reads are batched through Multicall3, and every read is pinned to `VITE_CHAIN_ID` so a wallet
 connected to the wrong network still shows correct data (with a "switch network" prompt).
+
+### The price chart
+
+The live round card plots the **market's own oracle** — the feed `executeRound` proves its boundary
+prices against — and nothing else. No exchange price is fetched anywhere in this app. On testnet the
+settlement feed is a keeper-fed `RelayAggregator`; on mainnet it is Chainlink's aggregated answer.
+Both differ from any single venue's spot, and a trader choosing UP or DOWN off a chart of a different
+series would be deciding on a number the chain will not honour.
+
+- **The strike is drawn only when it exists.** Above the line UP wins and below it DOWN wins, and the
+  two regions are tinted and labelled so that reads at a glance. A round still taking bets has no
+  strike yet, and the chart says so — it never draws a reference line for a number the chain has not
+  recorded. A round whose lock boundary passed *without* a strike says that instead: it can only be
+  refunded.
+- **The boundaries are marked**: `lockTs` (betting closed, strike taken) and `closeTs` (settlement).
+  Prints past `closeTs` are shaded, because they no longer decide that round.
+- **The latest print is shown with its age**, coloured against the round's own `oracleMaxAge`: past
+  that budget a boundary can no longer be priced at all and the round refunds, which is a real state
+  on a testnet feed and not a display detail.
+- **The line is a step, not an interpolation.** The oracle's value between prints *is* the last
+  print — exactly how `_priceAt` reads it — so drawing a diagonal would invent every price along it.
+- **Candles are offered only where the data supports them.** An oracle print is a point in time, not
+  an OHLC bar, so a candle here can only be the true open/high/low/close of the prints inside a time
+  bucket. The bucket is sized from the feed's own cadence; where that leaves fewer than two prints
+  per bucket the chart draws the line instead and says why, because a row of bodyless dojis would
+  read as a flat market when the truth is a quiet feed. A bucket the feed did not print in is left
+  empty — never filled with a manufactured candle. (On testnet, `RELAY_TICK_MS` in the keeper gives
+  the feed a mainnet-like density and candles then appear on their own.)
+- **History is budgeted.** Prints are immutable, so each round id is read once and cached: the reads
+  are batched through Multicall3, capped at 240 ids, and paged 60 at a time. The walk stops at the
+  first round of the feed's aggregator phase rather than decrementing into ids that belong to no
+  round, and the chart states which limit it hit — the feed's own beginning (a fresh deployment), an
+  aggregator phase change, or the read cap.
 
 ### Product semantics the UI is careful about
 
@@ -191,6 +225,14 @@ connected to the wrong network still shows correct data (with a "switch network"
   lock", and the bet form says the stakes are refundable in full instead of promising that "the
   next one opens shortly". All three read the same `roundPhase`/`isExpired` mirror of
   `_isExpired`, which the positions table's Collect button already agreed with.
+- **An empty book is a state, not an absence.** Both pools really are `0` on a fresh market, and
+  `odds()` really does return `(0, 0)` until both sides hold money — a parimutuel price is one pool
+  divided by the other, so with one side empty there is no counterparty and no price. Rendering that
+  as "0 / 0 / empty book" and a pair of em dashes reads like a page that failed to load. Instead the
+  card says there are no bets yet, distinguishes an empty book from a one-sided one (they are
+  different situations for the two sides), states that a round locking one-sided is refunded in full
+  with zero fee, and quotes what an evenly matched book would pay — computed through `odds()`'s own
+  formula, so the guide and the real number can never disagree.
 - **Claim all** batches only epochs where `claimable || refundable` is true, because `claim()`
   reverts the **whole array** if any epoch in it is not collectable. Two consequences the UI holds
   to: the batch is rebuilt from a fresh `pendingPayout` read taken at the moment you press it (the
@@ -273,8 +315,8 @@ web/
 │  ├─ abi/                  generated, committed ABI modules + allErrorsAbi
 │  ├─ config/               deployment, chains, wagmi config
 │  ├─ hooks/                one hook per on-chain read + the tx lifecycle runner
-│  ├─ lib/                  contract-mirroring maths, formatting, error copy, theme, toasts
-│  └─ components/           market picker, live round card, bet panel, positions, history
+│  ├─ lib/                  contract-mirroring maths, chart maths, formatting, error copy, theme
+│  └─ components/           market picker, live round card, price chart, bet panel, positions
 └─ vite.config.ts           inlines the resolved deployment via `define`
 ```
 

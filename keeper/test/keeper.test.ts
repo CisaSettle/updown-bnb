@@ -67,7 +67,7 @@ function makeConfig(): KeeperConfig {
       maxDeviationBps: 2_000,
       symbolOverrides: {},
     },
-    schedule: { executeLeadMs: 2_000, relayLeadMs: 20_000, maxTimerMs: 900_000, minTimerMs: 0, idlePollMs: 30_000 },
+    schedule: { executeLeadMs: 2_000, relayLeadMs: 20_000, relayTickMs: 0, maxTimerMs: 900_000, minTimerMs: 0, idlePollMs: 30_000 },
     oracle: { findRoundMaxSteps: 64 },
     tx: {
       maxAttempts: 1,

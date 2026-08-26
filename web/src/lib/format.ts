@@ -9,7 +9,15 @@ const priceFormatter = (maxFrac: number) =>
 /** `12345678901n` (8dp) → `"123.45678901"` rendered as `$123.46`, small prices keep more digits. */
 export function formatPrice(value: bigint | undefined | null, decimals = PRICE_DECIMALS): string {
   if (value === undefined || value === null) return '—'
-  const n = Number(formatUnits(value, decimals))
+  return formatPriceNumber(Number(formatUnits(value, decimals)))
+}
+
+/**
+ * Same rendering for a price that is already a number — an axis tick, say, which is derived from
+ * the drawn scale rather than from an on-chain integer. Kept here so a chart label and the price
+ * beside it can never be formatted two different ways.
+ */
+export function formatPriceNumber(n: number): string {
   if (!Number.isFinite(n)) return '—'
   const abs = Math.abs(n)
   const maxFrac = abs >= 1000 ? 2 : abs >= 1 ? 4 : 6

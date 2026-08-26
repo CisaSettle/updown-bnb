@@ -89,6 +89,11 @@ interface HarnessOptions extends Partial<ChainState> {
    * Omitted, the worker trusts the harness's local clock.
    */
   useChainClock?: boolean;
+  /**
+   * `RELAY_TICK_MS`. Set in milliseconds far below the configured floor so a test does not wait
+   * half a minute for a wake; the floor is a config-validation concern, tested there.
+   */
+  relayTickMs?: number;
 }
 
 const TX_HASH = '0x'.padEnd(66, '1') as Hex;
@@ -153,7 +158,7 @@ function makeConfig(): KeeperConfig {
       maxDeviationBps: 2_000,
       symbolOverrides: {},
     },
-    schedule: { executeLeadMs: 2_000, relayLeadMs: 15_000, maxTimerMs: 900_000, minTimerMs: 0, idlePollMs: 30_000 },
+    schedule: { executeLeadMs: 2_000, relayLeadMs: 15_000, relayTickMs: 0, maxTimerMs: 900_000, minTimerMs: 0, idlePollMs: 30_000 },
     oracle: { findRoundMaxSteps: 64 },
     tx: {
       maxAttempts: 1,
@@ -181,6 +186,7 @@ function makeHarness(over: HarnessOptions = {}) {
     minedBlockTs,
     receiptLogs = [],
     useChainClock = false,
+    relayTickMs = 0,
     ...stateOver
   } = over;
   const state: ChainState = {
@@ -311,6 +317,7 @@ function makeHarness(over: HarnessOptions = {}) {
   const config = makeConfig();
   config.dryRun = dryRun;
   config.deployment.relayFeeds = state.relayFeeds;
+  config.schedule.relayTickMs = relayTickMs;
   const realStart = Date.now();
   const relays = new RelayCoordinator();
   for (const feed of otherRelayFeeds) relays.register(feed);
@@ -686,6 +693,199 @@ describe('MarketWorker relay deduplication across markets sharing a feed', () =>
   });
 });
 
+describe('MarketWorker density ticks (RELAY_TICK_MS)', () => {
+  const relaySends = (h: { walletClient: { writeContract: { mock: { calls: unknown[][] } } } }): number =>
+    h.walletClient.writeContract.mock.calls.filter(
+      (call) => (call[0] as { functionName?: string })?.functionName === 'relay',
+    ).length;
+  const relaySimulated = (h: { publicClient: { simulateContract: { mock: { calls: unknown[][] } } } }): number =>
+    h.publicClient.simulateContract.mock.calls.filter(
+      (call) => (call[0] as { functionName?: string })?.functionName === 'relay',
+    ).length;
+
+  /** Four minutes before the boundary: nowhere near anything settlement depends on. */
+  const quietHarness = (over: Partial<Parameters<typeof makeHarness>[0]> = {}) =>
+    makeHarness({
+      relayFeeds: true,
+      chainNow: LOCK_TS - 240,
+      nowOffsetMs: -240_000,
+      dryRun: false,
+      relayTickMs: 40,
+      ...over,
+    });
+
+  it('publishes an extra print between boundaries without touching the boundary’s own claim', async () => {
+    const h = quietHarness();
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(relaySends(h)).toBeGreaterThanOrEqual(1), { timeout: 2_000, interval: 5 });
+    h.worker.stop();
+
+    // The reservation the boundary relay depends on is exactly as it was: unclaimed, unconsumed,
+    // and still counted as a queue slot the lead is sized for.
+    expect(h.relays.has(ORACLE, LOCK_TS)).toBe(false);
+    expect(h.relays.consumed(ORACLE, LOCK_TS)).toBe(false);
+    expect(h.relays.pendingAt(LOCK_TS)).toBe(1);
+    expect(h.deps.metrics.get('updown_keeper_relay_ticks_total', { market: 'btcUsd5m' })).toBeGreaterThanOrEqual(1);
+  });
+
+  it('skips the tick entirely — never queues it — when a boundary relay on this feed is due', async () => {
+    // The hazard this exists for: BTC 5m and BTC 1h share one aggregator and one keeper key. The
+    // quiet market's own boundary is far away, so only the SIBLING's window can stop it walking
+    // into the queue in front of a relay a round depends on.
+    const h = quietHarness();
+    await h.worker.bootstrap();
+    const now = h.now();
+    // A sibling market's relay for a boundary a few seconds out.
+    h.relays.noteRelayWindow(ORACLE, Math.floor(now / 1000) + 10, now + 2_000, now);
+
+    h.worker.start();
+    // Give it several tick periods' worth of chances to misbehave.
+    await new Promise((r) => setTimeout(r, 400));
+    h.worker.stop();
+
+    expect(relaySends(h)).toBe(0);
+    expect(h.queue.depth).toBe(0);
+    expect(relaySimulated(h)).toBe(0);
+  });
+
+  it('stays out of the way of a boundary relay on a DIFFERENT feed, because the queue is shared', async () => {
+    // One key means one transaction queue for the whole keeper. A tick queued behind another feed's
+    // boundary relay delays that relay just as surely as one queued behind its own — the quiet zone
+    // is about the queue, so it covers every feed the keeper serves.
+    const h = quietHarness();
+    await h.worker.bootstrap();
+    const now = h.now();
+    h.relays.noteRelayWindow(OTHER_FEED_A, Math.floor(now / 1000) + 10, now + 2_000, now);
+
+    h.worker.start();
+    await new Promise((r) => setTimeout(r, 400));
+    h.worker.stop();
+
+    expect(relaySends(h)).toBe(0);
+    expect(relaySimulated(h)).toBe(0);
+  });
+
+  it('never holds the market’s own clock while a tick waits in the queue', async () => {
+    // The failure this prevents: a tick stuck behind somebody else's slow transaction stalls the
+    // timer chain, the market never re-plans, and its OWN boundary relay is never armed. A round
+    // must never be lost to a chart point.
+    const h = quietHarness();
+    await h.worker.bootstrap();
+
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    void h.queue.submit(() => gate);
+
+    h.worker.start();
+    const plansAfter = () => h.calls.filter((c) => c === 'getRound').length;
+    await vi.waitFor(() => expect(plansAfter()).toBeGreaterThanOrEqual(1), { timeout: 2_000, interval: 5 });
+    const before = plansAfter();
+    // The queue is still blocked, so any tick is still sitting in it. The market must keep ticking.
+    await vi.waitFor(() => expect(plansAfter()).toBeGreaterThan(before), { timeout: 2_000, interval: 10 });
+    openGate();
+    h.worker.stop();
+  });
+
+  it('does not tick while any market is settling, even with no boundary window in sight', async () => {
+    // The case the scheduled windows cannot cover: a market catching up hours after an outage
+    // executes whenever it can, and that is exactly when a round is closest to timing out into
+    // refunds. A cosmetic print must not be in the queue in front of it.
+    const h = quietHarness();
+    await h.worker.bootstrap();
+    h.relays.beginSettlement('someOtherMarket');
+
+    h.worker.start();
+    await new Promise((r) => setTimeout(r, 400));
+    h.worker.stop();
+
+    expect(relaySends(h)).toBe(0);
+    expect(relaySimulated(h)).toBe(0);
+  });
+
+  it('counts one transaction attempt per attempt for a tick, as it does for a relay', async () => {
+    // `..._attempts_total` has one meaning across operations, or a retry-pressure alert reads them
+    // differently. `sendWithRetry` fires 'sent' and then 'mined' for one successful attempt.
+    const h = quietHarness();
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(relaySends(h)).toBeGreaterThanOrEqual(1), { timeout: 2_000, interval: 5 });
+    h.worker.stop();
+
+    expect(h.deps.metrics.get('updown_keeper_tx_attempts_total', { market: 'btcUsd5m', op: 'tick' })).toBe(
+      h.walletClient.writeContract.mock.calls.length,
+    );
+  });
+
+  it('stops ticking after one fails on the wire, instead of queueing another every cadence', async () => {
+    // A tick that was broadcast and did not confirm is sitting on this key's nonce, and the next
+    // boundary relay cannot mine until it does. Two attempts try to replace it; after that the feed
+    // goes back to one print per boundary rather than offering more chances to block a settlement.
+    const h = quietHarness();
+    h.walletClient.writeContract.mockRejectedValue(new Error('timeout waiting for receipt'));
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(failures(h, 'relay-tick')).toBe(1), { timeout: 2_000, interval: 5 });
+    const sendsAtFailure = h.walletClient.writeContract.mock.calls.length;
+    // Several cadences' worth of chances to try again.
+    await new Promise((r) => setTimeout(r, 400));
+    h.worker.stop();
+
+    expect(h.walletClient.writeContract.mock.calls.length).toBe(sendsAtFailure);
+    expect(failures(h, 'relay-tick')).toBe(1);
+  });
+
+  it('drops a tick already IN the queue once a boundary relay comes due behind it', async () => {
+    // The interleaving the guard alone does not cover: the tick passed every check, went into the
+    // shared queue, and *then* the boundary arrived. Whatever was ahead of it in the queue cost real
+    // time, so the gate has to be re-taken at the front — a tick that fetches a price, simulates and
+    // broadcasts from here is a transaction on the shared nonce sitting in front of a settlement.
+    const h = quietHarness();
+    await h.worker.bootstrap();
+
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    void h.queue.submit(() => gate);
+
+    h.worker.start();
+    // Wait until a tick is genuinely queued behind the gate — the gate itself is depth 1.
+    await vi.waitFor(() => expect(h.queue.depth).toBeGreaterThanOrEqual(2), { timeout: 2_000, interval: 5 });
+
+    // Now the boundary arrives, exactly as it would if the queue had been slow.
+    h.relays.beginSettlement('siblingMarket');
+    openGate();
+    await new Promise((r) => setTimeout(r, 300));
+    h.worker.stop();
+    h.relays.endSettlement('siblingMarket');
+
+    // Not simulated, not estimated, not broadcast: the tick left the queue without touching the key.
+    expect(relaySimulated(h)).toBe(0);
+    expect(relaySends(h)).toBe(0);
+    // And it never took anything the boundary relay depends on.
+    expect(h.relays.has(ORACLE, LOCK_TS)).toBe(false);
+    expect(h.relays.consumed(ORACLE, LOCK_TS)).toBe(false);
+  });
+
+  it('does nothing at all on a market whose feed this keeper cannot write', async () => {
+    // `relayFeeds` false is the mainnet shape: a real Chainlink aggregator, no relay() to call.
+    const h = quietHarness({ relayFeeds: false });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await new Promise((r) => setTimeout(r, 300));
+    h.worker.stop();
+
+    expect(relaySends(h)).toBe(0);
+  });
+});
+
 describe('MarketWorker relay landing', () => {
   const relayHarness = (minedBlockTs: number) =>
     makeHarness({
@@ -944,6 +1144,66 @@ describe('RelayCoordinator', () => {
     coordinator.release(ORACLE, LOCK_TS);
     expect(coordinator.claim(ORACLE, LOCK_TS, 0)).toBe(false);
     expect(coordinator.consumed(ORACLE, LOCK_TS)).toBe(true);
+  });
+
+  it('holds one density-tick slot for the whole keeper, and pauses ticks everywhere', () => {
+    // One key, one nonce chain: a tick left pending by one market is in front of every market's
+    // settlement, so both "one at a time" and "stop after a failure" have to be keeper-wide.
+    const relays = new RelayCoordinator();
+    expect(relays.beginTick(1_000)).toBe(true);
+    expect(relays.beginTick(1_000)).toBe(false);
+    relays.endTick();
+    expect(relays.beginTick(1_000)).toBe(true);
+    relays.endTick();
+
+    relays.pauseTicks(60_000);
+    expect(relays.ticksPaused(59_000)).toBe(true);
+    expect(relays.beginTick(59_000)).toBe(false);
+    expect(relays.beginTick(60_001)).toBe(true);
+  });
+
+  it('reports settlement work in flight, for any market', () => {
+    const relays = new RelayCoordinator();
+    expect(relays.settling).toBe(false);
+    relays.beginSettlement('btcUsd5m');
+    relays.beginSettlement('bnbUsd5m');
+    expect(relays.settling).toBe(true);
+    relays.endSettlement('btcUsd5m');
+    expect(relays.settling).toBe(true);
+    relays.endSettlement('bnbUsd5m');
+    expect(relays.settling).toBe(false);
+  });
+
+  it('hands a feed’s tick bucket to exactly one market, so a shared feed is not written twice', () => {
+    const relays = new RelayCoordinator();
+    expect(relays.claimTick(ORACLE, 100)).toBe(true);
+    expect(relays.claimTick(ORACLE, 100)).toBe(false);
+    expect(relays.claimTick(ORACLE, 101)).toBe(true);
+    // A different feed is a different cadence.
+    expect(relays.claimTick(OTHER_FEED_A, 100)).toBe(true);
+  });
+
+  it('keeps tick buckets and boundary claims in separate namespaces', () => {
+    // The one way a cosmetic tick could break a settlement: consuming the (feed, boundary) claim the
+    // boundary relay needs. A bucket number and a boundary timestamp are both integers, so this is
+    // a real collision waiting to happen if they ever share a key.
+    const relays = new RelayCoordinator();
+    relays.register(ORACLE);
+    expect(relays.claimTick(ORACLE, LOCK_TS)).toBe(true);
+    expect(relays.has(ORACLE, LOCK_TS)).toBe(false);
+    expect(relays.consumed(ORACLE, LOCK_TS)).toBe(false);
+    expect(relays.claim(ORACLE, LOCK_TS, 0)).toBe(true);
+    expect(relays.pendingAt(LOCK_TS)).toBe(1);
+  });
+
+  it('reports the boundary windows a feed is about to serve, for every market on it', () => {
+    const relays = new RelayCoordinator();
+    relays.noteRelayWindow(ORACLE, LOCK_TS, LOCK_TS * 1000 - 20_000, LOCK_TS * 1000);
+    relays.noteRelayWindow(OTHER_FEED_A, LOCK_TS, LOCK_TS * 1000 - 20_000, LOCK_TS * 1000);
+    expect(relays.relayWindows(ORACLE)).toEqual([{ startMs: LOCK_TS * 1000 - 20_000, boundaryTs: LOCK_TS }]);
+    // An hour-old window can never gate anything again and is dropped.
+    relays.noteRelayWindow(ORACLE, LOCK_TS + 3_600, (LOCK_TS + 3_600) * 1000, (LOCK_TS + 5_000) * 1000);
+    expect(relays.relayWindows(ORACLE).map((w) => w.boundaryTs)).toEqual([LOCK_TS + 3_600]);
   });
 
   it('abandoning a boundary stops every market on that feed retrying it', () => {

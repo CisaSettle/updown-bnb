@@ -78,6 +78,68 @@ At most one relay transaction is ever sent per (feed, boundary): markets sharing
 pair before queueing, not after, so two of them can never both spend a queue slot that only one relay
 was budgeted for.
 
+### Testnet feed density — `RELAY_TICK_MS` (optional, off by default)
+
+The relay above publishes **one print per boundary**, which is all settlement needs and all it ever
+did. It also means a 5-minute testnet market has one price point every five minutes, so the chart in
+the web app is four points wide where mainnet Chainlink would print roughly every 60 s (or on a 0.5 %
+deviation). `RELAY_TICK_MS` closes that gap: set it to, say, `30000` and the keeper publishes an
+extra `relay(price)` roughly every 30 s **between** boundaries, purely so the feed looks like the one
+mainnet will read.
+
+Nothing settles on a density tick, and the code is written so that it cannot become load-bearing:
+
+- **Skipped, never queued, near a boundary.** A tick is only planned when a whole one fits before the
+  boundary relay's own wake with a 25 s guard to spare, and the guard is re-checked at the front of
+  the transaction queue, again before the gas estimate, and once more with nothing left between the
+  check and the wire (`sendWithRetry` reads the gas price and the nonce after it, and those are
+  round trips of their own). Inside the guard the tick is dropped, not delayed — a tick sitting in
+  the single-key queue is exactly what would push a boundary relay late. Every one of those checks
+  is made against the **chain's** clock, like every other deadline here.
+- **Nothing settles while anything is settling.** A boundary relay or an `executeRound` anywhere in
+  this keeper marks itself in flight, and no market ticks while that flag is up. The scheduled
+  windows cannot cover a market catching up hours after an outage, and that is the moment a round is
+  closest to timing out into refunds.
+- **The quiet zone covers every feed, not just the ticking market's own.** One key means one
+  transaction queue for the whole keeper, so a tick queued behind *any* boundary relay delays it.
+  Each market publishes its next boundary window to the shared coordinator and a tick must be clear
+  of all of them — the hour market cannot tick through the five-minute market's boundary, and no
+  market can tick through another feed's.
+- **It never holds the market's own clock.** The tick is handed to the queue and the timer chain
+  re-plans immediately, so a tick stuck behind somebody else's slow transaction can never be the
+  reason a market failed to arm its own boundary wake. At most one tick is outstanding at a time.
+- **It never takes the boundary's reservation.** Ticks are claimed in a namespace of their own, one
+  per feed per `RELAY_TICK_MS` bucket (so two markets on one feed publish one tick between them, not
+  two). The `(feed, boundary)` claim, `pendingAt` and therefore `RELAY_LEAD_MS` × slots are all
+  untouched.
+- **It clears its own nonce, then gets out of the way.** Two attempts at an 8 s receipt wait — short,
+  because the whole budget has to fit inside the guard; two rather than one, because every
+  transaction from this key shares one nonce chain. A tick that is broadcast and merely abandoned
+  leaves a pending transaction at nonce *n*, and the next boundary relay, sent at *n+1*, cannot mine
+  until it does — its own gas-price ladder bumps *n+1* and does nothing about *n*. The second
+  attempt re-sends the same nonce at a higher price, which is how a tick gets out of settlement's
+  way rather than into it. The sleep between the two is a small fixed one, not the operator's
+  `BACKOFF_*` ladder — that can reach a minute and `sendWithRetry` sleeps it *inside* the shared
+  queue. If it still fails, the failure is counted (`failures_total{kind="relay-tick"}`), logged at
+  **error** with the stuck-nonce hint, and density ticks stop **keeper-wide** for five minutes:
+  whatever is wrong will not have fixed itself in 30 s, and a pending transaction sits on the one
+  key every market shares, so a sibling market must not keep adding to the pile. At most one tick is
+  outstanding across the whole keeper at any time, for the same reason. A tick never backs the market
+  itself off, and never delays a wake — it takes no share of the idle cooldown at all.
+
+The only effect a tick can have on a round is that its boundary print may be **fresher**, which is
+the direction that cannot hurt: `_priceAt` takes the last print at or before the boundary either way.
+
+Cost is negligible — a relay is ~0.000006 tBNB, so a 30 s cadence is well under 0.02 tBNB a day — but
+two operational notes are worth having. A denser feed makes the `findRoundIdAt` walk-back longer when
+the keeper is catching up after an outage (raise `FIND_ROUND_MAX_STEPS` if you run a very tight
+cadence alongside long outages), and the setting is refused outright on mainnet: those markets read
+real Chainlink aggregators, which no keeper may write to.
+
+```bash
+RELAY_TICK_MS=30000   # testnet only; 0 or unset = off, which is the shipped default
+```
+
 ---
 
 ## Quick start
@@ -128,6 +190,7 @@ Only the first three are required.
 | `METRICS_HOST` | `0.0.0.0` | Bind address. |
 | `EXECUTE_LEAD_MS` | `2000` | Fire `executeRound` this long **after** `lockTs`. |
 | `RELAY_LEAD_MS` | `20000` | Budget for **one** relay before `lockTs` (testnet only). The actual lead is this × the relay feeds sharing the boundary, capped at the round's `oracleMaxAge` less a 10 s block-time/clock-skew margin. |
+| `RELAY_TICK_MS` | `0` (off) | **Testnet only.** Publish an extra relay print roughly this often *between* boundaries, so the feed has a mainnet-like density to chart. Minimum `30000`; refused on `CHAIN_ID=56`. Ticks are skipped rather than queued whenever a boundary relay on that feed is due, never take the boundary's queue slot or claim, and get two attempts at an 8 s receipt wait so a tick clears its own nonce rather than leaving one in front of a relay. See [Testnet feed density](#testnet-feed-density--relay_tick_ms-optional-off-by-default). |
 | `MAX_TIMER_MS` | `900000` | Cap on a single timer; state is re-read at least this often. |
 | `IDLE_POLL_MS` | `30000` | Poll interval while a market is paused or not genesis-started. |
 | `TX_MAX_ATTEMPTS` | `4` | Attempts per logical transaction, including the first. |
@@ -218,6 +281,7 @@ transaction the account is unfunded whatever it is set to.
 | `updown_keeper_info` | gauge | `version`, `chain_id`, `keeper`, `relay_feeds` |
 | `updown_keeper_executions_total` | counter | `market` |
 | `updown_keeper_relays_total` | counter | `market` |
+| `updown_keeper_relay_ticks_total` | counter | `market` |
 | `updown_keeper_failures_total` | counter | `market`, `kind` |
 | `updown_keeper_tx_attempts_total` | counter | `market`, `op` |
 | `updown_keeper_gas_used_total` | counter | `market`, `op` |

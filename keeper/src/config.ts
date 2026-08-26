@@ -10,7 +10,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { ConfigError, defaultDeploymentsPath, loadDeployment, type DeploymentFile } from './deployments.js';
 import { isLogLevel, type LogLevel } from './logger.js';
 import { DEFAULT_BACKOFF, type BackoffOptions } from './backoff.js';
-import { DEFAULT_RELAY_LEAD_MS } from './schedule.js';
+import { DEFAULT_RELAY_LEAD_MS, RELAY_TICK_GUARD_MS } from './schedule.js';
 import { normaliseKey } from './price.js';
 
 export { ConfigError };
@@ -35,6 +35,13 @@ export const ASSUMED_TX_GAS = 600_000n;
 
 /** Default balance floor, in BNB. Must stay above `assumedTxCostWei` for the shipped gas ceiling. */
 export const DEFAULT_MIN_BALANCE_BNB = '0.05';
+
+/**
+ * Least `RELAY_TICK_MS` worth accepting. A tick inside the quiet zone around a boundary is dropped,
+ * so a cadence at or below that guard would be skipped as often as it fired — and an operator who
+ * asked for a 5-second feed would get an erratic one instead of an answer.
+ */
+export const MIN_RELAY_TICK_MS = RELAY_TICK_GUARD_MS + 5_000;
 
 /**
  * What one keeper transaction can cost: the assumed gas limit at the highest gas price the retry
@@ -63,6 +70,12 @@ export function configWarnings(config: KeeperConfig): string[] {
         `can never fire: the keeper goes straight from ok to an unfunded /healthz failure with no ` +
         `advance notice. Raise MIN_BALANCE_BNB above ${formatBnb(txCost)}, or lower ` +
         `MAX_GAS_PRICE_GWEI.`,
+    );
+  }
+  if (config.schedule.relayTickMs > 0 && !config.deployment.relayFeeds) {
+    warnings.push(
+      `RELAY_TICK_MS is set (${config.schedule.relayTickMs} ms) but this deployment has no relay feeds, so no ` +
+        'extra prints can be published: the markets read aggregators this keeper cannot write to.',
     );
   }
   if (floor === 0n) {
@@ -112,6 +125,15 @@ export interface KeeperConfig {
      * out one after another from a single key.
      */
     relayLeadMs: number;
+    /**
+     * Milliseconds between EXTRA relay prints published between boundaries, purely so a testnet
+     * feed has a mainnet-like cadence to chart. `0` (the default) is off, and mainnet may not set
+     * it at all: there is no `RelayAggregator` there and nothing for a keeper to write.
+     *
+     * Settlement never depends on one. A tick is skipped rather than queued when a boundary relay
+     * is due, gets one attempt and a short receipt wait, and never takes a (feed, boundary) claim.
+     */
+    relayTickMs: number;
     maxTimerMs: number;
     minTimerMs: number;
     /** Re-poll interval for a market that is paused or not yet genesis-started. */
@@ -395,6 +417,25 @@ export function loadConfig(options: LoadConfigOptions = {}): KeeperConfig {
     issues.add(`GAS_PRICE_GWEI (${fixedGasGwei}) exceeds MAX_GAS_PRICE_GWEI (${maxGasGwei})`);
   }
 
+  // ── testnet feed density ─────────────────────────────────────────────────
+  // Off unless asked for. The floor is deliberately well above the guard a tick keeps around every
+  // boundary: below it the ticks would spend more time being skipped than published, which reads
+  // as a broken setting rather than the tight cadence the operator asked for.
+  const relayTickMs = readInt(env, 'RELAY_TICK_MS', 0, issues, 0, 600_000);
+  if (relayTickMs > 0 && relayTickMs < MIN_RELAY_TICK_MS) {
+    issues.add(
+      `RELAY_TICK_MS must be 0 (off) or at least ${MIN_RELAY_TICK_MS} ms, got ${relayTickMs}. Each tick is a ` +
+        `transaction on the same key the boundary relay uses, and one closer to the boundary than the ` +
+        `${RELAY_TICK_GUARD_MS} ms quiet zone is skipped rather than sent.`,
+    );
+  }
+  if (relayTickMs > 0 && chainId === 56) {
+    issues.add(
+      'RELAY_TICK_MS is a testnet-only feed-density aid and cannot be used on BSC mainnet (CHAIN_ID=56): ' +
+        'mainnet markets read real Chainlink aggregators, which no keeper may write to.',
+    );
+  }
+
   const minBalanceRaw = readString(env, 'MIN_BALANCE_BNB', DEFAULT_MIN_BALANCE_BNB) as string;
   let minBalanceWei = 0n;
   try {
@@ -429,6 +470,7 @@ export function loadConfig(options: LoadConfigOptions = {}): KeeperConfig {
     schedule: {
       executeLeadMs: readInt(env, 'EXECUTE_LEAD_MS', 2_000, issues, 0, 120_000),
       relayLeadMs: readInt(env, 'RELAY_LEAD_MS', DEFAULT_RELAY_LEAD_MS, issues, 1_000, 600_000),
+      relayTickMs,
       maxTimerMs: readInt(env, 'MAX_TIMER_MS', 15 * 60_000, issues, 1_000, 2_147_483_000),
       minTimerMs: readInt(env, 'MIN_TIMER_MS', 0, issues, 0, 60_000),
       idlePollMs: readInt(env, 'IDLE_POLL_MS', 30_000, issues, 1_000, 600_000),
@@ -489,6 +531,7 @@ export function redactedConfig(config: KeeperConfig): Record<string, unknown> {
     exitOnTotalBootstrapFailure: config.exitOnTotalBootstrapFailure,
     executeLeadMs: config.schedule.executeLeadMs,
     relayLeadMs: config.schedule.relayLeadMs,
+    relayTickMs: config.schedule.relayTickMs,
     maxGasPriceWei: config.tx.maxGasPriceWei,
     minBalanceWei: config.health.minBalanceWei,
   };

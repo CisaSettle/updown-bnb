@@ -63,6 +63,32 @@ describe('loadConfig', () => {
     expect(config.exitOnTotalBootstrapFailure).toBe(false);
   });
 
+  it('publishes no extra relay prints unless asked to', () => {
+    // The whole point of the setting: a keeper that has not been told to densify the testnet feed
+    // behaves exactly as it did before it existed.
+    expect(load(baseEnv).schedule.relayTickMs).toBe(0);
+  });
+
+  it('accepts a density cadence and refuses one too tight to be honoured', () => {
+    expect(load({ ...baseEnv, RELAY_TICK_MS: '30000' }).schedule.relayTickMs).toBe(30_000);
+    // Below the quiet zone a tick keeps around every boundary, it would be skipped as often as it
+    // fired — an erratic feed rather than the cadence the operator asked for.
+    expect(() => load({ ...baseEnv, RELAY_TICK_MS: '5000' })).toThrow(/RELAY_TICK_MS must be 0 \(off\)/);
+    expect(() => load({ ...baseEnv, RELAY_TICK_MS: 'often' })).toThrow(/RELAY_TICK_MS must be an integer/);
+  });
+
+  it('refuses the density setting on mainnet, where there is no feed to write', () => {
+    // Mainnet markets read real Chainlink aggregators. A keeper cannot write to one, and a setting
+    // that silently does nothing is worse than one that says so at boot.
+    const mainnet = parseDeployment({ ...deploymentJson, chainId: 56, relayFeeds: false }, 56, '/fake/56.json');
+    expect(() =>
+      loadConfig({
+        env: { ...baseEnv, CHAIN_ID: '56', RELAY_TICK_MS: '30000' },
+        loadDeploymentImpl: () => mainnet,
+      }),
+    ).toThrow(/RELAY_TICK_MS is a testnet-only/);
+  });
+
   it('lets the operator choose to exit when nothing bootstraps', () => {
     expect(load({ ...baseEnv, EXIT_ON_TOTAL_BOOTSTRAP_FAILURE: 'true' }).exitOnTotalBootstrapFailure).toBe(true);
     expect(() => load({ ...baseEnv, EXIT_ON_TOTAL_BOOTSTRAP_FAILURE: 'maybe' })).toThrow(
@@ -240,6 +266,15 @@ describe('balance floor coherence', () => {
   it('accepts a floor that is coherent with a lower gas ceiling', () => {
     // The other way of making it coherent: cap the gas price instead of raising the floor.
     expect(configWarnings(load({ ...baseEnv, MIN_BALANCE_BNB: '0.02', MAX_GAS_PRICE_GWEI: '20' }))).toEqual([]);
+  });
+
+  it('warns when a density cadence is set on a deployment with no relay feeds', () => {
+    const noRelays = parseDeployment({ ...deploymentJson, relayFeeds: false }, 97, '/fake/97.json');
+    const config = loadConfig({
+      env: { ...baseEnv, RELAY_TICK_MS: '30000' },
+      loadDeploymentImpl: () => noRelays,
+    });
+    expect(configWarnings(config).some((w) => /RELAY_TICK_MS is set/.test(w))).toBe(true);
   });
 
   it('warns when there is no floor at all', () => {

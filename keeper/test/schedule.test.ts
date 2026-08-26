@@ -16,7 +16,10 @@ import {
   type RoundTiming,
   type WakeOptions,
   applyCooldown,
+  tickAllowedAt,
   RELAY_DEADLINE_MARGIN_MS,
+  RELAY_TICK_GUARD_MS,
+  type RelayWindow,
   type WakePlan,
 } from '../src/schedule.js';
 
@@ -148,6 +151,79 @@ describe('computeNextWake', () => {
       expect(plan.targetMs).toBe((LOCK_TS - 140) * 1000);
       expect(round.oracleMaxAge * 1000 - 140_000).toBe(RELAY_LEAD_SAFETY_MS);
     });
+  });
+});
+
+describe('relay density ticks (RELAY_TICK_MS)', () => {
+  // Testnet only, off by default, and never allowed to move a boundary relay: a tick exists so the
+  // chart has more than one point per five minutes, and nothing settles on one.
+  const relay: WakeOptions = { ...base, relayEnabled: true, relayLeadMs: 20_000 };
+
+  it('is off unless asked for: the shipped default schedules no ticks at all', () => {
+    expect(computeNextWake(at(-240), round, relay).action).toBe('relay');
+    expect(computeNextWake(at(-240), round, { ...relay, relayTickMs: 0 }).action).toBe('relay');
+  });
+
+  it('publishes an extra print between boundaries when a whole one fits', () => {
+    const plan = computeNextWake(at(-240), round, { ...relay, relayTickMs: 30_000 });
+    expect(plan.action).toBe('tick');
+    expect(plan.delayMs).toBe(30_000);
+  });
+
+  it('gives the boundary relay its instant back as soon as a tick no longer fits before it', () => {
+    // The relay wakes at lockTs - 20s. A tick planned now would land inside the guard around that
+    // wake, so it is simply not planned: the relay keeps its lead, its slot and its timer.
+    const plan = computeNextWake(at(-60), round, { ...relay, relayTickMs: 30_000 });
+    expect(plan.action).toBe('relay');
+    expect(plan.targetMs).toBe(LOCK_TS * 1000 - 20_000);
+  });
+
+  it('never ticks on a market without a relay feed, whatever the setting says', () => {
+    // Mainnet reads a real Chainlink aggregator: there is nothing for the keeper to write to.
+    expect(computeNextWake(at(-240), round, { ...base, relayTickMs: 30_000 }).action).toBe('execute');
+  });
+
+  it('never ticks once the boundary itself is in reach', () => {
+    for (const seconds of [-20, -1, 0, 5]) {
+      expect(computeNextWake(at(seconds), round, { ...relay, relayTickMs: 30_000 }).action).not.toBe('tick');
+    }
+  });
+});
+
+describe('tickAllowedAt', () => {
+  const boundaryTs = LOCK_TS;
+  const window: RelayWindow = { startMs: LOCK_TS * 1000 - 20_000, boundaryTs };
+
+  it('keeps the whole boundary window, plus a guard either side, clear of ticks', () => {
+    const guardSec = RELAY_TICK_GUARD_MS / 1000;
+    expect(tickAllowedAt(at(-600), [window])).toBe(true);
+    // Guard before the relay wake, which is itself 20s before the boundary…
+    expect(tickAllowedAt(at(-20 - guardSec - 1), [window])).toBe(true);
+    expect(tickAllowedAt(at(-20 - guardSec + 1), [window])).toBe(false);
+    // …the wake and the boundary themselves…
+    expect(tickAllowedAt(at(-10), [window])).toBe(false);
+    expect(tickAllowedAt(at(0), [window])).toBe(false);
+    // …and past it, because `executeRound` wants the same single-key queue seconds later.
+    expect(tickAllowedAt(at(guardSec - 1), [window])).toBe(false);
+    expect(tickAllowedAt(at(guardSec + 1), [window])).toBe(true);
+  });
+
+  it('respects a sibling market’s boundary on the same feed, not just the ticking market’s own', () => {
+    // BTC 5m and BTC 1h share one aggregator. The 1h market's own boundary is an hour away and it
+    // would happily tick straight through the 5m market's relay if it only consulted itself.
+    const sibling: RelayWindow = { startMs: LOCK_TS * 1000 - 20_000, boundaryTs };
+    const own: RelayWindow = { startMs: (LOCK_TS + 3_600) * 1000 - 20_000, boundaryTs: LOCK_TS + 3_600 };
+    expect(tickAllowedAt(at(-10), [own, sibling])).toBe(false);
+    expect(tickAllowedAt(at(-600), [own, sibling])).toBe(true);
+  });
+
+  it('allows everything when no window is registered', () => {
+    expect(tickAllowedAt(at(-10), [])).toBe(true);
+  });
+
+  it('uses the guard by default', () => {
+    expect(RELAY_TICK_GUARD_MS).toBeGreaterThan(0);
+    expect(tickAllowedAt(window.startMs - RELAY_TICK_GUARD_MS + 1, [window])).toBe(false);
   });
 });
 
@@ -315,6 +391,15 @@ describe('missedEpochs', () => {
 });
 
 describe('applyCooldown', () => {
+  it('never delays a density tick, because delaying it delays the relay wake behind it', () => {
+    // One timer serves both. A 60s idle backoff applied to a tick planned 70s before `lockTs` would
+    // fire at lockTs-10s — ten seconds AFTER the boundary relay's own lead had it going out. The
+    // tick's cadence is its own backoff; the market's must not touch it.
+    const plan: WakePlan = { action: 'tick', kind: 'on-time', delayMs: 30_000, targetMs: at(-40) };
+    expect(applyCooldown(plan, 60_000, at(-70), round, RELAY_DEADLINE_MARGIN_MS)).toBe(30_000);
+    expect(applyCooldown(plan, 10 * 60_000, at(-600), round, RELAY_DEADLINE_MARGIN_MS)).toBe(30_000);
+  });
+
   const round: RoundTiming = { startTs: 1000, lockTs: 1300, closeTs: 1600, bufferSeconds: 240, oracleMaxAge: 150 };
   const plan = (action: 'relay' | 'execute', delayMs: number): WakePlan => ({
     action,

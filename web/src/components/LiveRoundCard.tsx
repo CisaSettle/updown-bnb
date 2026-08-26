@@ -1,12 +1,15 @@
+import { chartFrame } from '../lib/chart'
 import { formatPctDelta, formatPrice, formatPriceDelta, formatTime } from '../lib/format'
 import { roundPhase, type Round, type RoundPhase } from '../lib/market'
 import { priceView, type BoundaryProof, type PriceView } from '../lib/settlement'
 import type { MarketConfig } from '../hooks/useMarketConfig'
+import type { OracleHistory } from '../hooks/useOracleSeries'
 import type { OraclePrice } from '../hooks/useOraclePrice'
 import type { SettlementToken } from '../hooks/useSettlementToken'
 import { Countdown } from './Countdown'
 import { OddsPanel } from './OddsPanel'
 import { PoolBar } from './PoolBar'
+import { PriceChart } from './PriceChart'
 
 const PHASE_CHIP: Record<RoundPhase, { text: string; className: string }> = {
   unstarted: { text: 'Not started', className: 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
@@ -159,9 +162,11 @@ export function LiveRoundCard({
   liveOdds,
   currentEpoch,
   oracle,
+  history,
   boundary,
   token,
   now,
+  feedName,
   children,
 }: {
   label: string
@@ -172,16 +177,37 @@ export function LiveRoundCard({
   liveOdds?: [bigint, bigint]
   currentEpoch: bigint
   oracle: OraclePrice
+  /** The oracle's own prints, for the chart. */
+  history: OracleHistory
   /** The proved settling print for the live round, once its close time has passed. */
   boundary?: BoundaryProof
   token: SettlementToken
   now: number
+  /** What the settlement feed is, in words — it is not an exchange price and must not read as one. */
+  feedName: string
   /** The bet form, rendered inside the betting column. */
   children?: React.ReactNode
 }) {
   const bettablePhase = roundPhase(bettable, now)
   const livePhase = roundPhase(live, now)
   const liveView = priceView({ round: live, nowSeconds: now, livePrice: oracle.answer, boundary })
+
+  // The chart is anchored on the live round when there is one, and on the round still taking bets
+  // when there is not — a fresh market has no locked round yet, and the honest picture there is the
+  // runway to the first strike rather than an empty panel.
+  const frame = chartFrame({ live, bettable, now, interval: config.interval })
+  const chart = frame ? (
+    <PriceChart
+      frame={frame}
+      prints={history.prints}
+      decimals={oracle.decimals}
+      now={now}
+      interval={config.interval}
+      limit={history.limit}
+      isLoading={history.isLoading}
+      feedName={feedName}
+    />
+  ) : null
 
   // While the round has not opened yet the clock must count to `startTs`, not to `lockTs`.
   const bettingTarget = bettable ? (bettablePhase === 'upcoming' ? bettable.startTs : bettable.lockTs) : 0n
@@ -221,11 +247,17 @@ export function LiveRoundCard({
             tone={bettablePhase === 'betting' ? 'betting' : 'idle'}
           />
 
+          {/*
+            `known` is the difference between "nobody has bet" and "we have not read the round yet".
+            The first is a state worth showing; the second is a multicall in flight, and announcing
+            an empty book on the strength of it would be the card inventing a fact about the chain.
+          */}
           <PoolBar
             up={bettable?.upAmount ?? 0n}
             down={bettable?.downAmount ?? 0n}
             decimals={token.decimals}
             symbol={token.symbol}
+            known={bettable !== undefined}
           />
 
           <OddsPanel
@@ -233,6 +265,11 @@ export function LiveRoundCard({
             downBps={bettableOdds?.[1]}
             feeBps={bettable?.feeBps ?? config.feeBps}
             live={false}
+            up={bettable?.upAmount ?? 0n}
+            down={bettable?.downAmount ?? 0n}
+            symbol={token.symbol}
+            decimals={token.decimals}
+            known={bettable !== undefined}
           />
 
           {children}
@@ -266,18 +303,32 @@ export function LiveRoundCard({
                 boundary={boundary}
               />
 
-              <PoolBar up={live.upAmount} down={live.downAmount} decimals={token.decimals} symbol={token.symbol} />
+              {chart}
 
-              <OddsPanel upBps={liveOdds?.[0]} downBps={liveOdds?.[1]} feeBps={live.feeBps} live />
+              <PoolBar up={live.upAmount} down={live.downAmount} decimals={token.decimals} symbol={token.symbol} live />
+
+              <OddsPanel
+                upBps={liveOdds?.[0]}
+                downBps={liveOdds?.[1]}
+                feeBps={live.feeBps}
+                live
+                up={live.upAmount}
+                down={live.downAmount}
+                symbol={token.symbol}
+                decimals={token.decimals}
+              />
 
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
                 Locked at {formatTime(live.lockTs)} · settles at {formatTime(live.closeTs)}
               </p>
             </>
           ) : (
-            <p className="text-sm text-slate-600 dark:text-slate-300">
-              No live round yet. The first round settles one interval after the market opens.
-            </p>
+            <>
+              <p className="text-sm text-slate-600 dark:text-slate-300">
+                No live round yet. The first round settles one interval after the market opens.
+              </p>
+              {chart}
+            </>
           )}
 
           {/* The honest bit, stated where the money is. */}

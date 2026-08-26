@@ -51,8 +51,10 @@ function render(now: number) {
       liveOdds={[20_000n, 20_000n]}
       currentEpoch={42n}
       oracle={oracle}
+      history={{ prints: [], limit: 'none', isLoading: false }}
       token={usdt}
       now={now}
+      feedName="test feed"
     />,
   )
 }
@@ -77,5 +79,45 @@ describe('LiveRoundCard — the betting round after a stalled keeper', () => {
   it('leaves the ordinary phases alone', () => {
     expect(chips(render(START + 10))[0]).toBe('Betting open')
     expect(chips(render(START - 10))[0]).toBe('Opening soon')
+  })
+
+  it('charts the bettable round against ITS oracle budget when the previous epoch never started', () => {
+    // `executeRound` fast-forwards `currentEpoch` past an outage in one transaction, so the epochs
+    // it skipped were never started: `getRound(currentEpoch - 1)` is a zeroed struct. The chart
+    // anchors on the bettable round — and must judge staleness by that round's own `oracleMaxAge`,
+    // not by a fallback. Here the round's budget is 90s and the newest print is 120s old, so the
+    // hold across it is a stretch the contract could not price, and the line has to say so.
+    const html = renderToStaticMarkup(
+      <LiveRoundCard
+        label="BTC/USD 5m"
+        config={config}
+        bettable={round({
+          startTs: BigInt(START),
+          lockTs: BigInt(START + 300),
+          closeTs: BigInt(START + 600),
+          oracleMaxAge: 90,
+        })}
+        bettableOdds={[20_000n, 20_000n]}
+        live={round({ startTs: 0n, lockTs: 0n, closeTs: 0n, oracleMaxAge: 0, upAmount: 0n, downAmount: 0n })}
+        liveOdds={[20_000n, 20_000n]}
+        currentEpoch={42n}
+        oracle={oracle}
+        history={{
+          prints: [{ roundId: 7n, answer: 100_000_000_000n, updatedAt: START - 20 }],
+          limit: 'feed-start',
+          isLoading: false,
+        }}
+        token={usdt}
+        now={START + 100}
+        feedName="test feed"
+      />,
+    )
+    expect(html).toContain('older than this round\u2019s 90s oracle budget')
+    expect(html).toContain('>90s<')
+    // `interval / 2` is the fallback for a round that has not been read; it must not be used here.
+    expect(html).not.toContain('150s')
+    // 120s of hold against a 90s budget: the tail of it is a stretch `_priceAt` refuses outright.
+    expect(html).toContain('stroke-dasharray="2 3"')
+    expect(html).toContain('dashed</strong> stretches')
   })
 })

@@ -107,6 +107,22 @@ export function computeOdds(up: bigint, down: bigint, feeBps: number): [bigint, 
 }
 
 /**
+ * The payout multiple an evenly matched book pays, in bps — `1 + (1 - fee)`, i.e. 1.97x at 300 bps.
+ *
+ * Quoted wherever there are no odds yet. `odds()` returns `(0, 0)` until both sides hold money,
+ * which is correct — there is no counterparty, so there is no price — but leaving a trader with an
+ * em dash tells them nothing about what they are being offered. An even book is the natural anchor:
+ * it is what a first bet becomes the moment somebody matches it.
+ *
+ * Computed through `computeOdds` itself, at a size where the contract's integer truncation cannot
+ * bite, so this guide and a real quote can never disagree about the same book.
+ */
+export function balancedMultipleBps(feeBps: number): bigint {
+  const unit = 10n ** 18n
+  return computeOdds(unit, unit, feeBps)[0]
+}
+
+/**
  * Payout the contract would pay `stake` on `side` if the book closed exactly as it stands now
  * *including* this stake — i.e. `stake * rewardPool / rewardBase` with the contract's truncation.
  * Returns the stake itself when there is no counterparty (that round would be refunded in full).

@@ -116,6 +116,7 @@ export const M = {
   executions: 'updown_keeper_executions_total',
   failures: 'updown_keeper_failures_total',
   relays: 'updown_keeper_relays_total',
+  relayTicks: 'updown_keeper_relay_ticks_total',
   txAttempts: 'updown_keeper_tx_attempts_total',
   txGasUsed: 'updown_keeper_gas_used_total',
   voided: 'updown_keeper_rounds_voided_total',
@@ -143,6 +144,8 @@ export const HELP: Readonly<Record<string, string>> = Object.freeze({
   [M.executions]: 'Successful executeRound() transactions, by market.',
   [M.failures]: 'Failed keeper operations, by market and kind.',
   [M.relays]: 'Successful relay(price) transactions to a testnet RelayAggregator, by market.',
+  [M.relayTicks]:
+    'Successful EXTRA relay prints published between boundaries for feed density (RELAY_TICK_MS), by market. Cosmetic: no round settles on one, and they are dropped whenever a boundary relay is due.',
   [M.txAttempts]: 'Transaction send attempts including gas-bumped retries, by market and operation. One per attempt.',
   [M.txGasUsed]: 'Total gas used by keeper transactions, by market and operation.',
   [M.voided]: 'Rounds observed as voided in a keeper-sent executeRound() receipt, by market and reason.',

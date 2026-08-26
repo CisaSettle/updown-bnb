@@ -1,14 +1,38 @@
-import { formatBreakEven, formatMultiple, overroundPoints } from '../lib/format'
+import { formatAmountWithSymbol, formatBreakEven, formatMultiple, overroundPoints } from '../lib/format'
+import { balancedMultipleBps, computeOdds } from '../lib/market'
+
+/**
+ * The odds, and — where the contract has none to give — the reason.
+ *
+ * `odds(epoch)` returns `(0, 0)` until **both** sides hold money, and that is correct: a parimutuel
+ * price is the ratio between two pools, so with one pool empty there is no counterparty and no
+ * price. It is not, however, self-explanatory, and an em dash tells a trader nothing. So each side
+ * says which of the two situations it is in — nobody has bet at all, or one side is alone — what
+ * happens if it stays that way (a full refund, no fee), and what an even book would pay.
+ */
 
 function Side({
   side,
   multipleBps,
+  state,
+  otherStake,
+  balancedBps,
+  symbol,
+  decimals,
 }: {
   side: 'up' | 'down'
   multipleBps: bigint | undefined
+  /**
+   * `priced` — real odds; `unknown` — the book has not been read yet; `alone` — this side holds the
+   * only money; `waiting` — this side is empty.
+   */
+  state: 'priced' | 'unknown' | 'empty-book' | 'alone' | 'waiting'
+  otherStake: bigint
+  balancedBps: bigint
+  symbol: string
+  decimals: number
 }) {
   const isUp = side === 'up'
-  const hasOdds = multipleBps !== undefined && multipleBps > 0n
 
   return (
     <div
@@ -26,7 +50,7 @@ function Side({
         {isUp ? '▲ Up' : '▼ Down'}
       </p>
 
-      {hasOdds ? (
+      {state === 'priced' ? (
         <>
           {/* Binance vocabulary: payout multiple. */}
           <p
@@ -48,10 +72,34 @@ function Side({
           <p className="num mt-2 text-sm font-bold text-slate-800 dark:text-slate-200">{formatBreakEven(multipleBps)}</p>
           <p className="text-[11px] font-medium text-slate-600 dark:text-slate-400">break-even win rate</p>
         </>
+      ) : state === 'unknown' ? (
+        <>
+          <p className="skeleton mt-1 h-7 w-20" />
+          <p className="mt-2 text-[11px] font-medium text-slate-600 dark:text-slate-400">reading the book…</p>
+        </>
       ) : (
         <>
-          <p className="num mt-1 text-2xl font-black leading-none text-slate-400 dark:text-slate-600">—</p>
-          <p className="mt-0.5 text-[11px] font-medium text-slate-600 dark:text-slate-400">no counterparty yet</p>
+          {/*
+            The guide number, not a quote: an even book pays this, and matching the other side is
+            exactly what makes the book even. It is computed by `odds()`'s own formula, so it cannot
+            drift from the real number that replaces it the moment a counterparty arrives.
+          */}
+          <p className="num mt-1 text-2xl font-black leading-none text-slate-400 dark:text-slate-500">
+            {formatMultiple(balancedBps)}
+          </p>
+          <p className="mt-0.5 text-[11px] font-medium text-slate-600 dark:text-slate-400">
+            {state === 'waiting' ? 'if you match the other side' : 'if the book ends even'}
+          </p>
+          <p className="mt-2 text-[11px] leading-snug font-medium text-slate-600 dark:text-slate-400">
+            {state === 'empty-book'
+              ? 'No bets yet on either side, so there is no price. Your bet is the first half of it.'
+              : state === 'alone'
+                ? 'Only this side has money. Nobody to win from yet — if it locks like this, every stake comes back in full.'
+                : `Nothing here yet. ${formatAmountWithSymbol(otherStake, decimals, symbol, {
+                    maxFrac: 2,
+                    compact: true,
+                  })} is waiting on the other side.`}
+          </p>
         </>
       )}
     </div>
@@ -63,14 +111,42 @@ export function OddsPanel({
   downBps,
   feeBps,
   live,
+  up,
+  down,
+  symbol,
+  decimals,
+  known = true,
 }: {
   upBps?: bigint
   downBps?: bigint
   feeBps: number
   live: boolean
+  /** The pools themselves: `odds()` alone cannot tell an empty book from a one-sided one. */
+  up: bigint
+  down: bigint
+  symbol: string
+  decimals: number
+  /** False while the round has not been read: say nothing rather than assert an empty book. */
+  known?: boolean
 }) {
-  const empty = !upBps || !downBps || upBps === 0n || downBps === 0n
-  const overround = overroundPoints(upBps, downBps)
+  // `odds()` comes back `undefined` when that sub-call could not be read, and `0n` when the
+  // contract genuinely has no price to give. Treating the two alike would tell a trader with money
+  // on both sides that nobody has bet. `computeOdds` is the tested, exact mirror of `odds()`, so
+  // falling back to it on the pools we did read cannot disagree with the chain.
+  const readable = upBps !== undefined && downBps !== undefined
+  const [upEff, downEff] = readable ? [upBps, downBps] : computeOdds(up, down, feeBps)
+
+  const priced = known && upEff > 0n && downEff > 0n
+  const bookEmpty = known && up === 0n && down === 0n
+  const balancedBps = balancedMultipleBps(feeBps)
+  const overround = overroundPoints(upEff, downEff)
+
+  const sideState = (mine: bigint): 'priced' | 'unknown' | 'empty-book' | 'alone' | 'waiting' => {
+    if (priced) return 'priced'
+    if (!known) return 'unknown'
+    if (bookEmpty) return 'empty-book'
+    return mine > 0n ? 'alone' : 'waiting'
+  }
 
   return (
     <div>
@@ -81,18 +157,46 @@ export function OddsPanel({
         </p>
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2">
-        <Side side="up" multipleBps={upBps} />
-        <Side side="down" multipleBps={downBps} />
+        <Side
+          side="up"
+          multipleBps={upEff}
+          state={sideState(up)}
+          otherStake={down}
+          balancedBps={balancedBps}
+          symbol={symbol}
+          decimals={decimals}
+        />
+        <Side
+          side="down"
+          multipleBps={downEff}
+          state={sideState(down)}
+          otherStake={up}
+          balancedBps={balancedBps}
+          symbol={symbol}
+          decimals={decimals}
+        />
       </div>
       <p className="mt-2 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-        {empty
-          ? 'Odds appear once both sides have money in them. A round that locks one-sided is refunded in full, with zero fee.'
-          : live
-            ? 'These are the final odds for this round — the book is locked.'
-            : 'Odds move with every bet and are only final at lock. The number you see is the multiple the contract itself would use.'}
+        {!known ? (
+          'The book for this round has not been read yet.'
+        ) : !priced ? (
+          <>
+            A parimutuel price is one pool divided by the other, so the contract&rsquo;s{' '}
+            <span className="num">odds()</span> returns nothing at all until <strong>both</strong> sides hold money —
+            the greyed <span className="num">{formatMultiple(balancedBps)}</span> above is what an evenly matched book
+            pays at this round&rsquo;s fee, not a quote.{' '}
+            {live
+              ? 'This round locked without a counterparty, so every stake in it is refunded in full, with zero fee.'
+              : 'A round that locks one-sided is refunded in full, with zero fee — nobody can lose money for want of an opponent.'}
+          </>
+        ) : live ? (
+          'These are the final odds for this round — the book is locked.'
+        ) : (
+          'Odds move with every bet and are only final at lock. The number you see is the multiple the contract itself would use.'
+        )}
       </p>
 
-      {!empty && overround !== undefined ? (
+      {priced && overround !== undefined ? (
         <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
           A <strong>break-even win rate</strong> is what a side has to win to leave you level at that payout — not a
           forecast. The two add up to <span className="num">{(100 + overround).toFixed(1)}%</span>, and the{' '}

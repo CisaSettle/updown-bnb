@@ -18,6 +18,7 @@ import { useLiveRounds } from './hooks/useRound'
 import { useMarketConfig } from './hooks/useMarketConfig'
 import { useMarkets, type Market } from './hooks/useMarkets'
 import { useOraclePrice } from './hooks/useOraclePrice'
+import { useOracleSeries } from './hooks/useOracleSeries'
 import { usePositions } from './hooks/usePositions'
 import { useSettlementToken } from './hooks/useSettlementToken'
 import { humanizeError } from './lib/errors'
@@ -26,6 +27,18 @@ import { useChainNow } from './hooks/useChainNow'
 import { useTheme } from './lib/theme'
 
 const SELECTED_KEY = 'updown.market'
+
+/**
+ * What the settlement feed is, in words.
+ *
+ * Named on the chart because neither of these is an exchange price: testnet reads a keeper-fed
+ * `RelayAggregator` (BSC testnet's own Chainlink feeds run too stale to settle a 5-minute round),
+ * mainnet reads Chainlink's aggregated answer. Both differ from any single venue's spot, and the
+ * chart plots the one the chain settles on.
+ */
+const FEED_NAME = usesRelayFeeds
+  ? 'plotted from the market’s own relay feed, the series it settles on — not an exchange price'
+  : 'plotted from the market’s own Chainlink feed, the series it settles on — not an exchange price'
 
 function readSelected(): string | undefined {
   try {
@@ -45,6 +58,15 @@ function MarketView({ market }: { market: Market }) {
   const currentEpoch = config?.currentEpoch
   const rounds = useLiveRounds(market.address, currentEpoch)
   const oracle = useOraclePrice(config?.oracle ?? market.oracle, now)
+  // The chart plots this feed and only this feed: it is the series `executeRound` proves its
+  // boundary prices against, and no exchange price is fetched anywhere in this app.
+  const feedHistory = useOracleSeries(
+    config?.oracle ?? market.oracle,
+    oracle.answer !== undefined && oracle.roundId !== undefined && oracle.updatedAt !== undefined
+      ? { roundId: oracle.roundId, answer: oracle.answer, updatedAt: oracle.updatedAt }
+      : undefined,
+    now,
+  )
   // Past `closeTs` the feed's latest print is not the price this round settles on; resolve the
   // print the contract will actually prove instead of showing the live one.
   const boundary = useBoundaryPrice(
@@ -101,9 +123,11 @@ function MarketView({ market }: { market: Market }) {
         liveOdds={rounds.liveOdds}
         currentEpoch={currentEpoch}
         oracle={oracle}
+        history={feedHistory}
         boundary={boundary.proof}
         token={token}
         now={now}
+        feedName={FEED_NAME}
       >
         <BetPanel
           market={market.address}

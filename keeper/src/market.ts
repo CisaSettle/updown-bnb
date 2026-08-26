@@ -18,13 +18,20 @@ import { PriceSource, formatPrice8dp, normaliseKey, symbolFromDescription, Symbo
 import {
   applyCooldown,
   computeNextWake,
+  computeRelayLeadMs,
   isPastSettlementWindow,
   missedEpochs,
   relayCanStillLand,
   relayCapacity,
   secondsUntilLockable,
+  tickAllowedAt,
   RELAY_DEADLINE_MARGIN_MS,
   RELAY_MIN_LANDING_MS,
+  RELAY_TICK_ATTEMPTS,
+  RELAY_TICK_BACKOFF,
+  RELAY_TICK_GUARD_MS,
+  RELAY_TICK_RECEIPT_MS,
+  type RelayWindow,
   type RoundTiming,
   type WakeOptions,
   type WakePlan,
@@ -61,6 +68,16 @@ import { computeBackoff, errorText, isContractRejection, type BackoffOptions } f
 const TICK_BACKOFF: BackoffOptions = { baseMs: 2_000, factor: 2, maxMs: 60_000, jitter: 0.2 };
 
 /**
+ * How long density ticks stop after one fails on the wire.
+ *
+ * A failed tick means a transaction from this key did not confirm, which is the one way a cosmetic
+ * print can get in a settlement's way. Whatever caused it will not have fixed itself in 30 seconds,
+ * and each further attempt is another chance to be the transaction a boundary relay is stuck
+ * behind — so the feed simply goes back to one print per boundary for a while.
+ */
+const TICK_PAUSE_AFTER_FAILURE_MS = 5 * 60_000;
+
+/**
  * Every value `updown_keeper_failures_total{kind=...}` can take.
  *
  * Listed in one place so all of them can be pre-declared at zero: a Prometheus alert on a series
@@ -83,6 +100,7 @@ export const FAILURE_KINDS = [
   'relay-revert',
   'relay-send',
   'relay-simulate',
+  'relay-tick',
   'tick',
   'watchdog-restart',
 ] as const;
@@ -179,6 +197,26 @@ export class RelayCoordinator {
   /** (feed, boundary) pairs reserved by a worker that has queued a relay but not yet finished it. */
   readonly #claimed = new Map<string, number>();
   readonly #feeds = new Set<string>();
+  /**
+   * The boundary windows each feed is about to serve, published by the workers as they plan.
+   *
+   * Density ticks (`RELAY_TICK_MS`) are checked against ALL of them, not just the ticking market's
+   * own: two markets can share one aggregator (BTC 5m and BTC 1h do), and the 1h market's round
+   * timing knows nothing about the 5m market's boundary two minutes away. Without this a tick from
+   * the quiet market would sit in the single-key queue exactly when the busy one needed it.
+   */
+  readonly #windows = new Map<string, RelayWindow>();
+  /** Last density-tick bucket published per feed, so markets sharing one do not double up. */
+  readonly #tickBuckets = new Map<string, number>();
+  /** Markets with settlement work in flight right now — a relay or an `executeRound`. */
+  readonly #settling = new Set<string>();
+  /**
+   * Density-tick state for the WHOLE keeper, because there is one key and therefore one nonce
+   * chain. Per-market copies of these were a hole: one market could leave a tick pending and stop
+   * ticking itself while every other market carried on adding transactions behind it.
+   */
+  #tickInFlight = false;
+  #ticksPausedUntilMs = 0;
 
   static key(feed: Address, boundaryTs: number): string {
     return `${feed.toLowerCase()}:${boundaryTs}`;
@@ -264,6 +302,99 @@ export class RelayCoordinator {
    */
   abandon(feed: Address, boundaryTs: number, atMs: number): void {
     this.mark(feed, boundaryTs, atMs);
+  }
+
+  /**
+   * Declare when this feed's next boundary relay wakes, and which boundary it is for. Called every
+   * time a worker plans, so the quiet zone tracks the live schedule rather than a stale copy.
+   */
+  noteRelayWindow(feed: Address, boundaryTs: number, startMs: number, atMs: number): void {
+    const key = RelayCoordinator.key(feed, boundaryTs);
+    this.#windows.set(key, { startMs, boundaryTs });
+    for (const [other, window] of this.#windows) {
+      // An hour past its boundary a window can never gate anything again. Never the one just
+      // registered, though: a caller whose clock says the boundary is long gone still means it.
+      if (other !== key && window.boundaryTs * 1000 < atMs - 3_600_000) this.#windows.delete(other);
+    }
+  }
+
+  /**
+   * Every boundary window registered, by any market on any feed — or just one feed's, when asked.
+   *
+   * The default is deliberately global: the quiet zone a density tick has to respect is about the
+   * **transaction queue**, and there is one queue for the whole keeper because there is one key. A
+   * tick queued behind another feed's boundary relay is just as capable of arriving late, and of
+   * holding up the market it belongs to, as one queued behind its own.
+   */
+  relayWindows(feed?: Address): RelayWindow[] {
+    if (feed === undefined) return [...this.#windows.values()];
+    const prefix = `${feed.toLowerCase()}:`;
+    const out: RelayWindow[] = [];
+    for (const [key, window] of this.#windows) if (key.startsWith(prefix)) out.push(window);
+    return out;
+  }
+
+  /**
+   * Mark this market as having settlement work in flight: an `executeRound`, or a boundary relay.
+   *
+   * The boundary WINDOWS cover the scheduled case, but not the unscheduled one — a market catching
+   * up after an outage executes whenever it can, hours from any window, and it is exactly then that
+   * a round is closest to timing out into refunds. While any market is settling, nobody ticks.
+   */
+  beginSettlement(market: string): void {
+    this.#settling.add(market);
+  }
+
+  endSettlement(market: string): void {
+    this.#settling.delete(market);
+  }
+
+  /** True while any market has settlement work in flight. */
+  get settling(): boolean {
+    return this.#settling.size > 0;
+  }
+
+  /**
+   * Take the keeper's single density-tick slot. At most one tick is ever outstanding across every
+   * market: they all queue on one key, and a second one waiting behind the first can only ever be
+   * dropped at the front of the queue anyway.
+   */
+  beginTick(nowMs: number): boolean {
+    if (this.#tickInFlight || nowMs < this.#ticksPausedUntilMs) return false;
+    this.#tickInFlight = true;
+    return true;
+  }
+
+  endTick(): void {
+    this.#tickInFlight = false;
+  }
+
+  /**
+   * Stop density ticks everywhere until `untilMs`. Used after one fails on the wire: the pending
+   * transaction it may have left is in front of every market's settlement, not just its own.
+   */
+  pauseTicks(untilMs: number): void {
+    if (untilMs > this.#ticksPausedUntilMs) this.#ticksPausedUntilMs = untilMs;
+  }
+
+  /** True while density ticks are paused after a failure. */
+  ticksPaused(nowMs: number): boolean {
+    return nowMs < this.#ticksPausedUntilMs;
+  }
+
+  /**
+   * Reserve this feed's density tick for `bucket` (a `RELAY_TICK_MS` slot of wall-clock time).
+   * True for the first caller only, so two markets on one feed publish one extra print between
+   * them rather than two — the point of the setting is a lifelike cadence, not double the writes.
+   *
+   * Deliberately a namespace of its own: a tick must never be able to consume a (feed, boundary)
+   * claim, which is the reservation a round's settlement depends on.
+   */
+  claimTick(feed: Address, bucket: number): boolean {
+    const key = feed.toLowerCase();
+    if (this.#tickBuckets.get(key) === bucket) return false;
+    this.#tickBuckets.set(key, bucket);
+    return true;
   }
 
   #prune(map: Map<string, number>, atMs: number): void {
@@ -687,14 +818,32 @@ export class MarketWorker {
         });
       }
     }
+    // Publish this market's own boundary window, so every OTHER market on the same feed keeps its
+    // density ticks clear of it. Registered whenever the market can relay at all, including once
+    // the boundary is claimed: the window is still live while that relay is in flight.
+    if (profile?.relay?.canWrite) {
+      const lead = computeRelayLeadMs(perRelayLeadMs, relaySlots, round.oracleMaxAge);
+      this.#deps.relays.noteRelayWindow(profile.relay.feed, round.lockTs, round.lockTs * 1000 - lead, this.#now());
+    }
+
     return {
       executeLeadMs: this.#deps.config.schedule.executeLeadMs,
       relayLeadMs: perRelayLeadMs,
       relaySlots,
       relayEnabled,
+      relayTickMs: this.#tickEnabled() ? this.#deps.config.schedule.relayTickMs : 0,
       maxTimerMs: this.#deps.config.schedule.maxTimerMs,
       minTimerMs: this.#deps.config.schedule.minTimerMs,
     };
+  }
+
+  /**
+   * Whether this market may publish density ticks at all: `RELAY_TICK_MS` set, and a relay feed
+   * this key can actually write. Off by default and impossible on a real Chainlink feed, which has
+   * no `relay()` to call and no business being written to by a keeper.
+   */
+  #tickEnabled(): boolean {
+    return this.#deps.config.schedule.relayTickMs > 0 && this.#profile?.relay?.canWrite === true;
   }
 
   async #dispatch(plan: WakePlan, snapshot: MarketSnapshot): Promise<void> {
@@ -711,7 +860,15 @@ export class MarketWorker {
     this.#inFlight = true;
     let productive = false;
     try {
-      productive = plan.action === 'relay' ? await this.#relay(snapshot) : await this.#execute(snapshot, plan);
+      productive =
+        plan.action === 'relay'
+          ? await this.#relay(snapshot)
+          : plan.action === 'tick'
+            ? // Always "productive": a density tick is not the market's job, and letting a failing
+              // price API between boundaries grow the idle backoff would slow the wakes that ARE.
+              // `#tick` hands the work to the queue and returns; it never waits on it.
+              (this.#tick(), true)
+            : await this.#execute(snapshot, plan);
     } finally {
       this.#inFlight = false;
     }
@@ -763,6 +920,18 @@ export class MarketWorker {
    * `_priceAt` rejects any print timestamped after the boundary.
    */
   async #relay(snapshot: MarketSnapshot): Promise<boolean> {
+    // Same flag `#execute` sets: while a boundary relay is anywhere in this keeper's queue, no
+    // density tick may join it. The boundary window says the same thing about the schedule; this
+    // says it about the work actually in flight.
+    this.#deps.relays.beginSettlement(this.name);
+    try {
+      return await this.#relaySettling(snapshot);
+    } finally {
+      this.#deps.relays.endSettlement(this.name);
+    }
+  }
+
+  async #relaySettling(snapshot: MarketSnapshot): Promise<boolean> {
     const profile = this.#profile;
     if (!profile?.relay) return true;
     const relay = profile.relay;
@@ -1027,10 +1196,281 @@ export class MarketWorker {
   }
 
   // ───────────────────────────────────────────────────────────────────────────
+  // density ticks (testnet only, off by default)
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Publish an EXTRA relay print between boundaries, so a testnet feed has a mainnet-like cadence
+   * and the chart is not four points wide. `RELAY_TICK_MS`; off unless it is set.
+   *
+   * This is decoration, and it is written to behave like decoration. It never touches a
+   * (feed, boundary) claim, never counts towards `pendingAt`, never extends a lead, and is dropped
+   * — not queued, not delayed — whenever any boundary relay this keeper serves is near due. The
+   * settlement path is exactly as it was with the setting off; the only difference this can make to
+   * a round is that its boundary print is *fresher*, which is the direction that cannot hurt.
+   */
+  #tick(): void {
+    const relay = this.#profile?.relay;
+    const tickMs = this.#deps.config.schedule.relayTickMs;
+    if (!relay || !this.#tickEnabled() || tickMs <= 0) return;
+
+    // Chain time, not local: the windows are built from `lockTs`, which is a `block.timestamp`. A
+    // host clock a minute slow would otherwise place the quiet zone a minute away from the boundary
+    // it is supposed to protect — the same drift every other wake in this keeper is corrected for.
+    const nowMs = this.#chainNow();
+    // First gate, before anything is queued: the whole point is that a tick which cannot be taken
+    // is skipped rather than left sitting in the single-key queue in front of a boundary relay.
+    if (!this.#quietForTick(nowMs)) {
+      this.#log.debug('density tick skipped: a boundary relay is due', { feed: relay.feed });
+      return;
+    }
+    // One tick per feed per bucket, so two markets on one aggregator do not double the writes.
+    const bucket = Math.floor(nowMs / tickMs);
+    if (!this.#deps.relays.claimTick(relay.feed, bucket)) {
+      this.#log.debug('density tick for this bucket was already published by a market sharing the feed', {
+        feed: relay.feed,
+        bucket,
+      });
+      return;
+    }
+
+    // One density tick outstanding across the whole keeper, and none at all while they are paused
+    // after a failure — both are properties of the shared key, so both live on the coordinator.
+    if (!this.#deps.relays.beginTick(this.#now())) {
+      this.#log.debug('density tick skipped: one is already outstanding, or ticks are paused');
+      return;
+    }
+
+    // NOT awaited. The timer chain re-plans as soon as `#dispatch` returns, and a tick that is
+    // waiting behind somebody else's transaction must never be what stops this market arming its
+    // own boundary wake.
+    void this.#deps.queue
+      .submit(() => this.#tickQueued(relay, nowMs))
+      .catch((error: unknown) => {
+        this.#countFailure('relay-tick');
+        this.#log.debug('density tick failed', { error: errorText(error) });
+      })
+      .finally(() => {
+        this.#deps.relays.endTick();
+      });
+  }
+
+  /**
+   * True when `nowMs` is clear of EVERY boundary window this keeper is about to serve — every feed,
+   * not just this market's. One key means one transaction queue, so a tick sitting behind any
+   * boundary relay is a tick in the way of a settlement.
+   */
+  #quietForTick(nowMs: number): boolean {
+    // Any market actually settling right now, scheduled or not, ends the question immediately.
+    if (this.#deps.relays.settling) return false;
+    return tickAllowedAt(nowMs, this.#deps.relays.relayWindows(), RELAY_TICK_GUARD_MS, RELAY_TICK_GUARD_MS);
+  }
+
+  /** The tick itself, at the front of the single-key queue. */
+  async #tickQueued(relay: RelayProfile, plannedAtMs: number): Promise<void> {
+    // Re-taken at the front of the queue: whatever was ahead of this cost real time, and a boundary
+    // that was two minutes away when the tick was planned may be seconds away now.
+    if (!this.#quietForTick(this.#chainNow())) {
+      this.#log.debug('density tick dropped at the front of the queue: a boundary relay is now due', {
+        feed: relay.feed,
+        waitedMs: this.#now() - plannedAtMs,
+      });
+      return;
+    }
+
+    let price8dp: bigint;
+    let raw: string;
+    try {
+      const quote = await this.#deps.priceSource.get(relay.symbol);
+      price8dp = quote.price8dp;
+      raw = quote.raw;
+      this.#deps.metrics.increment(M.priceFetches, HELP[M.priceFetches] as string, {
+        symbol: relay.symbol,
+        outcome: quote.cached ? 'cached' : 'ok',
+      });
+    } catch (error) {
+      // Nothing settles on a tick, so a failed quote is a missing chart point and no more. It is
+      // counted, not escalated.
+      this.#deps.metrics.increment(M.priceFetches, HELP[M.priceFetches] as string, {
+        symbol: relay.symbol,
+        outcome: 'error',
+      });
+      this.#countFailure('relay-tick');
+      this.#log.debug('density tick skipped: price fetch failed', { symbol: relay.symbol, error: errorText(error) });
+      return;
+    }
+
+    const { publicClient, walletClient, chain } = this.#deps.clients;
+    const account = this.#deps.config.account;
+    try {
+      await publicClient.simulateContract({
+        address: relay.feed,
+        abi: relayAggregatorAbi,
+        functionName: 'relay',
+        args: [price8dp],
+        account,
+      });
+    } catch (error) {
+      this.#countFailure('relay-tick');
+      this.#log.warn('density tick simulation failed; not sending', { feed: relay.feed, error: errorText(error) });
+      return;
+    }
+
+    if (this.#deps.config.dryRun) {
+      this.#log.debug('DRY_RUN: would publish a density tick', { feed: relay.feed, symbol: relay.symbol, price: raw });
+      return;
+    }
+
+    const gas = await this.#estimateGas(() =>
+      publicClient.estimateContractGas({
+        address: relay.feed,
+        abi: relayAggregatorAbi,
+        functionName: 'relay',
+        args: [price8dp],
+        account,
+      }),
+    );
+
+    // Last gate before the wire. The quote, the simulation and the gas estimate are each a round
+    // trip, and `PRICE_TIMEOUT_MS` alone is seconds per endpoint.
+    if (!this.#quietForTick(this.#chainNow())) {
+      this.#log.debug('density tick dropped before sending: a boundary relay is now due', { feed: relay.feed });
+      return;
+    }
+
+    // The abort of last resort. `sendWithRetry` reads the gas price and the nonce before it
+    // broadcasts, and those are round trips of their own: the check above can be true and the wire
+    // still be reached inside the quiet zone. This one runs with nothing left between it and the
+    // transaction.
+    let abandoned = false;
+    // Whether anything actually reached the mempool. It decides what "abandoned" means: giving up
+    // before the first broadcast costs a chart point, giving up AFTER one leaves a transaction on
+    // this key's nonce that the next boundary relay has to queue behind.
+    let broadcast = false;
+    try {
+      const result = await sendWithRetry<TransactionReceipt>(this.#tickSendPolicy(), {
+        getBaseGasPrice: () => this.#baseGasPrice(),
+        getNonce: () => this.#nonce(),
+        send: async (ctx) => {
+          if (!this.#quietForTick(this.#chainNow())) {
+            abandoned = true;
+            throw new TerminalTxError('density tick abandoned: a boundary relay came due before it reached the wire');
+          }
+          return walletClient.writeContract({
+            address: relay.feed,
+            abi: relayAggregatorAbi,
+            functionName: 'relay',
+            args: [price8dp],
+            account,
+            chain,
+            gas,
+            nonce: ctx.nonce,
+            gasPrice: ctx.gasPriceWei,
+          });
+        },
+        waitForReceipt: (hash, timeoutMs) =>
+          publicClient.waitForTransactionReceipt({
+            hash,
+            timeout: timeoutMs,
+            confirmations: this.#deps.config.tx.confirmations,
+          }),
+        getReceiptIfMined: (hash) => this.#receiptIfMined(hash),
+        sleep: (ms) => sleep(ms),
+        now: this.#now,
+        onAttempt: (event) => {
+          if (event.outcome === 'sent') broadcast = true;
+          // One increment per ATTEMPT, exactly as the relay and execute paths count it — the
+          // metric is named `..._attempts_total` and a different rule here would make any
+          // retry-pressure alert read the two operations differently.
+          if (completesAttempt(event.outcome)) {
+            this.#deps.metrics.increment(M.txAttempts, HELP[M.txAttempts] as string, {
+              market: this.name,
+              op: 'tick',
+            });
+          }
+        },
+      });
+      this.#deps.metrics.increment(M.relayTicks, HELP[M.relayTicks] as string, { market: this.name });
+      this.#deps.metrics.increment(
+        M.txGasUsed,
+        HELP[M.txGasUsed] as string,
+        { market: this.name, op: 'tick' },
+        Number(result.receipt.gasUsed),
+      );
+      this.#log.debug('density tick published', {
+        feed: relay.feed,
+        symbol: relay.symbol,
+        price: raw,
+        txHash: result.hash,
+        latencyMs: this.#now() - plannedAtMs,
+      });
+    } catch (error) {
+      // Abandoned before anything was broadcast: nothing is pending, nothing is in anybody's way,
+      // and the cadence carries on. Abandoned *after* a broadcast is the other case entirely — the
+      // first attempt is still sitting on this key's nonce and its replacement was never sent — so
+      // it falls through to the failure path, which is loud and stops the ticks.
+      if (abandoned && !broadcast) {
+        this.#log.debug('density tick abandoned before the wire; a boundary relay came due', { feed: relay.feed });
+        return;
+      }
+      this.#countFailure('relay-tick');
+      // Louder than a missing chart point deserves, and deliberately so: a tick that was broadcast
+      // and never confirmed is sitting on this key's nonce, and the next boundary relay cannot mine
+      // until it does. Both attempts already tried to replace it at a higher gas price, so if this
+      // line appears, an operator has something to look at.
+      this.#log.error('density tick failed after replacing itself; a pending tick may delay the next relay', {
+        feed: relay.feed,
+        error: errorText(error),
+        hint: 'check the key for a stuck transaction, then raise GAS_PRICE_GWEI / MAX_GAS_PRICE_GWEI or unset RELAY_TICK_MS',
+      });
+      // Stop ticking for a while — everywhere, not just on this market. The pending transaction
+      // this may have left is on the key every market shares, so it is in front of all of their
+      // settlements, and another tick from a sibling market would only add to the pile.
+      this.#deps.relays.pauseTicks(this.#now() + TICK_PAUSE_AFTER_FAILURE_MS);
+    }
+  }
+
+  /**
+   * A tick's send policy: two attempts at a short receipt wait, and nothing more.
+   *
+   * Short, because every second a tick spends waiting is a second it holds the queue a boundary
+   * relay may need — the whole budget has to fit inside `RELAY_TICK_GUARD_MS`. Two rather than one,
+   * because `sendWithRetry` re-sends the SAME nonce at a higher gas price: a tick that is broadcast
+   * and then merely abandoned leaves a pending transaction the next boundary relay has to queue
+   * behind, and the relay's own gas ladder cannot clear it. The second attempt is how a tick gets
+   * out of settlement's way rather than into it.
+   */
+  #tickSendPolicy(): SendPolicy {
+    const tx = this.#deps.config.tx;
+    return {
+      maxAttempts: RELAY_TICK_ATTEMPTS,
+      // NOT `tx.backoff`: that ladder is the operator's, it can reach a minute, and
+      // `sendWithRetry` sleeps it inside the shared queue.
+      backoff: RELAY_TICK_BACKOFF,
+      receiptTimeoutMs: Math.min(tx.receiptTimeoutMs, RELAY_TICK_RECEIPT_MS),
+      gasBumpPercent: tx.gasBumpPercent,
+      maxGasPriceWei: tx.maxGasPriceWei,
+    };
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
   // executeRound
   // ───────────────────────────────────────────────────────────────────────────
 
   async #execute(snapshot: MarketSnapshot, plan: WakePlan): Promise<boolean> {
+    // Settlement work starts here, not when the transaction is sent: from this point until the
+    // receipt, no density tick anywhere in this keeper may take the single-key queue. It covers the
+    // case the scheduled boundary windows cannot — a market catching up hours after an outage,
+    // which is precisely when a round is closest to timing out into refunds.
+    this.#deps.relays.beginSettlement(this.name);
+    try {
+      return await this.#executeSettling(snapshot, plan);
+    } finally {
+      this.#deps.relays.endSettlement(this.name);
+    }
+  }
+
+  async #executeSettling(snapshot: MarketSnapshot, plan: WakePlan): Promise<boolean> {
     const startedAt = this.#now();
     const plannedBoundaryTs = snapshot.round.lockTs;
 
