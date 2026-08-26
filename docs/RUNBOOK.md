@@ -30,6 +30,14 @@ Two facts follow from the contract design and shape everything here:
 > Sourcify and requires no API key. All BSC testnet deployments of this project are verified there.
 > BscScan additionally needs `ETHERSCAN_API_KEY` (an Etherscan V2 multichain key).
 
+
+> **Rehearse mainnet before you mean it.** `forge script script/Deploy.s.sol:Deploy --rpc-url
+> $BSC_RPC_URL` *without* `--broadcast` simulates the whole deploy against real BNB Chain state —
+> real Chainlink feeds, real BSC-USDT — and prints the gas estimate. As of 2026-08-26 the full stack
+> costs **0.00073 BNB**. A dry run deliberately does **not** write `deployments/<chainId>.json`
+> (`vm.isContext(ScriptBroadcast)` guards it), because simulated addresses do not exist on chain and
+> both the keeper and the web build read that file as the source of truth.
+
 ## 0 · Prerequisites
 
 ```bash

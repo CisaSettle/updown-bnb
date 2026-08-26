@@ -396,3 +396,12 @@ fee — which is exactly the behaviour the design promises when there is nobody 
 
 The solvency invariant was checked live against the deployed contract mid-round:
 `balance = outstanding = 400 USDT`, `treasury = 0`, slack exactly 0.
+
+### Self-caught during the mainnet rehearsal
+
+Simulating the mainnet deploy (`forge script` with no `--broadcast`) revealed that `Deploy.s.sol`
+wrote `deployments/<chainId>.json` in a **dry run** as well as a real one. The keeper and the web
+build both read that file as the source of truth, so a rehearsal would have left behind a config
+pointing users at addresses that do not exist on chain. Writing is now guarded by
+`vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)`, verified by re-running the dry run and
+confirming no file appears.

@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {Script, console2} from "forge-std/Script.sol";
+import {VmSafe} from "forge-std/Vm.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
 import {UpDownMarketNative} from "../src/UpDownMarketNative.sol";
 import {UpDownRegistry} from "../src/UpDownRegistry.sol";
@@ -108,7 +109,14 @@ contract Deploy is Script {
 
         vm.stopBroadcast();
 
-        _write(address(registry), btc5m, btc1h, bnb5m, btcFeed, bnbFeed, usdt, isMainnet);
+        // Only a real broadcast may write the deployments file. A dry run's addresses do not exist
+        // on chain, and the keeper and the web build both read this file as the source of truth —
+        // a simulated one would point users at empty accounts.
+        if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) {
+            _write(address(registry), btc5m, btc1h, bnb5m, btcFeed, bnbFeed, usdt, isMainnet);
+        } else {
+            console2.log("DRY RUN: deployments/%s.json not written (simulated addresses).", block.chainid);
+        }
 
         console2.log("chainId       ", block.chainid);
         console2.log("registry      ", address(registry));
