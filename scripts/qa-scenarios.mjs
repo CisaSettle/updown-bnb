@@ -405,12 +405,17 @@ async function main() {
     }
   }
 
-  const scenarios = [
+  const all = [
     ['tie', scenarioTie],
     ['starved + griefed', scenarioStarvedAndGriefed],
     ['one-sided + claimTo', scenarioOneSidedAndClaimTo],
     ['permissionless + pause', scenarioPermissionlessAndPause],
   ]
+  // `--only tie,one-sided` reruns just the named scenarios: each 120 s round makes the full suite
+  // ~20 minutes, and rerunning three green scenarios to reach one red one proves nothing new.
+  const onlyArg = process.argv.indexOf('--only')
+  const wanted = onlyArg > 0 ? process.argv[onlyArg + 1].split(',') : null
+  const scenarios = wanted ? all.filter(([n]) => wanted.some((w) => n.includes(w))) : all
   // Sequential on purpose. All four relay through the same key, so running them together makes
   // them queue behind one another and land prints after their own boundaries — the very
   // shared-queue capacity problem the keeper has its relay-lead arithmetic for. Serialising the

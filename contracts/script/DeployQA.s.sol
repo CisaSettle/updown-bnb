@@ -6,6 +6,7 @@ import {VmSafe} from "forge-std/Vm.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
 import {UpDownMarketNative} from "../src/UpDownMarketNative.sol";
 import {RelayAggregator} from "../src/testnet/RelayAggregator.sol";
+import {QABettor} from "../src/testnet/QABettor.sol";
 
 /**
  * @notice Deploys a throwaway set of 60-second markets on BSC testnet whose price feeds the QA
@@ -40,6 +41,8 @@ contract DeployQA is Script {
         vm.startBroadcast(pk);
 
         // four independent (feed, market) pairs so scenarios never interfere
+        // the contract-account bettor the one-sided/claimTo scenario drives
+        address qaBettor = address(new QABettor());
         address[4] memory feeds;
         address[4] memory markets;
         for (uint256 i; i < 4; ++i) {
@@ -82,6 +85,7 @@ contract DeployQA is Script {
             vm.serializeAddress(k, "marketA", markets[0]);
             vm.serializeAddress(k, "marketB", markets[1]);
             vm.serializeAddress(k, "marketC", markets[2]);
+            vm.serializeAddress(k, "qaBettor", qaBettor);
             string memory out = vm.serializeAddress(k, "marketD", markets[3]);
             vm.writeJson(out, "./deployments/97-qa.json");
         }
