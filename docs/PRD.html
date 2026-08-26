@@ -1485,7 +1485,7 @@ function settlementAsset() external view returns (address);         <span class=
             <td>The settlement price is now a <b>pure function of the boundary timestamp</b> (the last print at or before it, proved on-chain), <code>executeRound</code> is permissionless, and the operator role is removed entirely. Regressions: <code>test_settlementPriceIsIndependentOfWhenExecuteIsCalled</code>, <code>test_supplyingAStalerRoundIdIsRejected</code>.</td></tr>
           <tr><td><span class="sev sev-m">medium</span></td>
             <td><code>oracleMaxAge</code> was global, so an admin could widen it just before execution to make a favourable stale print settle a live round.</td>
-            <td>Snapshotted per round. Regression: <code>test_wideningOracleMaxAgeCannotAlterAnOpenRound</code>.</td></tr>
+            <td>Snapshotted per round — and, after round 3, made <b>immutable</b> outright. Regression: <code>test_oracleMaxAgeIsImmutable</code>.</td></tr>
           <tr><td><span class="sev sev-m">medium</span></td>
             <td>Measured-delta crediting did not make arbitrary ERC20s safe (negative rebase, outbound transfer fee).</td>
             <td>Deposits now <b>require</b> the balance delta to equal the stake; non-conforming assets revert at bet time. Documented as a deployment constraint. Regression: <code>test_feeOnTransferAssetIsRejected</code>.</td></tr>
@@ -1503,6 +1503,62 @@ function settlementAsset() external view returns (address);         <span class=
             <td>Owner-gated, and the deployed testnet feed is the separately access-controlled <code>RelayAggregator</code>.</td></tr>
         </tbody>
       </table></div>
+      <h3>Round 2 — Codex (<code>gpt-5.6-sol</code>), 2026-08-26 → <b>CHANGES-REQUIRED, all fixed</b></h3>
+      <p>
+        Round&nbsp;1's redesign closed two serious holes and opened one of its own. That is the point
+        of reviewing the fix, not just the bug.
+      </p>
+      <div class="tw"><table class="rev">
+        <thead><tr><th>Sev</th><th>Finding</th><th>Resolution</th></tr></thead>
+        <tbody>
+          <tr><td><span class="sev sev-h">high</span></td>
+            <td>Permissionless execution combined with &ldquo;void on an unusable proof&rdquo; meant a <b>losing bettor could front-run an honest call with a bogus round id and force a full refund</b> — escaping their loss for the price of gas.</td>
+            <td>An invalid proof now <b>reverts</b> (<code>InvalidBoundaryProof</code>); voiding is reserved for a genuine timeout. A griefer pays gas and changes nothing. Regressions: <code>test_bogusRoundIdCannotForceARefund</code>, <code>test_deadOracleVoidsOnlyAfterTheWindowElapses</code>.</td></tr>
+          <tr><td><span class="sev sev-m">medium</span></td>
+            <td>The successor proof used <code>roundId + 1</code>, which breaks across a Chainlink aggregator <b>phase change</b> — making the settled price depend on whether the call landed before or after the upgrade.</td>
+            <td><code>_successorUpdatedAt</code> walks phases (<code>phaseId&nbsp;&lt;&lt;&nbsp;64&nbsp;|&nbsp;aggRoundId</code>). Regressions: <code>test_aggregatorPhaseChangeDoesNotChangeSettlement</code>, <code>test_phaseChangeStillRejectsANonFinalRound</code>.</td></tr>
+          <tr><td><span class="sev sev-m">medium</span></td>
+            <td>Only <em>inbound</em> ERC20 transfers were checked, so a token charging on the way out would mark a claim paid in full while the user received less.</td>
+            <td><code>_pushFunds</code> now checks the outbound delta too and reverts <code>UnsupportedAsset</code>. Regression: <code>test_outboundFeeAssetIsRejectedOnPayout</code>.</td></tr>
+          <tr><td><span class="sev sev-m">medium</span></td>
+            <td><code>Deploy.s.sol</code> read <code>msg.sender</code> inside the script frame — which is Foundry's default sender, not the broadcast signer. Registry ownership would have landed on the wrong address and the first <code>register</code> would have reverted.</td>
+            <td>Both scripts resolve the signer with <code>vm.addr(pk)</code>. <b>This would have broken the very first deployment.</b></td></tr>
+          <tr><td><span class="sev sev-m">medium</span></td>
+            <td><code>Genesis.s.sol</code> had the same <code>msg.sender</code> bug, so <code>acceptOwnership</code> would silently have been skipped.</td>
+            <td>Same fix.</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        Consequential change: <code>oracleMaxAge</code> became <b>immutable</b> (<code>setParams</code>
+        now takes only <code>feeBps</code> and <code>bufferSeconds</code>), so two rounds sharing a
+        boundary can never disagree about whether a proof is valid — which would otherwise stall the
+        market.
+      </p>
+
+      <h3>Round 3 — Codex (<code>gpt-5.6-sol</code>), 2026-08-26 → <b>CHANGES-REQUIRED (1 finding), fixed</b></h3>
+      <div class="tw"><table class="rev">
+        <thead><tr><th>Sev</th><th>Finding</th><th>Resolution</th></tr></thead>
+        <tbody>
+          <tr><td><span class="sev sev-m">medium</span></td>
+            <td><code>_pushFunds</code> validated only the <em>recipient's</em> gain. A surcharge token can credit the recipient exactly <code>amount</code> while debiting the market <code>amount + fee</code> — the claim finalises, looks correct to the claimant, and quietly under-collateralises everyone behind them.</td>
+            <td>Both sides are now checked: the recipient must gain exactly <code>amount</code> <b>and</b> the market must lose exactly <code>amount</code>. Regression: <code>test_senderSurchargeAssetIsRejectedOnPayout</code>.</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note"><span class="t">Operational note</span>
+        <code>Genesis.s.sol</code> signs with a single key and suits an EOA owner. With a Safe or
+        Timelock as owner, <code>acceptOwnership()</code> and <code>genesisStart()</code> must be
+        executed as governance transactions instead. Nothing else changes — <code>executeRound</code>
+        is permissionless and needs no owner involvement at all.
+      </p>
+      <p>
+        <b>Live-fork evidence.</b> <code>contracts/test/ChainlinkFork.t.sol</code> plays a full round —
+        bet, lock, settle, claim — against the <b>real</b> Chainlink BTC/USD aggregator on a BNB Chain
+        mainnet fork, rolling through real blocks so the feed genuinely updates underneath the market.
+        Mocks cannot prove Chainlink's composite round ids, its real print cadence against
+        <code>oracleMaxAge</code>, or that <code>findRoundIdAt</code> can locate a boundary in real
+        history. The test reports SKIPPED — never PASSED — when no fork RPC is configured.
+      </p>
+
     </div>
 
     <div class="l-zh">
@@ -1521,7 +1577,7 @@ function settlementAsset() external view returns (address);         <span class=
             <td>结算价现在是<b>边界时间戳的纯函数</b>（边界之前含边界的最后一条报价，并在链上加以证明）；<code>executeRound</code> 改为无需许可，operator 角色被彻底移除。回归测试：<code>test_settlementPriceIsIndependentOfWhenExecuteIsCalled</code>、<code>test_supplyingAStalerRoundIdIsRejected</code>。</td></tr>
           <tr><td><span class="sev sev-m">中</span></td>
             <td><code>oracleMaxAge</code> 原为全局参数，管理员可在执行前临时调大，使一条对自己有利的陈旧报价得以结算进行中的轮次。</td>
-            <td>改为逐轮快照。回归测试：<code>test_wideningOracleMaxAgeCannotAlterAnOpenRound</code>。</td></tr>
+            <td>改为逐轮快照。并在第 3 轮之后进一步改为<b>不可变</b>。回归测试：<code>test_oracleMaxAgeIsImmutable</code>。</td></tr>
           <tr><td><span class="sev sev-m">中</span></td>
             <td>按余额差额入账并不能让任意 ERC20 都变得安全（负向 rebase、转出时扣费等）。</td>
             <td>存入现在<b>要求</b>余额差额与下注额完全相等；不符合规范的资产在下注时直接回滚，并作为部署约束写入文档。回归测试：<code>test_feeOnTransferAssetIsRejected</code>。</td></tr>
@@ -1539,6 +1595,57 @@ function settlementAsset() external view returns (address);         <span class=
             <td>已改为仅限 owner；且测试网实际部署的喂价是独立做了访问控制的 <code>RelayAggregator</code>。</td></tr>
         </tbody>
       </table></div>
+    
+      <h3>第 2 轮 —— Codex（<code>gpt-5.6-sol</code>），2026-08-26 → <b>要求整改，已全部修复</b></h3>
+      <p>
+        第 1 轮的重新设计堵上了两个严重漏洞，同时自己又开了一个新的。这正是评审要看"修法"而不只看"原始 bug"的意义。
+      </p>
+      <div class="tw"><table class="rev">
+        <thead><tr><th>等级</th><th>问题</th><th>修复方式</th></tr></thead>
+        <tbody>
+          <tr><td><span class="sev sev-h">高</span></td>
+            <td>"无许可执行"叠加"证明不可用即作废"，意味着<b>眼看要输的下注者可以抢先用一个伪造的 roundId 调用，把整轮打成全额退款</b>——只花一笔 gas 就逃掉了本该承担的亏损。</td>
+            <td>无效证明现在直接 <b>revert</b>（<code>InvalidBoundaryProof</code>）；作废只保留给真正的超时。捣乱者白烧 gas，什么也改变不了。回归测试：<code>test_bogusRoundIdCannotForceARefund</code>、<code>test_deadOracleVoidsOnlyAfterTheWindowElapses</code>。</td></tr>
+          <tr><td><span class="sev sev-m">中</span></td>
+            <td>后继轮次的证明用了 <code>roundId + 1</code>，一旦 Chainlink 聚合器发生<b>相位切换</b>就会失效——结算价会取决于调用发生在升级之前还是之后。</td>
+            <td><code>_successorUpdatedAt</code> 改为跨相位查找（<code>phaseId&nbsp;&lt;&lt;&nbsp;64&nbsp;|&nbsp;aggRoundId</code>）。回归测试：<code>test_aggregatorPhaseChangeDoesNotChangeSettlement</code>、<code>test_phaseChangeStillRejectsANonFinalRound</code>。</td></tr>
+          <tr><td><span class="sev sev-m">中</span></td>
+            <td>只检查了 ERC20 的<em>转入</em>方向，因此一个"转出时收费"的代币会让合约把赔付记为已足额支付，而用户实际收到的更少。</td>
+            <td><code>_pushFunds</code> 现在同样检查转出增量，不符则 revert <code>UnsupportedAsset</code>。回归测试：<code>test_outboundFeeAssetIsRejectedOnPayout</code>。</td></tr>
+          <tr><td><span class="sev sev-m">中</span></td>
+            <td><code>Deploy.s.sol</code> 在脚本帧内读取了 <code>msg.sender</code>——那是 Foundry 的默认发送者，并非实际广播签名者。注册表的所有权会落到错误的地址上，第一次 <code>register</code> 就会 revert。</td>
+            <td>两个脚本改用 <code>vm.addr(pk)</code> 解析签名者。<b>这个 bug 会让第一次部署直接失败。</b></td></tr>
+          <tr><td><span class="sev sev-m">中</span></td>
+            <td><code>Genesis.s.sol</code> 有同样的 <code>msg.sender</code> 问题，会导致 <code>acceptOwnership</code> 被静默跳过。</td>
+            <td>同上修复。</td></tr>
+        </tbody>
+      </table></div>
+      <p>
+        连带改动：<code>oracleMaxAge</code> 改为<b>不可变</b>（<code>setParams</code> 现在只接受
+        <code>feeBps</code> 与 <code>bufferSeconds</code>）。共享同一个边界的两个轮次因此不可能对"证明是否有效"产生分歧——否则市场会卡住。
+      </p>
+
+      <h3>第 3 轮 —— Codex（<code>gpt-5.6-sol</code>），2026-08-26 → <b>要求整改（1 项），已修复</b></h3>
+      <div class="tw"><table class="rev">
+        <thead><tr><th>等级</th><th>问题</th><th>修复方式</th></tr></thead>
+        <tbody>
+          <tr><td><span class="sev sev-m">中</span></td>
+            <td><code>_pushFunds</code> 只校验了<em>收款方</em>的增量。一个"多扣少给"的代币可以给收款方恰好 <code>amount</code>，却从合约扣走 <code>amount + fee</code>——这笔赔付会正常完成、在领取者看来也完全正确，却悄悄让排在后面的所有人资不抵债。</td>
+            <td>现在两侧都校验：收款方必须恰好增加 <code>amount</code>，<b>且</b>合约必须恰好减少 <code>amount</code>。回归测试：<code>test_senderSurchargeAssetIsRejectedOnPayout</code>。</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note"><span class="t">运维提示</span>
+        <code>Genesis.s.sol</code> 用单一私钥签名，只适用于 EOA 作为 owner 的情形。若 owner 是 Safe 或
+        Timelock，<code>acceptOwnership()</code> 与 <code>genesisStart()</code> 需改为通过治理流程提交。其余不变——<code>executeRound</code>
+        是无许可的，完全不需要 owner 参与。
+      </p>
+      <p>
+        <b>主网 fork 实证。</b><code>contracts/test/ChainlinkFork.t.sol</code> 在 BNB Chain 主网 fork 上，对<b>真实</b>的
+        Chainlink BTC/USD 聚合器跑通一整轮——下注、锁定、结算、领取——并逐块推进 fork，让喂价在市场脚下真实地更新。
+        mock 无法证明 Chainlink 的复合 roundId 编码、真实报价节奏与 <code>oracleMaxAge</code> 的关系，也无法证明
+        <code>findRoundIdAt</code> 能在真实历史中定位边界。未配置 fork RPC 时，该测试报告 SKIPPED 而非 PASSED。
+      </p>
+
     </div>
   </section>
 

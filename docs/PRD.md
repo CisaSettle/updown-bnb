@@ -345,3 +345,54 @@ still only half a check.
 Operational note carried into the runbook: `Genesis.s.sol` assumes an EOA owner. When the owner is a
 multisig or Timelock, `acceptOwnership()` and `genesisStart()` must be executed through governance
 rather than the script.
+
+### Round 4 — Codex (`gpt-5.6-sol`), 2026-08-26 → **APPROVED, OPEN list empty**
+
+> "Round-3 finding is closed. I found no new issue requiring changes."
+
+Verified by the reviewer: `forge build` clean, `forge test` 71 passed / 0 failed / 1 skipped (the
+fork suite, which skips rather than falsely passing when no fork RPC is configured). The reviewer
+also confirmed the judgement calls rather than just the code changes — that checking only the
+market's inbound delta in `_pullFunds` is the right trade-off, that `claimTo(epochs, address(market))`
+fails safely, and that the live-fork evidence is adequate for the integration claim it makes.
+
+This is the cross-vendor consensus gate for the contracts. Four rounds, two high-severity findings
+and eight medium/low, every one closed with a named regression test.
+
+---
+
+## 11. Live deployment — BNB Smart Chain testnet (chain 97)
+
+Deployed, Sourcify-verified, keeper running, and proven end to end on chain on 2026-08-26.
+
+| Contract | Address |
+|---|---|
+| `UpDownRegistry` | `0x4A42E5CaC8Ef533699841bD1e482E0776a731A2e` |
+| BTC/USD 5m (USDT) | `0xbaBd1c1B13a524Ec53d17e9451AC69c424eA56c3` |
+| BTC/USD 1h (USDT) | `0xecE8eEa2f44b9a8101F030BF20aCFb3b247879C0` |
+| BNB/USD 5m (native BNB) | `0x5f1c8A7E6B2f84d819F95f6997F475834c50c00C` |
+| `TestUSDT` (faucet, 18 dp) | `0xD496A2CfF36396e6F2Ab89bD01A844D41c9023b5` |
+| `RelayAggregator` BTC/USD | `0xc63d95A4C38Fa677e0fdE136DF7F3Dc5Ea28B622` |
+| `RelayAggregator` BNB/USD | `0x0Bb81Ed57F3F3dCb1D250662cd9D32eB7EFb9c92` |
+
+### The first round, start to finish
+
+| | |
+|---|---|
+| Book | 100 USDT UP (bettor A) vs 300 USDT DOWN (bettor B) |
+| Odds quoted before lock | UP **3.9100×** · DOWN **1.3233×** (`odds()` = 39100 / 13233 bps) |
+| Strike (`lockPrice`) | **78 514.32** — Chainlink round id 2 at the boundary |
+| Settlement (`closePrice`) | **78 577.99** — Chainlink round id 3 at the next boundary |
+| Outcome | UP wins |
+| `rewardBaseAmount` / `rewardPoolAmount` | 100 / **391** USDT (`100 + 300 − 9`) |
+| Payout to A | **391 USDT** on a 100 stake — exactly the 3.91× quoted before the lock |
+| Loss to B | 300 USDT — never more than the stake |
+| Protocol fee | **9 USDT** = 3% of the 300 losing pool. Nothing taken from the winner's principal. |
+| Final balances | A 1291.0000 · B 700.0000 · market 9.0000 (treasury only) · `outstanding` 0 |
+
+Both 5-minute markets executed `kind: "on-time"` at every boundary. The BNB/USD market had no
+counterparty in its first round and was correctly voided `one-sided-book` — refundable in full, zero
+fee — which is exactly the behaviour the design promises when there is nobody to win from.
+
+The solvency invariant was checked live against the deployed contract mid-round:
+`balance = outstanding = 400 USDT`, `treasury = 0`, slack exactly 0.
