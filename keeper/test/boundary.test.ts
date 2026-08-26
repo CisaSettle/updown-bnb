@@ -4,13 +4,10 @@ import {
   firstRoundOfPhase,
   isRelayUsefulNow,
   isUsablePrint,
-  MAX_PHASE_LOOKAHEAD,
   phaseOf,
   relayLandingWindow,
-  resolveSuccessor,
-  successorCandidates,
+  successorId,
   UINT80_MAX,
-  usableLatestRoundId,
   verifyBoundaryRound,
   type BoundaryProof,
   type OraclePrint,
@@ -18,6 +15,8 @@ import {
 
 const BOUNDARY = 1_800_000_300;
 const MAX_AGE = 150;
+/** The phase the market under test is bound to. Bare ids (no proxy) live in phase 0. */
+const PHASE = 0n;
 
 const print = (roundId: bigint, updatedAt: number, answer = 8_400_000_000_000n): OraclePrint => ({
   roundId,
@@ -28,52 +27,27 @@ const print = (roundId: bigint, updatedAt: number, answer = 8_400_000_000_000n):
 const proof = (over: Partial<BoundaryProof> = {}): BoundaryProof => ({
   targetTs: BOUNDARY,
   oracleMaxAge: MAX_AGE,
+  oraclePhase: PHASE,
   candidate: print(42n, BOUNDARY - 10),
-  latestRoundId: 42n,
   next: null,
   chainNowSec: BOUNDARY + 2,
   ...over,
 });
 
-describe('usableLatestRoundId', () => {
-  // `_tryLatestRoundId` is the one contract read the mirror used to take on trust: it kept the round
-  // id and threw the rest away, so a feed whose latest print the CHAIN refuses still looked like a
-  // feed the keeper could prove a boundary against.
-  it('returns the round id of a latest print the contract would accept', () => {
-    expect(usableLatestRoundId(print(99n, BOUNDARY + 5))).toBe(99n);
-  });
+const round = (phase: bigint, n: bigint): bigint => (phase << 64n) | n;
 
-  it('rejects exactly what _tryLatestRoundId rejects, and nothing more', () => {
-    expect(usableLatestRoundId(null)).toBeNull();
-    expect(usableLatestRoundId(print(99n, BOUNDARY + 5, 0n))).toBeNull();
-    expect(usableLatestRoundId(print(99n, BOUNDARY + 5, -1n))).toBeNull();
-    expect(usableLatestRoundId(print(99n, 0))).toBeNull();
-    // The contract does NOT check the id or the block clock here, so neither may this.
-    expect(usableLatestRoundId(print(99n, BOUNDARY + 10_000))).toBe(99n);
-  });
-});
-
-describe('verifyBoundaryRound when latestRoundData is unusable', () => {
-  it('refuses the boundary, because _priceAt gives up when _tryLatestRoundId fails', () => {
-    // A textbook-perfect candidate: just before the boundary, well inside the staleness budget, with
-    // a successor already past it. The chain still settles nothing, because it cannot read a latest
-    // round to express finality against — and a mirror that says "verified" here sends a tx that
-    // reverts and, worse, tells the operator the round is fine while it times out into refunds.
-    const verdict = verifyBoundaryRound(
-      proof({ candidate: print(42n, BOUNDARY - 10), latestRoundId: null, next: print(43n, BOUNDARY + 5) }),
-    );
-    expect(verdict.usable).toBe(false);
-    expect(verdict.usable === false && verdict.reason).toMatch(/latestRoundData\(\) is unusable/);
-  });
-
-  it('refuses it even when the candidate looks like the latest print itself', () => {
-    const verdict = verifyBoundaryRound(proof({ candidate: print(42n, BOUNDARY - 10), latestRoundId: null }));
-    expect(verdict.usable).toBe(false);
-  });
-});
+// ─────────────────────────────────────────────────────────────────────────────
+// The finality rule, as `_priceAt` now states it.
+//
+// The contract used to prove finality against `_tryLatestRoundId` and to walk aggregator phases
+// forwards for the successor. It does neither any more: the market is bound to ONE phase for life,
+// so the successor is `roundId + 1` inside that phase and nothing else, and the feed's latest round
+// is not consulted at all. A mirror that kept either rule disagrees with the chain — and disagreeing
+// means predicting a void the chain would have settled, or certifying one it would reject.
+// ─────────────────────────────────────────────────────────────────────────────
 
 describe('verifyBoundaryRound', () => {
-  it('accepts the latest print when it is just before the boundary', () => {
+  it('accepts the last print of the phase when it is just before the boundary', () => {
     const verdict = verifyBoundaryRound(proof());
     expect(verdict).toEqual({ usable: true, roundId: 42n, answer: 8_400_000_000_000n, ageSec: 10 });
   });
@@ -97,23 +71,15 @@ describe('verifyBoundaryRound', () => {
     expect(tooOld.usable === false && tooOld.reason).toMatch(/stale at the boundary/);
   });
 
-  it('accepts a non-latest print when the following one is already past the boundary', () => {
-    const verdict = verifyBoundaryRound(
-      proof({ latestRoundId: 44n, next: print(43n, BOUNDARY + 5) }),
-    );
+  it('accepts a print whose successor is already past the boundary', () => {
+    const verdict = verifyBoundaryRound(proof({ next: print(43n, BOUNDARY + 5) }));
     expect(verdict.usable).toBe(true);
   });
 
-  it('rejects a non-latest print when the following one is also before the boundary', () => {
-    const verdict = verifyBoundaryRound(proof({ latestRoundId: 44n, next: print(43n, BOUNDARY - 1) }));
+  it('rejects a print whose successor is also at or before the boundary', () => {
+    const verdict = verifyBoundaryRound(proof({ next: print(43n, BOUNDARY - 1) }));
     expect(verdict.usable).toBe(false);
     expect(verdict.usable === false && verdict.reason).toMatch(/is also at or before the boundary/);
-  });
-
-  it('rejects a non-latest print whose successor is missing (an aggregator phase change)', () => {
-    const verdict = verifyBoundaryRound(proof({ latestRoundId: 44n, next: null }));
-    expect(verdict.usable).toBe(false);
-    expect(verdict.usable === false && verdict.reason).toMatch(/is missing/);
   });
 
   it('rejects when no print was found at all', () => {
@@ -129,19 +95,66 @@ describe('verifyBoundaryRound', () => {
 
   it('rejects updatedAt == 0 and a future-dated print', () => {
     expect(verifyBoundaryRound(proof({ candidate: print(42n, 0) })).usable).toBe(false);
-    const future = verifyBoundaryRound(
-      proof({ candidate: print(42n, BOUNDARY), chainNowSec: BOUNDARY - 10, latestRoundId: 42n }),
-    );
+    const future = verifyBoundaryRound(proof({ candidate: print(42n, BOUNDARY), chainNowSec: BOUNDARY - 10 }));
     expect(future.usable).toBe(false);
     expect(future.usable === false && future.reason).toMatch(/future/);
   });
 
-  it('refuses to walk past the uint80 ceiling', () => {
+  it('accepts the uint80 ceiling without asking for a successor, exactly as _priceAt returns early', () => {
     const verdict = verifyBoundaryRound(
-      proof({ candidate: print(UINT80_MAX, BOUNDARY - 1), latestRoundId: UINT80_MAX - 1n }),
+      proof({ oraclePhase: phaseOf(UINT80_MAX), candidate: print(UINT80_MAX, BOUNDARY - 1) }),
+    );
+    expect(verdict.usable).toBe(true);
+  });
+});
+
+describe('verifyBoundaryRound and the pinned aggregator phase', () => {
+  // The market binds to one phase at construction and refuses every other for life: `_tryRound`
+  // returns "no such print" for an out-of-phase id, so `executeRound` REVERTS on it rather than
+  // settling or voiding. A mirror that did not check this would hand the chain an id it cannot use.
+  it('refuses a candidate from another phase, naming both phases', () => {
+    const verdict = verifyBoundaryRound(
+      proof({ oraclePhase: 1n, candidate: print(round(2n, 5n), BOUNDARY - 10) }),
     );
     expect(verdict.usable).toBe(false);
-    expect(verdict.usable === false && verdict.reason).toMatch(/uint80 max/);
+    expect(verdict.usable === false && verdict.reason).toMatch(/aggregator phase 2.*bound to phase 1/);
+  });
+
+  it('accepts the bound phase\'s LAST print once the feed has moved on, because its successor is gone', () => {
+    // The aggregator rolled over. `roundId + 1` does not exist inside the bound phase, and the first
+    // round of the new phase is not a successor the contract will look at — so the old phase's last
+    // print is still provably the last one at this boundary, and `_priceAt` settles on it.
+    const verdict = verifyBoundaryRound({
+      targetTs: BOUNDARY,
+      oracleMaxAge: MAX_AGE,
+      oraclePhase: 1n,
+      candidate: { roundId: round(1n, 900n), answer: 8_400_000_000_000n, updatedAt: BOUNDARY - 12 },
+      next: null,
+      chainNowSec: BOUNDARY + 30,
+    });
+    expect(verdict.usable).toBe(true);
+  });
+
+  it('ignores a successor read from outside the phase, which the contract would never consult', () => {
+    // Even handed a perfectly real print from the next phase timestamped before the boundary, the
+    // verdict must not change: `_tryRound(roundId + 1)` is phase-filtered and sees nothing there.
+    const verdict = verifyBoundaryRound({
+      targetTs: BOUNDARY,
+      oracleMaxAge: MAX_AGE,
+      oraclePhase: 1n,
+      candidate: { roundId: (1n << 64n) | ((1n << 64n) - 1n), answer: 1n, updatedAt: BOUNDARY - 12 },
+      next: { roundId: round(2n, 1n), answer: 1n, updatedAt: BOUNDARY - 1 },
+      chainNowSec: BOUNDARY + 30,
+    });
+    expect(verdict.usable).toBe(true);
+  });
+
+  it('no longer refuses a boundary just because the feed\'s latest print is unusable', () => {
+    // `_priceAt` used to give up whenever `_tryLatestRoundId` failed, and the mirror copied it. The
+    // contract dropped that rule so the bound phase's own last print stays provable after the proxy
+    // moves on — so a mirror that kept it would predict refunds for a round the chain settles.
+    const verdict = verifyBoundaryRound(proof({ next: print(43n, BOUNDARY + 5) }));
+    expect(verdict.usable).toBe(true);
   });
 });
 
@@ -164,18 +177,6 @@ describe('isRelayUsefulNow', () => {
   });
 });
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Aggregator phases
-//
-// Chainlink proxy round ids are `phaseId << 64 | aggregatorRoundId`, so the successor of the last
-// round of a phase is the FIRST round of the next phase, not `roundId + 1`. The contract's
-// `_successorUpdatedAt` walks phases; anything here that does not is a mirror that disagrees with
-// the chain — and disagreeing means predicting a void the chain would have settled.
-// ─────────────────────────────────────────────────────────────────────────────
-
-const round = (phase: bigint, n: bigint): bigint => (phase << 64n) | n;
-
 describe('phase arithmetic', () => {
   it('splits a proxy round id into its phase and aggregator round', () => {
     expect(phaseOf(round(3n, 17n))).toBe(3n);
@@ -187,30 +188,19 @@ describe('phase arithmetic', () => {
   });
 });
 
-describe('successorCandidates', () => {
-  it('tries roundId + 1 first, exactly like the contract', () => {
-    expect(successorCandidates(round(2n, 5n), round(2n, 9n))).toEqual([round(2n, 6n)]);
+describe('successorId', () => {
+  it('is roundId + 1 inside the bound phase, and nothing else', () => {
+    expect(successorId(round(2n, 5n), 2n)).toBe(round(2n, 6n));
   });
 
-  it('falls through to the first round of the next phase', () => {
-    // This is the case that matters: `roundId` is the last round of phase 2, so `roundId + 1` does
-    // not exist and the real successor is (3 << 64) | 1.
-    const candidates = successorCandidates(round(2n, 900n), round(3n, 4n));
-    expect(candidates).toEqual([round(2n, 901n), round(3n, 1n)]);
+  it('is null at the last round of the phase, because the next id belongs to another aggregator', () => {
+    // This is the case the old phase walk got wrong in the other direction: it went looking for the
+    // next phase's first round. The contract does not, so a missing successor PROVES finality.
+    expect(successorId(round(2n, (1n << 64n) - 1n), 2n)).toBeNull();
   });
 
-  it('is bounded exactly like MAX_PHASE_LOOKAHEAD and never past the latest phase', () => {
-    const far = successorCandidates(round(2n, 900n), round(50n, 1n));
-    expect(far).toHaveLength(1 + MAX_PHASE_LOOKAHEAD);
-    expect(far[far.length - 1]).toBe(round(2n + BigInt(MAX_PHASE_LOOKAHEAD), 1n));
-
-    const near = successorCandidates(round(2n, 900n), round(4n, 1n));
-    expect(near).toEqual([round(2n, 901n), round(3n, 1n), round(4n, 1n)]);
-  });
-
-  it('offers nothing when the latest print is in the same phase or older', () => {
-    expect(successorCandidates(round(3n, 900n), round(3n, 900n))).toEqual([round(3n, 901n)]);
-    expect(successorCandidates(UINT80_MAX, UINT80_MAX)).toEqual([]);
+  it('is null at the uint80 ceiling, where _priceAt returns early', () => {
+    expect(successorId(UINT80_MAX, phaseOf(UINT80_MAX))).toBeNull();
   });
 });
 
@@ -223,39 +213,21 @@ describe('isUsablePrint', () => {
   });
 
   it('accepts a print the contract would accept', () => {
-    expect(isUsablePrint(p(), 7n, 2_000)).toBe(true);
+    expect(isUsablePrint(p(), 7n, 2_000, 0n)).toBe(true);
   });
 
   it('rejects everything _tryRound rejects, so a zero-filled read is not mistaken for a print', () => {
-    expect(isUsablePrint(null, 7n, 2_000)).toBe(false);
-    expect(isUsablePrint(p({ roundId: 8n }), 7n, 2_000)).toBe(false);
-    expect(isUsablePrint(p({ answer: 0n }), 7n, 2_000)).toBe(false);
-    expect(isUsablePrint(p({ updatedAt: 0 }), 7n, 2_000)).toBe(false);
-    expect(isUsablePrint(p({ updatedAt: 3_000 }), 7n, 2_000)).toBe(false);
-  });
-});
-
-describe('resolveSuccessor', () => {
-  it('finds the next phase\'s first round when roundId + 1 does not exist', async () => {
-    const prints = new Map<bigint, OraclePrint>([
-      [round(2n, 900n), { roundId: round(2n, 900n), answer: 1n, updatedAt: 100 }],
-      [round(3n, 1n), { roundId: round(3n, 1n), answer: 2n, updatedAt: 200 }],
-    ]);
-    const successor = await resolveSuccessor(round(2n, 900n), round(3n, 1n), async (id) => prints.get(id) ?? null);
-    expect(successor?.roundId).toBe(round(3n, 1n));
-    expect(successor?.updatedAt).toBe(200);
+    expect(isUsablePrint(null, 7n, 2_000, 0n)).toBe(false);
+    expect(isUsablePrint(p({ roundId: 8n }), 7n, 2_000, 0n)).toBe(false);
+    expect(isUsablePrint(p({ answer: 0n }), 7n, 2_000, 0n)).toBe(false);
+    expect(isUsablePrint(p({ updatedAt: 0 }), 7n, 2_000, 0n)).toBe(false);
+    expect(isUsablePrint(p({ updatedAt: 3_000 }), 7n, 2_000, 0n)).toBe(false);
   });
 
-  it('skips a phase that never existed and keeps walking', async () => {
-    const prints = new Map<bigint, OraclePrint>([
-      [round(5n, 1n), { roundId: round(5n, 1n), answer: 2n, updatedAt: 900 }],
-    ]);
-    const successor = await resolveSuccessor(round(2n, 900n), round(5n, 1n), async (id) => prints.get(id) ?? null);
-    expect(successor?.roundId).toBe(round(5n, 1n));
-  });
-
-  it('returns null when there is no successor anywhere in reach', async () => {
-    expect(await resolveSuccessor(round(2n, 900n), round(2n, 900n), async () => null)).toBeNull();
+  it('rejects an id from outside the bound phase before it looks at the data at all', () => {
+    const id = round(2n, 7n);
+    expect(isUsablePrint({ roundId: id, answer: 100n, updatedAt: 1_000 }, id, 2_000, 1n)).toBe(false);
+    expect(isUsablePrint({ roundId: id, answer: 100n, updatedAt: 1_000 }, id, 2_000, 2n)).toBe(true);
   });
 });
 
@@ -282,34 +254,5 @@ describe('findLastRoundOfPhase', () => {
     };
     await findLastRoundOfPhase(2n, exists, 96);
     expect(probes).toBeLessThanOrEqual(96);
-  });
-});
-
-describe('verifyBoundaryRound across a phase change', () => {
-  it('accepts the previous phase\'s last print when the new phase starts after the boundary', () => {
-    // The exact situation the keeper used to time out on: the aggregator rolled over, the new
-    // phase's first print is after the boundary, and the settleable print is the one before it.
-    const verdict = verifyBoundaryRound({
-      targetTs: BOUNDARY,
-      oracleMaxAge: MAX_AGE,
-      candidate: { roundId: round(2n, 900n), answer: 8_400_000_000_000n, updatedAt: BOUNDARY - 12 },
-      latestRoundId: round(3n, 1n),
-      next: { roundId: round(3n, 1n), answer: 8_400_000_000_001n, updatedAt: BOUNDARY + 6 },
-      chainNowSec: BOUNDARY + 30,
-    });
-    expect(verdict.usable).toBe(true);
-  });
-
-  it('explains a missing successor in terms of the phase walk, not just roundId + 1', () => {
-    const verdict = verifyBoundaryRound({
-      targetTs: BOUNDARY,
-      oracleMaxAge: MAX_AGE,
-      candidate: { roundId: round(2n, 900n), answer: 1n, updatedAt: BOUNDARY - 12 },
-      latestRoundId: round(3n, 1n),
-      next: null,
-      chainNowSec: BOUNDARY + 30,
-    });
-    expect(verdict.usable).toBe(false);
-    expect(verdict.usable === false && verdict.reason).toMatch(/aggregator phases/);
   });
 });

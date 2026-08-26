@@ -75,7 +75,14 @@ DEC=$(cast call $USDT "decimals()(uint8)" --rpc-url "$BSC_RPC_URL" 2>/dev/null)
   || bad asset "settlement asset check failed (symbol=$SYM decimals=$DEC)"
 
 # ── the Chainlink feeds are alive right now ──────────────────────────────────
-for pair in "BTC:0x264990fbd0A4796A3E3d8E37C4d5F87a3aCa5Ebf" "BNB:0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE"; do
+# Every feed a market is deployed against, and nothing else. A pair missing from this list is a
+# market whose price source nobody checked was alive before real money went in — and the feed
+# address is a constructor argument to an immutable contract, so there is no fixing it afterwards.
+# Keep in step with BSC_* in contracts/script/Deploy.s.sol.
+for pair in \
+  "BTC:0x264990fbd0A4796A3E3d8E37C4d5F87a3aCa5Ebf" \
+  "ETH:0x9ef1B8c0E4F7dc8bF5719Ea496883DC6401d5b2e" \
+  "BNB:0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE"; do
   NAME=${pair%%:*}; ADDR=${pair#*:}
   OUT=$(cast call "$ADDR" "latestRoundData()(uint80,int256,uint256,uint256,uint80)" --rpc-url "$BSC_RPC_URL" 2>/dev/null)
   UPD=$(echo "$OUT" | sed -n '4p' | sed 's/ .*//')
@@ -104,7 +111,7 @@ echo "${GRN}preflight passed${RST}"
 echo
 echo "═══ simulation (no broadcast) ═════════════════════════════════════════"
 forge script script/Deploy.s.sol:Deploy --rpc-url "$BSC_RPC_URL" 2>&1 \
-  | grep -E "chainId|registry|BTC/USD|BNB/USD|usdt|Feed|deployer|Estimated amount|DRY RUN|SIMULATION|Error" || true
+  | grep -E "chainId|registry|BTC/USD|ETH/USD|BNB/USD|usdt|Feed|deployer|Estimated amount|DRY RUN|SIMULATION|Error" || true
 
 # ── the point of no return ───────────────────────────────────────────────────
 cat <<BANNER

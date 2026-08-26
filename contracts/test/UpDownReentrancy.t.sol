@@ -159,6 +159,76 @@ contract UpDownReentrancyTest is Test {
         assertEq(market.currentEpoch(), epochBefore, "the round engine advanced from inside a payout");
         _assertSolvent();
     }
+
+    /**
+     * @notice And the treasury sweep, which is the one payout whose recipient the *owner* picks.
+     * @dev An owner who points `claimTreasury` at a contract they control gets the same arbitrary-
+     *      code hook a winner gets — except this one fires while the protocol's own balance is
+     *      being moved. A second sweep from inside the first would pay the accrued fee twice, and
+     *      the second payment can only come out of user stakes. Two things stop it and this test
+     *      pins both: `treasuryAmount` is zeroed *before* the push, and the entry point is
+     *      `nonReentrant`. Nothing had ever entered it re-entrantly.
+     */
+    function test_aTreasuryRecipientCannotReEnterAndSweepTwice() public {
+        uint256 accrued = market.treasuryAmount();
+        assertGt(accrued, 0, "fixture: a fee must have accrued");
+
+        ReentrantTreasury sink = new ReentrantTreasury(market);
+        vm.prank(owner);
+        market.transferOwnership(address(sink));
+        sink.accept(); // Ownable2Step: the sink has to claim it itself
+
+        uint256 marketBefore = address(market).balance;
+        sink.sweep();
+
+        assertTrue(sink.didReenter(), "the hook never fired: the test proves nothing");
+        assertEq(
+            sink.reentryError(),
+            abi.encodeWithSelector(ReentrancyGuard.ReentrancyGuardReentrantCall.selector),
+            "the nested treasury sweep was not rejected as re-entrant"
+        );
+        assertEq(sink.received(), accrued, "more than the accrued fee left the market");
+        assertEq(address(market).balance, marketBefore - accrued);
+        assertEq(market.treasuryAmount(), 0, "the fee must be collectable exactly once");
+        _assertSolvent();
+    }
+}
+
+/// @dev A treasury recipient that re-enters `claimTreasury` from inside its own payout. It owns the
+///      market, because `claimTreasury` is owner-only — which is the point: this is the attack an
+///      owner runs against their own users, not one an outsider can run.
+contract ReentrantTreasury {
+    UpDownMarketNative public immutable market;
+
+    bool public armed;
+    bool public didReenter;
+    uint256 public received;
+    /// @dev Empty means the nested sweep SUCCEEDED — which is the failure this test is hunting.
+    bytes public reentryError;
+
+    constructor(UpDownMarketNative m) {
+        market = m;
+    }
+
+    function accept() external {
+        market.acceptOwnership();
+    }
+
+    function sweep() external {
+        armed = true;
+        market.claimTreasury(address(this));
+    }
+
+    receive() external payable {
+        received += msg.value;
+        if (!armed) return;
+        armed = false; // fire once
+        didReenter = true;
+        try market.claimTreasury(address(this)) {}
+        catch (bytes memory err) {
+            reentryError = err;
+        }
+    }
 }
 
 /// @dev A winner whose `receive` hook re-enters the market while it is being paid. It fires once,

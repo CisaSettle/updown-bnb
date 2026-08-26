@@ -78,6 +78,32 @@ At most one relay transaction is ever sent per (feed, boundary): markets sharing
 pair before queueing, not after, so two of them can never both spend a queue slot that only one relay
 was budgeted for.
 
+### One aggregator phase, for life
+
+Chainlink proxy round ids are `phaseId << 64 | aggregatorRoundId`, and a proxy that confirms a
+replacement aggregator can serve history from *both* — at which point two different ids both look
+like "the last print at or before the boundary" and whoever calls picks the settlement price. The
+market therefore pins one phase at construction (`oraclePhase()`, immutable) and `_tryRound` throws
+away every print from any other: an out-of-phase id is not a weak proof, it is not a proof at all,
+and `executeRound` **reverts** on it rather than voiding.
+
+`src/boundary.ts` mirrors that exactly, and two rules the contract dropped are gone from it too:
+
+- **The successor probe is `roundId + 1`, inside the bound phase, and nothing else.** No phase walk
+  in either direction. A successor that does not exist is not a failure to look harder — it is the
+  *proof* that the candidate is the last print at the boundary.
+- **The feed's `latestRoundData()` is no longer part of the proof.** It survives for one job only:
+  telling whether the proxy has left the phase this market is bound to. `_priceAt` stopped consulting
+  it precisely so the bound phase's own last print stays provable after the proxy moves on, and a
+  mirror that kept the check would predict a void for boundaries the chain settles happily.
+
+The keeper reads `oraclePhase()` at bootstrap and refuses to submit an id outside it, counting
+`failures_total{kind="boundary-wrong-phase"}` rather than spending gas on a certain revert. If the
+feed really does change phase, the keeper says so at `error` and keeps settling from the bound
+phase's last print for as long as that print is still within `oracleMaxAge` of the boundary; after
+that nothing can be proved, every round refunds in full on its own timer, and the market has to be
+redeployed.
+
 ### Testnet feed density — `RELAY_TICK_MS` (optional, off by default)
 
 The relay above publishes **one print per boundary**, which is all settlement needs and all it ever
@@ -192,7 +218,7 @@ Only the first three are required.
 | `RELAY_LEAD_MS` | `20000` | Budget for **one** relay before `lockTs` (testnet only). The actual lead is this × the relay feeds sharing the boundary, capped at the round's `oracleMaxAge` less a 10 s block-time/clock-skew margin. |
 | `RELAY_TICK_MS` | `0` (off) | **Testnet only.** Publish an extra relay print roughly this often *between* boundaries, so the feed has a mainnet-like density to chart. Minimum `30000`; refused on `CHAIN_ID=56`. Ticks are skipped rather than queued whenever a boundary relay on that feed is due, never take the boundary's queue slot or claim, and get two attempts at an 8 s receipt wait so a tick clears its own nonce rather than leaving one in front of a relay. See [Testnet feed density](#testnet-feed-density--relay_tick_ms-optional-off-by-default). |
 | `MAX_TIMER_MS` | `900000` | Cap on a single timer; state is re-read at least this often. |
-| `IDLE_POLL_MS` | `30000` | Poll interval while a market is paused or not genesis-started. |
+| `IDLE_POLL_MS` | `30000` | Poll interval for a market with nothing to do: `genesisStart()` not called, or paused with no locked round left to settle. A paused market whose previous epoch is still **locked** is not idle — it is driven on the normal round schedule (relay lead, then `executeRound`) until that round settles. |
 | `TX_MAX_ATTEMPTS` | `4` | Attempts per logical transaction, including the first. |
 | `TX_RECEIPT_TIMEOUT_MS` | `30000` | How long to wait for a receipt before bumping and replacing. |
 | `TX_CONFIRMATIONS` | `1` | Confirmations required. |
@@ -220,8 +246,12 @@ Every value is validated at boot. A bad configuration prints **all** problems at
 Market addresses come from the deployments JSON written by `contracts/script/Deploy.s.sol`. Any key
 that is not a reserved one (`chainId`, `registry`, `usdt`, `owner`, `operator`, `relayFeeds`,
 `feeBps`, `*Feed`) and holds an address is treated as a market — so a future `ethUsd5m` needs no
-keeper change. Each market's `interval`, `bufferSeconds`, `oracleMaxAge`, `oracle` and
-`settlementAsset` are then read from the chain, never assumed.
+keeper change. Each market's `interval`, `bufferSeconds`, `oracleMaxAge`, `oracle`, `oraclePhase` and
+`settlementAsset` are then read from the chain, never assumed. `oraclePhase()` is part of that set on
+purpose: without it the keeper cannot know which boundary ids the contract will accept, so it would
+send ids that revert. A market that cannot answer it — anything deployed before the phase was pinned
+— fails to bootstrap deliberately, stays in `/healthz` as `unknown`, and is retried; redeploy from
+the current source rather than working around it.
 
 If the file is missing, the keeper says exactly which path it tried and that the deploy script has to
 run first. A market that fails to bootstrap is skipped with a loud log, stays in `/healthz` as
@@ -255,10 +285,14 @@ journalctl -u updown-keeper -f -o cat | jq 'select(.market=="btcUsd5m")'
 | State | Healthy | Meaning |
 | --- | --- | --- |
 | `ok` | yes | Executed within `HEALTH_INTERVALS × interval`. |
-| `inactive` | yes | Paused, or `genesisStart()` not called. The keeper is working; the market is closed. |
+| `inactive` | yes | `genesisStart()` has not been called. The keeper is working; the market is closed. |
+| `paused` | yes | The market is paused. The per-market field `pausedSettlement` says what that means: `none` — nothing outstanding; `pending` — a round that locked **before** the pause is inside its settlement window and the keeper is still calling `executeRound` for it. Pause stops new risk, never risk already taken. |
 | `stale` | no | Active, but no execution inside the budget. |
-| `degraded` | no | Executing on time and *not actually settling anything*. Two cases: the keeper key is not the relay feed's `updater`, so every `relay()` reverts; or more than half of the rounds it has completed recently (minimum sample 4, window 12 rounds) voided for a reason it is answerable for — no usable boundary print, never locked, settlement window elapsed. The execution budget alone reports both green, which is exactly why they are called out. A `tie` or a `one-sided-book` void is the market working as designed and never counts. |
+| `degraded` | no | Executing on time and *not actually settling anything*, **or** paused with `pausedSettlement: "missed"` — a round that locked before the pause ran out its settlement window, so every stake in it, the losing side included, is refundable now. `executeRound` is not pausable precisely so that cannot happen, and this is the alarm for when it does anyway. The other two cases: the keeper key is not the relay feed's `updater`, so every `relay()` reverts; or more than half of the rounds it has completed recently (minimum sample 4, window 12 rounds) voided for a reason it is answerable for — no usable boundary print, never locked, settlement window elapsed. The execution budget alone reports both green, which is exactly why they are called out. A `tie` or a `one-sided-book` void is the market working as designed and never counts. |
 | `unknown` | no | The market's state has never been read successfully, or it never bootstrapped at all. Silence about a market is a keeper failure, not a market state. |
+
+Each market object in the body also carries `paused` (bool) and `pausedSettlement`
+(`"none"` | `"pending"` | `"missed"`), so an operator never has to infer a pause from `inactive`.
 
 A market that fails to bootstrap is **not** dropped: it stays in this list as `unknown` with the
 reason it could not be read, and the keeper keeps retrying it (5s, backing off to 2 min) until it
@@ -293,6 +327,8 @@ transaction the account is unfunded whatever it is set to.
 | `updown_keeper_last_execution_latency_ms` | gauge | `market` |
 | `updown_keeper_current_epoch` | gauge | `market` |
 | `updown_keeper_market_active` / `_healthy` | gauge | `market` |
+| `updown_keeper_market_paused` | gauge | `market` |
+| `updown_keeper_paused_settlement_pending` | gauge | `market` |
 | `updown_keeper_balance_wei` / `_native` / `_below_floor` / `_unfunded` | gauge | — |
 | `updown_keeper_price_fetches_total` | counter | `symbol`, `outcome` |
 | `updown_keeper_clock_drift_seconds` | gauge | — |
@@ -327,6 +363,8 @@ rate(updown_keeper_rounds_voided_total[15m]) > 0
 increase(updown_keeper_failures_total[15m]) > 3
 updown_keeper_recent_fault_void_ratio > 0.5 and updown_keeper_recent_rounds_completed >= 4
 increase(updown_keeper_failures_total{kind="relay-late"}[30m]) > 0
+increase(updown_keeper_failures_total{kind="paused-settlement-missed"}[1h]) > 0
+updown_keeper_paused_settlement_pending == 1   # for: one interval
 abs(updown_keeper_clock_drift_seconds) > 5
 ```
 
@@ -351,10 +389,13 @@ host's clock has moved away from the chain's, which is the usual cause of that.
 | Host clock drifts from the chain | Wakes are planned on the chain's clock, so they still land where they were meant to; the drift is warned about above 5 s and exported as `updown_keeper_clock_drift_seconds`. The correction keeps the keeper working, which is exactly why the metric matters — a silent correction hides a real host fault. |
 | Rounds keep voiding while executions succeed | Every completed round is classified from the keeper's own receipt. More than half of the last 12 rounds' worth voiding for a keeper-side reason (minimum sample 4) makes the market `degraded` and `/healthz` `503`. Ties and one-sided books are excluded: they void by design. |
 | Boundary print missing or unusable | Logged at `error` *before sending* with the exact reason. The call still goes out: voiding unsticks the grid, and a stuck market cannot even take bets. |
+| Feed changes aggregator phase | Logged at `error`: the market is bound to the old phase for life. `findRoundIdAt` — which starts at the feed's latest round and only decrements — now finds nothing, so the keeper falls back to a search **inside the bound phase only** and names its last print, which `_priceAt` still accepts while it is within `oracleMaxAge` of the boundary. After that no boundary can be proved, every round refunds in full on its own timer, and the market must be redeployed. An id from the new phase is never sent: it would revert, burn gas and settle nothing (`failures_total{kind="boundary-wrong-phase"}`). |
+| Market predates the phase pinning | It has no `oraclePhase()`, so it fails to bootstrap on purpose, stays in `/healthz` as `unknown`, and is retried. Guessing the phase would mean sending boundary ids the contract reverts on. Redeploy from the current source. |
 | `findRoundIdAt` itself fails (RPC error) | The tick aborts and retries. "We could not look" is **not** treated as "the feed has no print": sending anyway would void a round that is still perfectly settleable. Past the settlement window the round can only void regardless, so the call is then still made. |
 | Someone else calls `executeRound` first | `executeRound` is permissionless, so the epoch can move while a tick is queued. The boundary and epoch are re-read from chain immediately before sending; if they moved, the keeper re-plans instead of pricing a stale boundary. A stale boundary's round id will not prove the live boundary, so the call reverts, burns gas and leaves the round to run down its buffer. |
 | Keeper was down for hours | One `executeRound` fast-forwards `currentEpoch` on chain. The keeper re-reads `currentEpoch` afterwards and logs how many rounds were skipped. |
-| Market paused / no genesis | Polled every `IDLE_POLL_MS`, reported `inactive`, not counted as unhealthy. |
+| No genesis | Polled every `IDLE_POLL_MS`, reported `inactive`, not counted as unhealthy. |
+| Market paused | Reported `paused`, healthy. If a round was **locked** before the pause, the keeper keeps relaying (testnet) and calling `executeRound` for it on the normal schedule until it settles, then goes quiet on `IDLE_POLL_MS`; density ticks are suppressed entirely for the duration, because they share the one key with the settlement that matters. `executeRound` is not pausable, so a pause cannot be used as a cancel button by an owner who is also a bettor and has just watched the settlement print go against them. If that round's window elapses first, the market is `degraded`, `/healthz` answers `503`, and `failures_total{kind="paused-settlement-missed"}` increments once for that epoch. A round that had *not* locked when the pause landed has no strike and refunds on its own timer, with no transaction from anybody. |
 | One market misbehaving | Contained to that market. A tick that achieves nothing backs off exponentially (2 s → 60 s) instead of spinning. The backoff is clamped for a **relay** wake so it can never grow past the boundary the print must beat — otherwise the backoff would void the very round it exists to protect. |
 | A market silently stops ticking | A 30 s watchdog re-arms any market that is running with no timer armed and no tick in flight, counting `failures_total{kind="watchdog-restart"}`. Every tick already re-arms on every exit path; this is the net under it, because a market that stops ticking is the one failure that looks healthy. |
 | Waiting for the boundary to pass on chain | `executeRound` reverts `TooEarly` while `block.timestamp <= boundaryTs` — the boundary second itself is still too early, because inside it a print timestamped exactly `boundaryTs` still qualifies and ordering would pick the settlement price. The keeper waits for `lockTs + 1`, and that wait happens **outside** the shared transaction queue. That queue is the single-key nonce lock: holding it for the (bounded, 30 s) clock wait would starve another market's relay, whose deadline is not forgiving. |
@@ -416,7 +457,7 @@ src/
   keeper.ts       supervisor: bootstrap, balance polling, health, gauges
   market.ts       per-market runtime: plan → relay → execute → re-plan
   schedule.ts     pure: when to wake, and for what
-  boundary.ts     pure: off-chain mirror of the contract's _priceAt proof
+  boundary.ts     pure: off-chain mirror of the contract's _priceAt proof (phase-pinned)
   price.ts        symbol mapping, exact decimal → 8dp, fetch with failover
   tx.ts           serialised sends, retry ladder, gas bumps, receipt recovery
   backoff.ts      pure: backoff, gas-bump maths, failure classification

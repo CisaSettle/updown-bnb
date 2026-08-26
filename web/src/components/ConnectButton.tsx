@@ -13,6 +13,22 @@ function hasInjectedProvider(): boolean {
   return Boolean((window as unknown as { ethereum?: unknown }).ethereum)
 }
 
+function isMobile(): boolean {
+  if (typeof navigator === 'undefined') return false
+  return /android|iphone|ipad|ipod/i.test(navigator.userAgent)
+}
+
+/**
+ * A phone browser never injects a provider, however many wallet apps are installed — the provider
+ * only exists inside the wallet's own browser. So the honest offer on a phone is not "install a
+ * wallet" (they probably have one) but "reopen this page where a wallet can reach it".
+ */
+function walletDeepLink(): string | null {
+  if (typeof window === 'undefined' || !isMobile()) return null
+  const { host, pathname, search, hash } = window.location
+  return `https://metamask.app.link/dapp/${host}${pathname}${search}${hash}`
+}
+
 export function ConnectButton() {
   const lang = useLang()
   const { address, isConnected } = useAccount()
@@ -100,6 +116,14 @@ export function ConnectButton() {
   const usable = connectors.filter((c) => c.type !== 'injected' || injectedAvailable)
 
   if (usable.length === 0) {
+    const deepLink = walletDeepLink()
+    if (deepLink) {
+      return (
+        <a className="btn-primary" href={deepLink} title={t(lang, ui.connect.openInWalletHint)}>
+          {t(lang, ui.connect.connect)}
+        </a>
+      )
+    }
     return (
       <a className="btn-primary" href="https://metamask.io/download/" target="_blank" rel="noreferrer">
         {t(lang, ui.connect.installWallet)}

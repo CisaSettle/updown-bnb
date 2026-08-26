@@ -32,6 +32,11 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
         working-directory: web
+      # The deploy path is independent of the CI workflow, so without this the site could ship
+      # from a commit whose UI tests are red — including the off-chain price-proof logic that
+      # decides which price a trader is shown.
+      - run: npm test
+        working-directory: web
       - run: npm run build
         working-directory: web
         env:
@@ -39,7 +44,13 @@ jobs:
           # so the site can never ship pointing at placeholder addresses.
           STRICT_DEPLOYMENT: '1'
           VITE_CHAIN_ID: ${{ github.event.inputs.chain_id || '97' }}
-          VITE_BASE_PATH: /${{ github.event.repository.name }}/
+          # Served at the root of updown.bluffking.ai, not from a repository subpath. The custom
+          # domain is what makes the host swappable later: moving off GitHub Pages becomes a DNS
+          # change rather than a new URL for everyone who has bookmarked the old one.
+          # The repository's Settings > Pages > Custom domain is the authoritative hostname
+          # binding for an Actions deployment. web/public/CNAME remains in the artifact as portable
+          # host metadata, but it does not replace that repository setting.
+          VITE_BASE_PATH: /
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web/dist

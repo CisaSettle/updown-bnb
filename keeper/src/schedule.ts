@@ -267,7 +267,15 @@ export function clampRelayLead(
  *
  * This is the number the feed count has to be checked against: past it the staleness budget runs out
  * before the queue does, so the last relays cannot land at or before `lockTs` however early the
- * keeper wakes, and those markets' rounds void. Never less than 1.
+ * keeper wakes, and those markets' rounds void.
+ *
+ * **Zero is a real answer.** This used to floor at 1, on the reasoning that the caller always has
+ * its own relay to send — but the question is not how many relays the caller intends to send, it is
+ * how many the budget can carry, and those come apart exactly when something is misconfigured. With
+ * a 20 s lead against a 1 s staleness budget the print lands 20 s before the boundary and `_priceAt`
+ * rejects it as too old, so not even one relay can be served. Reporting 1 there made
+ * `relaySlots > capacity` false and silenced the warning that exists to catch it, in the one case
+ * where the operator most needed telling.
  */
 export function relayCapacity(
   perRelayLeadMs: number,
@@ -276,7 +284,7 @@ export function relayCapacity(
 ): number {
   const per = Number.isFinite(perRelayLeadMs) ? Math.max(1, Math.floor(perRelayLeadMs)) : 1;
   const maxLead = clampRelayLead(Number.MAX_SAFE_INTEGER, oracleMaxAgeSec, safetyMs);
-  return Math.max(1, Math.floor(maxLead / per));
+  return Math.floor(maxLead / per);
 }
 
 /**

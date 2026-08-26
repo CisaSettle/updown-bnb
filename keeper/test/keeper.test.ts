@@ -117,6 +117,8 @@ function makeKeeper(over: Partial<KeeperState> = {}) {
         return 150;
       case 'oracle':
         return ORACLE;
+      case 'oraclePhase':
+        return 0n;
       case 'settlementAsset':
         return '0x0000000000000000000000000000000000000000' as Address;
       // Both markets are closed, so nothing here ever tries to execute a round: the only thing
@@ -128,7 +130,16 @@ function makeKeeper(over: Partial<KeeperState> = {}) {
       case 'currentEpoch':
         return 0n;
       case 'getRound':
-        return { startTs: 0n, lockTs: 0n, closeTs: 0n, bufferSeconds: 240, oracleMaxAge: 150 };
+        return {
+          startTs: 0n,
+          lockTs: 0n,
+          closeTs: 0n,
+          bufferSeconds: 240,
+          oracleMaxAge: 150,
+          locked: false,
+          settled: false,
+          voided: false,
+        };
       default:
         throw new Error(`unexpected read ${args.functionName}`);
     }
@@ -448,6 +459,8 @@ function makeSettlingKeeper(receiptLogs: () => unknown[], opts: { chainSkewSec?:
         return 150;
       case 'oracle':
         return ORACLE;
+      case 'oraclePhase':
+        return 0n;
       case 'settlementAsset':
         return '0x0000000000000000000000000000000000000000' as Address;
       case 'description':
@@ -470,6 +483,9 @@ function makeSettlingKeeper(receiptLogs: () => unknown[], opts: { chainSkewSec?:
           closeTs: BigInt(state.lockTs + INTERVAL_SEC),
           bufferSeconds: 240,
           oracleMaxAge: 150,
+          locked: false,
+          settled: false,
+          voided: false,
         };
       case 'findRoundIdAt':
         return [BOUNDARY_ROUND, true];

@@ -1,5 +1,5 @@
 import * as ui from '../content/ui'
-import { formatAmountWithSymbol, formatBreakEven, formatMultiple, overroundPoints } from '../lib/format'
+import { formatAmount, formatAmountWithSymbol, formatBreakEven, formatMultiple, overroundPoints } from '../lib/format'
 import { t, useLang, type Lang } from '../lib/i18n'
 import { balancedMultipleBps, computeOdds } from '../lib/market'
 
@@ -203,6 +203,40 @@ export function OddsPanel({
           t(lang, live ? ui.odds.finalLive : ui.odds.movingOpen)
         )}
       </p>
+
+      {priced ? (
+        <details className="group mt-2">
+          <summary className="cursor-pointer list-none text-[11px] font-semibold text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
+            {t(lang, ui.odds.howTitle)}
+          </summary>
+          <div className="mt-1.5 space-y-1.5 rounded-lg bg-slate-100 p-2.5 dark:bg-slate-800/60">
+            <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+              {t(lang, ui.odds.howIntro)}
+            </p>
+            {(['up', 'down'] as const).map((s2) => {
+              const win = s2 === 'up' ? up : down
+              const lose = s2 === 'up' ? down : up
+              return (
+                <p key={s2} className="num overflow-x-auto whitespace-nowrap text-[11px] text-slate-700 dark:text-slate-200">
+                  {t(
+                    lang,
+                    ui.oddsFormula(
+                      s2,
+                      formatAmount(win, decimals, { maxFrac: 2 }),
+                      formatAmount(lose, decimals, { maxFrac: 2 }),
+                      `${((10_000 - feeBps) / 100).toFixed(feeBps % 100 === 0 ? 0 : 2)}%`,
+                      formatMultiple(s2 === 'up' ? upEff : downEff),
+                    ),
+                  )}
+                </p>
+              )
+            })}
+            <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+              {t(lang, ui.odds.howYourShare)}
+            </p>
+          </div>
+        </details>
+      ) : null}
 
       {priced && overround !== undefined ? (
         <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">

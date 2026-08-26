@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { AutoClaimToggle } from './AutoClaimToggle'
 import { useAccount } from 'wagmi'
 import { marketViewAbi } from '../abi'
 import * as ui from '../content/ui'
@@ -202,6 +203,8 @@ export function PositionsPanel({
               : t(lang, label)}
         </button>
       </div>
+
+      <AutoClaimToggle market={market} lang={lang} />
 
       <div className="p-5">
         {!isConnected ? (

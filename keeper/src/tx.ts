@@ -112,24 +112,76 @@ export interface SendResult<R extends MinimalReceipt> {
   latencyMs: number;
 }
 
+/**
+ * What this send put on the wire before it failed, and whether it can be sure.
+ *
+ * A caller deciding whether a failure is recoverable needs this and cannot work it out from
+ * outside: a relay that never reached the node can be retried freely, while one that may have a
+ * transaction in flight must not send a second for a boundary only one print can serve.
+ *
+ * `broadcast` holds the hashes actually returned. `attempted` is the load-bearing field, and it is
+ * deliberately the weaker, safer question: did we ever *call* `send`? A node can accept
+ * `eth_sendRawTransaction` and still lose the response on the way back, in which case `send`
+ * rejects with no hash while the transaction is very much alive. Keying the decision on the hash
+ * would call that case safe and send a second transaction for the same boundary — the precise harm
+ * the conservative original was protecting against. So only a failure strictly *before* the first
+ * `send` call counts as provably nothing-sent.
+ */
+export interface BroadcastRecord {
+  readonly broadcast: readonly Hex[];
+  readonly attempted: boolean;
+}
+
 /** A deterministic on-chain rejection: retrying the same call this tick cannot help. */
-export class TerminalTxError extends Error {
+export class TerminalTxError extends Error implements BroadcastRecord {
   override readonly name = 'TerminalTxError';
   readonly hash: Hex | undefined;
-  constructor(message: string, options?: { cause?: unknown; hash?: Hex }) {
+  readonly broadcast: readonly Hex[];
+  readonly attempted: boolean;
+  constructor(
+    message: string,
+    options?: { cause?: unknown; hash?: Hex; broadcast?: readonly Hex[]; attempted?: boolean },
+  ) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.hash = options?.hash;
+    this.broadcast = options?.broadcast ?? (options?.hash ? [options.hash] : []);
+    // A terminal error only ever arises from a send that was made, so default to true: an omitted
+    // flag must never be read as "nothing was sent".
+    this.attempted = options?.attempted ?? true;
   }
 }
 
 /** Every attempt failed transiently. */
-export class ExhaustedTxError extends Error {
+export class ExhaustedTxError extends Error implements BroadcastRecord {
   override readonly name = 'ExhaustedTxError';
   readonly attempts: number;
-  constructor(message: string, attempts: number, options?: { cause?: unknown }) {
+  readonly broadcast: readonly Hex[];
+  readonly attempted: boolean;
+  constructor(
+    message: string,
+    attempts: number,
+    options?: { cause?: unknown; broadcast?: readonly Hex[]; attempted?: boolean },
+  ) {
     super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.attempts = attempts;
+    this.broadcast = options?.broadcast ?? [];
+    this.attempted = options?.attempted ?? true;
   }
+}
+
+/**
+ * Might this failure have put something on the wire?
+ *
+ * Answers the safe question, not the precise one. `false` only when the error carries an explicit
+ * `attempted: false` — a gas-price or nonce read that threw before the send loop was entered, the
+ * one case where nothing can possibly be in flight. Everything else, including an error from
+ * outside this module and a rejected `send` that returned no hash, reads as `true`, because a lost
+ * response to an accepted `eth_sendRawTransaction` looks exactly like a send that never happened.
+ */
+export function didBroadcast(error: unknown): boolean {
+  const record = error as Partial<BroadcastRecord> | null;
+  if (record && typeof record === 'object' && record.attempted === false) return false;
+  return true;
 }
 
 /**
@@ -146,17 +198,44 @@ export async function sendWithRetry<R extends MinimalReceipt>(
   deps: SendDeps<R>,
 ): Promise<SendResult<R>> {
   const startedAt = deps.now();
-  const baseGasPrice = await deps.getBaseGasPrice();
-  let nonce = await deps.getNonce();
+  // Anything that throws in here happens before a single `send` call, so it is the only region a
+  // caller may treat as provably nothing-sent. Wrapping it is what makes that claim checkable
+  // rather than a comment.
+  let baseGasPrice: bigint;
+  let nonce: number;
+  try {
+    baseGasPrice = await deps.getBaseGasPrice();
+    nonce = await deps.getNonce();
+  } catch (error) {
+    throw new ExhaustedTxError(`could not prepare the transaction: ${errorText(error)}`, 0, {
+      cause: error,
+      broadcast: [],
+      attempted: false,
+    });
+  }
   const broadcast: Hex[] = [];
+  let attempted = false;
   let lastError: unknown;
+  /**
+   * Nonces where a `send` rejected without ever handing back a hash.
+   *
+   * A node can accept `eth_sendRawTransaction` and lose the response, so for these the transaction
+   * may well be alive even though we have no hash to look it up by. That matters one place in
+   * particular: if the very same nonce later comes back "too low", the ordinary reading — somebody
+   * else took the slot — is the wrong one. It was almost certainly us.
+   */
+  const ambiguousNonces = new Set<number>();
 
   for (let attempt = 0; attempt < policy.maxAttempts; attempt += 1) {
     const gasPriceWei = bumpGasPrice(baseGasPrice, attempt, policy.gasBumpPercent, policy.maxGasPriceWei);
     const ctx: AttemptContext = { attempt, nonce, gasPriceWei };
     const attemptStart = deps.now();
+    const broadcastBefore = broadcast.length;
 
     try {
+      // Set before the call, not after: a node can accept the transaction and lose the response, so
+      // "we started sending" is the only thing we can assert once control leaves this line.
+      attempted = true;
       const hash = await deps.send(ctx);
       broadcast.push(hash);
       deps.onAttempt?.({ attempt, gasPriceWei, nonce, hash, outcome: 'sent', latencyMs: deps.now() - attemptStart });
@@ -171,7 +250,7 @@ export async function sendWithRetry<R extends MinimalReceipt>(
           outcome: 'reverted',
           latencyMs: deps.now() - attemptStart,
         });
-        throw new TerminalTxError(`transaction ${hash} reverted on chain`, { hash });
+        throw new TerminalTxError(`transaction ${hash} reverted on chain`, { hash, broadcast: [...broadcast], attempted });
       }
       deps.onAttempt?.({ attempt, gasPriceWei, nonce, hash, outcome: 'mined', latencyMs: deps.now() - attemptStart });
       return {
@@ -185,11 +264,23 @@ export async function sendWithRetry<R extends MinimalReceipt>(
       if (error instanceof TerminalTxError) throw error;
       lastError = error;
 
+      // Did THIS attempt leave the node's answer unknown?
+      //
+      // Only if the node never told us it refused. "Nonce too low" and a deterministic rejection
+      // are the node saying, explicitly, that it did not take the transaction — nothing is in
+      // flight from that attempt. A timeout or a dropped connection is the opposite: the node may
+      // have accepted it and we simply never heard. `broadcast.length` covers the third case, where
+      // a hash came back and the failure was later, since then the transaction can be found by
+      // receipt and needs no guessing.
+      const nodeRefusedThisAttempt = isNonceError(error) || classifyFailure(error) === 'terminal';
+      const gotHashThisAttempt = broadcast.length > broadcastBefore;
+      if (!nodeRefusedThisAttempt && !gotHashThisAttempt) ambiguousNonces.add(nonce);
+
       // A replacement attempt may have raced with an earlier one landing.
       const landed = await findLandedReceipt(broadcast, deps);
       if (landed) {
         if (landed.receipt.status === 'reverted') {
-          throw new TerminalTxError(`transaction ${landed.hash} reverted on chain`, { hash: landed.hash });
+          throw new TerminalTxError(`transaction ${landed.hash} reverted on chain`, { hash: landed.hash, broadcast: [...broadcast], attempted });
         }
         deps.onAttempt?.({
           attempt,
@@ -209,7 +300,7 @@ export async function sendWithRetry<R extends MinimalReceipt>(
       }
 
       if (classifyFailure(error) === 'terminal') {
-        throw new TerminalTxError(`transaction rejected: ${errorText(error)}`, { cause: error });
+        throw new TerminalTxError(`transaction rejected: ${errorText(error)}`, { cause: error, broadcast: [...broadcast], attempted });
       }
       deps.onAttempt?.({
         attempt,
@@ -223,9 +314,24 @@ export async function sendWithRetry<R extends MinimalReceipt>(
       const isLast = attempt === policy.maxAttempts - 1;
       if (isLast) break;
 
-      // The nonce slot is gone (an external transaction from the same key took it, or one of our
-      // own attempts landed and was not visible as a receipt yet). Re-reading it is the only thing
-      // that can make the remaining attempts anything other than guaranteed failures.
+      // The nonce slot is gone. Two very different things cause that, and they need opposite
+      // responses.
+      //
+      // If nothing of ours could have taken it, an external transaction from the same key did, and
+      // re-reading the nonce is the only thing that makes the remaining attempts anything other
+      // than guaranteed failures.
+      //
+      // But if we already sent at this nonce and never saw the result, then "too low" is the node
+      // telling us OUR transaction landed. Re-nonceing there re-broadcasts the same relay under a
+      // fresh nonce — two transactions for a boundary only one print can ever serve — and worse,
+      // `sendWithRetry` would then RETURN SUCCESSFULLY, so the caller's `didBroadcast` guard never
+      // gets a say. The duplicate is invisible from outside. Stop instead, and report it as sent.
+      if (isNonceError(error) && ambiguousNonces.has(nonce)) {
+        throw new TerminalTxError(
+          `nonce ${nonce} was consumed after an attempt whose result was never seen: a transaction of ours is in flight`,
+          { cause: error, broadcast: [...broadcast], attempted: true },
+        );
+      }
       if (isNonceError(error)) {
         try {
           const refreshed = await deps.getNonce();
@@ -251,7 +357,7 @@ export async function sendWithRetry<R extends MinimalReceipt>(
   throw new ExhaustedTxError(
     `all ${policy.maxAttempts} attempts failed: ${errorText(lastError)}`,
     policy.maxAttempts,
-    { cause: lastError },
+    { cause: lastError, broadcast: [...broadcast], attempted },
   );
 }
 

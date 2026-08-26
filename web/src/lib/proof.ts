@@ -7,7 +7,7 @@
  *
  * This file replays it. It does not invent a second, looser rule — every predicate below is either
  * the same expression the Solidity uses or a call into `settlement.ts`, which is the line-for-line
- * mirror of `_priceAt` / `_successorUpdatedAt` / `_tryRound`. What it adds is *reporting*: which
+ * mirror of `_priceAt` / `_tryRound`. What it adds is *reporting*: which
  * check passed, which failed, and the actual seconds involved, so "verified" is a claim the reader
  * can audit rather than a badge they have to trust.
  *
@@ -54,7 +54,7 @@ export interface BoundaryReport extends BoundarySpec {
   oracleMaxAge: number
   /** Signed seconds from the print to the boundary; positive means the print came first. */
   leadSeconds?: number
-  /** The print `_successorUpdatedAt` settled on, when one was found. */
+  /** The immediate successor print `_priceAt` inspected, when one was found. */
   successor?: OraclePrint
 }
 
@@ -80,14 +80,10 @@ export function proofBoundaries(round: Round | undefined): BoundarySpec[] {
  * Every feed round id the check has to read: each recorded id, plus every id the contract's own
  * successor walk would consult for it.
  *
- * Deliberately *not* `boundaryReadIds`, which drops the successor read when the candidate is the
- * feed's newest print. That shortcut is right for the contract, which evaluates `latestRoundData`
- * in the same call it settles in. Here the "latest" is an RPC answer that may already be a few
- * seconds old, and trusting it would let a stale cache turn "nothing came after" into a pass on a
- * boundary that does now have a successor. Reading `id + 1` regardless costs one multicall slot
- * and removes that whole class of false pass.
+ * Each recorded id is paired with `id + 1`, exactly as `_priceAt` probes it. A completed successor
+ * read that reverts is affirmative evidence too: Solidity catches that revert as "no next print".
  */
-export function proofReadIds(oracleIds: readonly (bigint | undefined)[], latestRoundId?: bigint): bigint[] {
+export function proofReadIds(oracleIds: readonly (bigint | undefined)[]): bigint[] {
   const seen = new Set<string>()
   const ids: bigint[] = []
   const push = (id: bigint) => {
@@ -99,8 +95,7 @@ export function proofReadIds(oracleIds: readonly (bigint | undefined)[], latestR
   for (const id of oracleIds) {
     if (id === undefined) continue
     push(id)
-    if (latestRoundId === undefined) continue
-    for (const candidate of successorCandidates(id, latestRoundId)) push(candidate)
+    for (const candidate of successorCandidates(id)) push(candidate)
   }
   return ids
 }
@@ -331,7 +326,7 @@ function freshCheck(oracleMaxAge: number, lead: bigint | undefined): ProofCheck 
 
 function lastCheck(
   spec: BoundarySpec,
-  latestRoundId: bigint | undefined,
+  successorChecked: boolean | undefined,
   prints: ReadonlyMap<string, OraclePrint>,
   nowSeconds: number,
 ): { check: ProofCheck; successor?: OraclePrint } {
@@ -342,46 +337,48 @@ function lastCheck(
   const id = spec.oracleId.toString()
   const atEn = formatTime(spec.boundaryTs, 'en')
   const atZh = formatTime(spec.boundaryTs, 'zh')
-  if (latestRoundId === undefined) {
-    return {
-      check: {
-        key: 'last',
-        status: 'unknown',
-        title,
-        detail: {
-          en: 'The feed’s latest round could not be read, so the successor walk cannot start. Not checked.',
-          zh: '无法读取喂价的最新轮次，后继遍历无从开始。此项未核验。',
-        },
-      },
-    }
-  }
-
-  const successor = successorPrint(spec.oracleId, latestRoundId, prints, nowSeconds)
+  const successor = successorPrint(spec.oracleId, prints, nowSeconds)
   if (!successor) {
-    if (latestRoundId === spec.oracleId) {
+    const tried = successorCandidates(spec.oracleId)
+    if (tried.length === 0) {
+      // The market is bound to one aggregator phase for life, and settlement refuses to read an id
+      // outside it. So a phase's final round has no successor the chain would ever consult, and it
+      // stands as the boundary price on its own. This is a pass, not an unread check.
       return {
         check: {
           key: 'last',
           status: 'pass',
           title,
           detail: {
-            en: `Round ${id} is the feed’s newest print and nothing follows it, so it is trivially the last one at or before ${atEn}.`,
-            zh: `轮次 ${id} 就是喂价的最新一笔、其后没有任何报价，因此它必然是 ${atZh} 之前（含）的最后一笔。`,
+            en: `Round ${id} is the last round of the aggregator phase this market is bound to, and settlement never reads outside that phase, so nothing can follow it at or before ${atEn}.`,
+            zh: `轮次 ${id} 是本市场所绑定的那个聚合器阶段（phase）的最后一轮，而结算从不读取该阶段之外的报价，因此在 ${atZh} 之前（含）不可能再有下一笔。`,
           },
         },
       }
     }
-    const tried = successorCandidates(spec.oracleId, latestRoundId)
-      .map((c) => c.toString())
-      .join(', ')
+    if (successorChecked) {
+      const triedIds = tried.map((c) => c.toString()).join(', ')
+      return {
+        check: {
+          key: 'last',
+          status: 'pass',
+          title,
+          detail: {
+            en: `The contract’s immediate-successor check found no usable print at ${triedIds}, so round ${id} is the last qualifying print at or before ${atEn}.`,
+            zh: `合约对紧邻后继轮次 ${triedIds} 的检查未发现可用报价，因此轮次 ${id} 是 ${atZh} 之前（含）的最后一笔合格报价。`,
+          },
+        },
+      }
+    }
+    const triedIds = tried.map((c) => c.toString()).join(', ')
     return {
       check: {
         key: 'last',
         status: 'unknown',
         title,
         detail: {
-          en: `Could not read the print that follows round ${id} (tried ${tried}). This part of the rule is NOT checked.`,
-          zh: `无法读取轮次 ${id} 之后的那一笔报价（尝试过 ${tried}）。规则的这一部分尚未核验。`,
+          en: `Could not read the print that follows round ${id} (tried ${triedIds}). This part of the rule is NOT checked.`,
+          zh: `无法读取轮次 ${id} 之后的那一笔报价（尝试过 ${triedIds}）。规则的这一部分尚未核验。`,
         },
       },
     }
@@ -439,15 +436,19 @@ export function verifyBoundary(args: {
   nowSeconds: number
   priceDecimals: number
   candidate?: OraclePrint
-  latestRoundId?: bigint
+  /** Whether the immediate-successor read completed, including a revert/no-data result. */
+  successorChecked?: boolean
   prints: ReadonlyMap<string, OraclePrint>
 }): BoundaryReport {
-  const { spec, oracleMaxAge, nowSeconds, priceDecimals, candidate, latestRoundId, prints } = args
+  const { spec, oracleMaxAge, nowSeconds, priceDecimals, candidate, prints } = args
 
   const idMatches = candidate !== undefined && candidate.roundId === spec.oracleId
   const lead = idMatches && candidate.updatedAt !== 0 ? spec.boundaryTs - BigInt(candidate.updatedAt) : undefined
 
-  const last = lastCheck(spec, latestRoundId, prints, nowSeconds)
+  const successors = successorCandidates(spec.oracleId)
+  const successorChecked =
+    args.successorChecked ?? successors.every((id) => prints.has(id.toString()))
+  const last = lastCheck(spec, successorChecked, prints, nowSeconds)
   const checks: ProofCheck[] = [
     usableCheck(spec.oracleId, candidate, nowSeconds, priceDecimals),
     matchCheck(spec, candidate, priceDecimals),
@@ -496,9 +497,9 @@ export function withdrawClaims(report: BoundaryReport, reason: Text): BoundaryRe
  * the hook it could only be exercised against a live chain, which is precisely where an honest feed
  * would never show you the failure modes that matter.
  *
- * `results` and `latestRoundId` must be passed as `undefined` unless the reads behind them have
- * *just* landed. Both are load-bearing: a caller that hands over a previous success while the
- * current read is in flight or failed gets checks that report "not checked", never a stale pass.
+ * `results` must be passed as `undefined` unless the reads behind it have just landed. A caller that
+ * hands over a previous success while the current read is in flight or failed gets checks that
+ * report "not checked", never a stale pass.
  */
 export function proofReportsFromReads(args: {
   boundaries: readonly BoundarySpec[]
@@ -508,10 +509,8 @@ export function proofReportsFromReads(args: {
   ids: readonly bigint[]
   /** Raw `useReadContracts` entries, positionally matching `ids`. */
   results?: readonly unknown[]
-  /** Already through `latestUsableRoundId`; undefined means `_tryLatestRoundId` would fail. */
-  latestRoundId?: bigint
 }): BoundaryReport[] {
-  const { boundaries, oracleMaxAge, nowSeconds, priceDecimals, ids, results, latestRoundId } = args
+  const { boundaries, oracleMaxAge, nowSeconds, priceDecimals, ids, results } = args
 
   // Two views of the same reads, and the difference is deliberate. `prints` is what the contract's
   // successor walk is allowed to see — `_tryRound` discards an answer returned under a different id
@@ -519,7 +518,10 @@ export function proofReportsFromReads(args: {
   // reported as the failure it is instead of disappearing into "unreadable".
   const prints = new Map<string, OraclePrint>()
   const raw = new Map<string, OraclePrint>()
+  const completed = new Set<string>()
   ids.forEach((id, i) => {
+    const status = (results?.[i] as { status?: string } | undefined)?.status
+    if (status === 'success' || status === 'failure') completed.add(id.toString())
     const print = toPrint(pick(results, i))
     if (!print) return
     raw.set(id.toString(), print)
@@ -533,7 +535,7 @@ export function proofReportsFromReads(args: {
       nowSeconds,
       priceDecimals,
       candidate: raw.get(spec.oracleId.toString()),
-      latestRoundId,
+      successorChecked: successorCandidates(spec.oracleId).every((id) => completed.has(id.toString())),
       prints,
     }),
   )

@@ -125,6 +125,20 @@ export const marketAbi = [
     outputs: [{ name: '', type: 'address', internalType: 'contract IAggregatorV3' }],
     stateMutability: 'view',
   },
+  /**
+   * The aggregator phase this market is bound to **for life** (`roundId >> 64`).
+   *
+   * `_tryRound` throws away any print from another phase, so a boundary id outside this phase is not
+   * a proof the market can accept: `executeRound` reverts `InvalidBoundaryProof` rather than voiding.
+   * The keeper reads it so it can refuse to send such an id at all.
+   */
+  {
+    type: 'function',
+    name: 'oraclePhase',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256', internalType: 'uint256' }],
+    stateMutability: 'view',
+  },
   {
     type: 'function',
     name: 'settlementAsset',
@@ -195,6 +209,7 @@ export const marketAbi = [
 
   // ── custom errors, so viem decodes a revert into a readable name ──────────
   { type: 'error', name: 'NotStarted', inputs: [] },
+  { type: 'error', name: 'InvalidBoundaryProof', inputs: [] },
   { type: 'error', name: 'TooEarly', inputs: [] },
   { type: 'error', name: 'EnforcedPause', inputs: [] },
   { type: 'error', name: 'ReentrancyGuardReentrantCall', inputs: [] },

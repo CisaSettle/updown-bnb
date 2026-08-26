@@ -28,12 +28,26 @@ jobs:
         run: forge test
         working-directory: contracts
         env: {FOUNDRY_PROFILE: ci}
+      # This step is the only evidence in CI that the market works against the REAL Chainlink
+      # aggregator, and on its own it cannot fail for the two reasons that would hollow it out:
+      # `forge test` exits 0 when a `--match-contract` filter matches nothing (a rename or a moved
+      # file), and the suite `vm.skip`s itself — also exit 0 — when it cannot reach a fork. Either
+      # way the tick would be green having proved nothing. So assert on the machine-readable
+      # result: at least one test ran, and every one of them passed.
       - name: Live-fork integration against the real Chainlink feed
-        run: forge test --match-contract ChainlinkForkTest -vv
         working-directory: contracts
         env:
           FOUNDRY_PROFILE: default
           FORK_RPC_URL: https://bsc-mainnet.public.blastapi.io
+        run: |
+          forge test --match-contract ChainlinkForkTest --json > fork-results.json || true
+          jq -r 'to_entries[] as $s | $s.value.test_results | to_entries[]
+                 | "\($s.key)::\(.key) -> \(.value.status)"' fork-results.json \
+            || { echo "::error::forge produced no test report"; cat fork-results.json; exit 1; }
+          jq -e '[.[].test_results | to_entries[]]
+                 | length > 0 and all(.[]; .value.status == "Success")' fork-results.json > /dev/null \
+            || { echo "::error::the live-fork suite did not run to a pass (renamed, filtered out, or skipped)";
+                 forge test --match-contract ChainlinkForkTest -vvv; exit 1; }
 
   keeper:
     runs-on: ubuntu-latest
@@ -48,6 +62,26 @@ jobs:
       - run: npm test
         working-directory: keeper
 
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      # The bilingual pages are committed so they can be opened straight from the repo, which means
+      # they can also silently stop matching the Markdown they came from. Rebuilding and diffing is
+      # the only way to notice: the generator already refuses to build a translation that has lost a
+      # section, and this catches the quieter case where the source changed and nobody re-ran it.
+      - run: node scripts/build-bilingual-docs.mjs
+      - name: the committed bilingual docs are up to date
+        run: |
+          if ! git diff --quiet -- docs/README.html docs/RUNBOOK.html; then
+            echo "docs/README.html or docs/RUNBOOK.html is stale."
+            echo "Run: node scripts/build-bilingual-docs.mjs  — and commit the result."
+            git diff --stat -- docs/README.html docs/RUNBOOK.html
+            exit 1
+          fi
+
   web:
     runs-on: ubuntu-latest
     steps:
@@ -56,6 +90,12 @@ jobs:
         with: {node-version: '22', cache: npm, cache-dependency-path: web/package-lock.json}
       - run: npm ci
         working-directory: web
+      # `npm run build` is `tsc --noEmit && vite build`, so this is the type gate too.
       - run: npm run build
         working-directory: web
         env: {VITE_CHAIN_ID: '97'}
+      # The trading UI carries the off-chain mirror of `_priceAt` that decides which price a trader
+      # is shown, and the whole vitest suite that guards it used to run nowhere: no `npm test` step
+      # here and no git hooks, so a red suite could merge and deploy unnoticed.
+      - run: npm test
+        working-directory: web

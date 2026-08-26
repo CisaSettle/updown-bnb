@@ -59,6 +59,15 @@ abstract contract UpDownFixture is Test {
     // ── asset plumbing: the only thing that differs between the two markets ──
 
     function _deployMarket() internal virtual returns (UpDownMarketBase);
+    /// @dev Deploy another market of this fixture's asset type against an arbitrary price feed,
+    ///      with the fixture's parameters. Lets a suite test what the *constructor* does with a
+    ///      feed, on both concrete markets, without a second copy of the argument list.
+    function _deployOnFeed(address feed_) internal virtual returns (UpDownMarketBase);
+    /// @dev Point every helper in this fixture at `m` — and give the actors whatever standing
+    ///      permission that market needs — so a suite can drive a second market through the same
+    ///      `_betUp` / `_advance` / `_claim` vocabulary. Deliberately does not touch `feed`: a
+    ///      caller that redeployed against another price source assigns that itself.
+    function _useMarket(UpDownMarketBase m) internal virtual;
     function _fund(address user) internal virtual;
     function _betUp(address who, uint256 amount) internal virtual;
     function _betDown(address who, uint256 amount) internal virtual;
@@ -130,6 +139,22 @@ abstract contract UpDownErc20Fixture is UpDownFixture {
         return erc20;
     }
 
+    function _deployOnFeed(address feed_) internal override returns (UpDownMarketBase) {
+        return new UpDownMarketERC20(
+            owner, feed_, address(usdt), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
+        );
+    }
+
+    function _useMarket(UpDownMarketBase m) internal override {
+        erc20 = UpDownMarketERC20(address(m));
+        market = m;
+        address[3] memory users = [alice, bob, carol];
+        for (uint256 i; i < 3; ++i) {
+            vm.prank(users[i]);
+            usdt.approve(address(m), type(uint256).max);
+        }
+    }
+
     function _fund(address user) internal override {
         usdt.mint(user, START_BALANCE);
         vm.prank(user);
@@ -168,6 +193,18 @@ abstract contract UpDownNativeFixture is UpDownFixture {
             owner, address(feed), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
         );
         return nativeMarket;
+    }
+
+    function _deployOnFeed(address feed_) internal override returns (UpDownMarketBase) {
+        return
+            new UpDownMarketNative(
+                owner, feed_, INTERVAL, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
+            );
+    }
+
+    function _useMarket(UpDownMarketBase m) internal override {
+        nativeMarket = UpDownMarketNative(address(m));
+        market = m; // native betting needs no standing permission: the value rides with the call
     }
 
     function _fund(address user) internal override {

@@ -8,7 +8,7 @@
  *     the panel says "verified"  ⟹  `_priceAt` would return this exact price
  *
  * `chainWouldSettle` below is the right-hand side, and it is deliberately **not** built out of
- * `settlement.ts`. It is `_priceAt` / `_successorUpdatedAt` / `_tryRound` / `_tryLatestRoundId`
+ * `settlement.ts`. It is `_priceAt` / `_tryRound`
  * transcribed by hand from `contracts/src/UpDownMarketBase.sol`. A model that shared code with the
  * thing under test could only prove the panel agrees with itself.
  *
@@ -47,42 +47,15 @@ function readRound(feed: Feed, id: bigint): unknown {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const PHASE_SHIFT = 64n
-const MAX_PHASE_LOOKAHEAD = 8n
 const UINT80_MAX = (1n << 80n) - 1n
 
 /** `_tryRound` */
-function tryRound(feed: Feed, id: bigint, chainNow: number): FeedRound | undefined {
+function tryRound(feed: Feed, id: bigint, chainNow: number, oraclePhase: bigint): FeedRound | undefined {
+  if (id >> PHASE_SHIFT !== oraclePhase) return undefined
   const r = feed.rounds.get(id.toString())
   if (!r) return undefined // the call reverted; the contract catches
   if (r.idEcho !== id || r.answer <= 0n || r.updatedAt === 0 || r.updatedAt > chainNow) return undefined
   return r
-}
-
-/** `_tryLatestRoundId` */
-function tryLatestRoundId(feed: Feed): bigint | undefined {
-  if (!feed.latest) return undefined
-  if (feed.latest.answer <= 0n || feed.latest.updatedAt === 0) return undefined
-  return feed.latest.id
-}
-
-/** `_successorUpdatedAt` */
-function successorUpdatedAt(feed: Feed, id: bigint, latestId: bigint, chainNow: number): number | undefined {
-  if (id !== UINT80_MAX) {
-    const next = tryRound(feed, id + 1n, chainNow)
-    if (next) return next.updatedAt
-  }
-  const phase = id >> PHASE_SHIFT
-  const latestPhase = latestId >> PHASE_SHIFT
-  if (latestPhase <= phase) return undefined
-  const capped = phase + MAX_PHASE_LOOKAHEAD
-  const limit = latestPhase < capped ? latestPhase : capped
-  for (let p = phase + 1n; p <= limit; p++) {
-    const candidate = (p << PHASE_SHIFT) | 1n
-    if (candidate > UINT80_MAX) break
-    const got = tryRound(feed, candidate, chainNow)
-    if (got) return got.updatedAt
-  }
-  return undefined
 }
 
 /** `_priceAt` — the price the chain would settle this boundary on, or undefined for a revert. */
@@ -93,16 +66,14 @@ function chainWouldSettle(
   oracleMaxAge: number,
   chainNow: number,
 ): bigint | undefined {
-  const got = tryRound(feed, id, chainNow)
+  const oraclePhase = id >> PHASE_SHIFT
+  const got = tryRound(feed, id, chainNow, oraclePhase)
   if (!got) return undefined
   if (BigInt(got.updatedAt) > boundaryTs) return undefined
   if (boundaryTs - BigInt(got.updatedAt) > BigInt(oracleMaxAge)) return undefined
-  const latestId = tryLatestRoundId(feed)
-  if (latestId === undefined) return undefined
-  if (latestId === id) return got.answer
-  const next = successorUpdatedAt(feed, id, latestId, chainNow)
-  if (next === undefined) return undefined
-  if (BigInt(next) <= boundaryTs) return undefined
+  if (id === UINT80_MAX) return got.answer
+  const next = tryRound(feed, id + 1n, chainNow, oraclePhase)
+  if (next && BigInt(next.updatedAt) <= boundaryTs) return undefined
   return got.answer
 }
 
@@ -122,8 +93,7 @@ function runPanel(
   opts: { oracleMaxAge?: number; nowSeconds?: number; readsLanded?: boolean } = {},
 ) {
   const { oracleMaxAge = MAX_AGE, nowSeconds = NOW, readsLanded = true } = opts
-  const latestRoundId = readsLanded ? tryLatestRoundId(feed) : undefined
-  const ids = proofReadIds(specs.map((s) => s.oracleId), latestRoundId)
+  const ids = proofReadIds(specs.map((s) => s.oracleId))
   const results = readsLanded ? ids.map((id) => readRound(feed, id)) : undefined
   const reports = proofReportsFromReads({
     boundaries: specs,
@@ -132,7 +102,6 @@ function runPanel(
     priceDecimals: 8,
     ids,
     results,
-    latestRoundId,
   })
   return { outcome: combineOutcomes(reports), reports }
 }
@@ -262,16 +231,16 @@ describe('the panel cannot show a pass the chain would not', () => {
     assertNoFalsePass(feed, [lockSpec(10n)])
   })
 
-  it('claims nothing when the successor read comes back empty', () => {
+  it('passes when the successor read reverts, exactly as the contract catch does', () => {
     const feed = feedOf([[10n, 10n, PRICE, Number(BOUNDARY) - 30]], {
       id: 17n,
       answer: PRICE,
       updatedAt: Number(BOUNDARY) + 20,
     })
     const { outcome, reports } = runPanel(feed, [lockSpec(10n)])
-    expect(outcome).toBe('incomplete')
-    expect(reports[0].checks.find((c) => c.key === 'last')?.status).toBe('unknown')
-    assertNoFalsePass(feed, [lockSpec(10n)])
+    expect(outcome).toBe('verified')
+    expect(reports[0].checks.find((c) => c.key === 'last')?.status).toBe('pass')
+    expect(assertNoFalsePass(feed, [lockSpec(10n)])).toBe('verified')
   })
 
   it('claims nothing when the recorded id itself cannot be read', () => {
@@ -282,20 +251,20 @@ describe('the panel cannot show a pass the chain would not', () => {
     assertNoFalsePass(feed, [lockSpec(10n)])
   })
 
-  it('claims nothing when latestRoundData reverts', () => {
+  it('is unaffected when latestRoundData reverts, because _priceAt never calls it', () => {
     const feed = feedOf([[10n, 10n, PRICE, Number(BOUNDARY) - 30], AFTER], undefined)
-    expect(runPanel(feed, [lockSpec(10n)]).outcome).toBe('incomplete')
-    assertNoFalsePass(feed, [lockSpec(10n)])
+    expect(runPanel(feed, [lockSpec(10n)]).outcome).toBe('verified')
+    expect(assertNoFalsePass(feed, [lockSpec(10n)])).toBe('verified')
   })
 
-  it('claims nothing when the latest print is unusable, which stops the walk on chain too', () => {
+  it('is unaffected by an unusable latest print, which _priceAt does not read', () => {
     const feed = feedOf([[10n, 10n, PRICE, Number(BOUNDARY) - 30], AFTER], {
       id: 11n,
       answer: 0n,
       updatedAt: Number(BOUNDARY) + 20,
     })
-    expect(runPanel(feed, [lockSpec(10n)]).outcome).toBe('incomplete')
-    assertNoFalsePass(feed, [lockSpec(10n)])
+    expect(runPanel(feed, [lockSpec(10n)]).outcome).toBe('verified')
+    expect(assertNoFalsePass(feed, [lockSpec(10n)])).toBe('verified')
   })
 
   it('refuses a non-positive answer, which the contract discards', () => {

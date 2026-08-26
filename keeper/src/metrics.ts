@@ -127,6 +127,8 @@ export const M = {
   lastExecutionLatency: 'updown_keeper_last_execution_latency_ms',
   currentEpoch: 'updown_keeper_current_epoch',
   marketActive: 'updown_keeper_market_active',
+  marketPaused: 'updown_keeper_market_paused',
+  pausedSettlementPending: 'updown_keeper_paused_settlement_pending',
   marketHealthy: 'updown_keeper_market_healthy',
   balanceWei: 'updown_keeper_balance_wei',
   balanceNative: 'updown_keeper_balance_native',
@@ -160,6 +162,10 @@ export const HELP: Readonly<Record<string, string>> = Object.freeze({
   [M.lastExecutionLatency]: 'Wall-clock milliseconds of the most recent execution tick, by market.',
   [M.currentEpoch]: 'The epoch currently accepting bets, by market.',
   [M.marketActive]: '1 when the market is unpaused and genesis-started, else 0.',
+  [M.marketPaused]:
+    '1 when the market is paused, else 0. Paused stops NEW risk only: a round that was already locked still settles at its true price, and the keeper keeps calling executeRound so that it does. Never alert on this alone - pair it with updown_keeper_paused_settlement_pending.',
+  [M.pausedSettlementPending]:
+    '1 while the market is paused AND a locked round is still waiting to be settled, else 0. This is the market at its most sensitive: if the keeper stops here the round times out and every stake in it, the losing side included, is refunded. A value stuck at 1 for longer than one interval means the settlement is not landing.',
   [M.marketHealthy]: '1 when the market is within its execution budget, else 0.',
   [M.balanceWei]: 'Keeper account balance in wei (float64, so approximate above ~0.009 BNB; use updown_keeper_balance_native for alerting).',
   [M.balanceNative]: 'Keeper account balance in BNB.',

@@ -56,4 +56,25 @@ contract UpDownRegistryTest is Test {
         vm.expectRevert(UpDownRegistry.UnknownMarket.selector);
         reg.getMarket(0);
     }
+
+    /// @notice Retiring a market by an id that was never registered must say so — `UnknownMarket`,
+    ///         not a bare `Panic(0x32)` off the end of the array. This is an incident-time call and
+    ///         the runbook reads the error; an array panic tells the operator nothing about which
+    ///         of the two arguments was wrong.
+    function test_enablingAnUnknownMarketNamesTheProblem() public {
+        vm.prank(owner);
+        vm.expectRevert(UpDownRegistry.UnknownMarket.selector);
+        reg.setEnabled(0, false); // nothing is registered at all yet
+
+        vm.prank(owner);
+        reg.register(market1, usdt, oracle, 300, "BTC/USD 5m");
+
+        vm.prank(owner);
+        vm.expectRevert(UpDownRegistry.UnknownMarket.selector);
+        reg.setEnabled(1, false); // exactly one past the end
+        vm.expectRevert(UpDownRegistry.UnknownMarket.selector);
+        reg.getMarket(1);
+
+        assertTrue(reg.getMarket(0).enabled, "the registered market must be untouched");
+    }
 }

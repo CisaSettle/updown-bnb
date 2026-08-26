@@ -110,10 +110,12 @@ export const ERROR_COPY: Record<string, Text> = {
     en: 'That call was rejected as re-entrant.',
     zh: '这次调用因为重入被拒绝了。',
   },
-  // A pause does not take anyone's money: it makes every live round refundable in full.
+  // A pause stops the market taking NEW risk; it does not cancel risk already taken. A round that
+  // had already locked still settles, through the pause, at its true price — `executeRound` is not
+  // pausable. Only a round that never received a strike runs out its window and refunds.
   EnforcedPause: {
-    en: 'This market is paused. Existing rounds become fully refundable — no fee is taken.',
-    zh: '这个市场已暂停。已经开着的轮次转为全额可退——不收手续费。',
+    en: 'This market is paused, so no new bets are accepted. A round that has already locked still settles normally; one that had not locked becomes fully refundable — no fee is taken.',
+    zh: '这个市场已暂停，不再接受新的下注。已经锁定的轮次仍会照常结算；还没锁定的轮次转为全额可退——不收手续费。',
   },
   ExpectedPause: {
     en: 'This market is not paused.',
@@ -180,6 +182,18 @@ export const ERROR_COPY: Record<string, Text> = {
 export const ERROR_TEXT = {
   fallback: { en: 'Something went wrong. Please try again.', zh: '出了点问题，重试一次。' },
   rejected: { en: 'You rejected the request in your wallet.', zh: '你在钱包里拒绝了这个请求。' },
+  requestPending: {
+    en: 'Your wallet already has a request waiting. Open the wallet, deal with that one, then try again.',
+    zh: '你的钱包里已经有一个请求在等着了。打开钱包处理完那一个，再回来重试。',
+  },
+  alreadyConnected: {
+    en: 'That wallet is already connected.',
+    zh: '这个钱包已经连上了。',
+  },
+  noProvider: {
+    en: 'No wallet answered. If you have more than one extension installed, they can fight over the page — disable the ones you are not using and reload.',
+    zh: '没有钱包应答。如果你装了不止一个钱包插件，它们会互相抢这个页面——把用不到的停用后刷新页面再试。',
+  },
   unnamedRevert: { en: 'The contract rejected this transaction.', zh: '合约拒绝了这笔交易。' },
   noGas: {
     en: 'Not enough gas balance in your wallet to send this transaction.',
@@ -240,6 +254,32 @@ function passthrough(raw: string, lang: Lang, fallback: Text): Text {
 }
 
 /**
+ * A JSON-RPC error code, if the error carries one.
+ *
+ * A 中文 reader is never handed a library's English sentence — that rule stands. But the fallback
+ * on its own destroys the only fact that would let anyone act: it says "something went wrong" and
+ * sends the reader round the same loop. A numeric code is not prose in anyone's language, so it can
+ * be shown to both without mixing them, and it is the first thing a person is asked for when they
+ * come for help. `-32002` in particular is the difference between "this app is broken" and "your
+ * wallet is waiting for you behind this window".
+ */
+function rpcCode(err: unknown, depth = 0): number | undefined {
+  if (!err || typeof err !== 'object' || depth > 6) return undefined
+  const e = err as { code?: unknown; cause?: unknown }
+  if (typeof e.code === 'number' && Number.isInteger(e.code)) return e.code
+  return rpcCode(e.cause, depth + 1)
+}
+
+/** The fallback, plus the error's code where it has one. */
+function fallbackWithCode(err: unknown, lang: Lang, fallback: Text): string {
+  const code = rpcCode(err)
+  if (code === undefined) return t(lang, fallback)
+  const en = `${fallback.en.replace(/\s*$/, '')} (code ${code})`
+  const zh = `${fallback.zh.replace(/[。.]\s*$/, '')}（错误码 ${code}）。`
+  return t(lang, { en, zh })
+}
+
+/**
  * `FaucetCooldown(availableAt)` carries the second the faucet reopens, so the copy can say when to
  * come back rather than \"later\". English pluralises the minute; 中文 does not inflect, and both
  * round the same way so the two languages never quote different waits.
@@ -269,6 +309,42 @@ function decodeRaw(raw: Hex | undefined): { name: string; args?: readonly unknow
   } catch {
     return undefined
   }
+}
+
+/** Every message in the cause chain, lower-cased, so a wrapped error is not invisible. */
+function messageChain(err: unknown, depth = 0): string {
+  if (!err || depth > 6) return ''
+  if (typeof err === 'string') return err.toLowerCase()
+  if (typeof err !== 'object') return ''
+  const e = err as { message?: unknown; shortMessage?: unknown; details?: unknown; cause?: unknown }
+  const own = [e.shortMessage, e.message, e.details].filter((x) => typeof x === 'string').join(' ')
+  return `${own} ${messageChain(e.cause, depth + 1)}`.toLowerCase()
+}
+
+/**
+ * The wallet-connection failures worth naming, recognised on the error's *shape-independent*
+ * evidence: its JSON-RPC code, and the messages anywhere in its cause chain.
+ *
+ * These used to be classified inside the `BaseError` branch, which meant they only worked when
+ * viem had wrapped the error. A wallet rejecting a connect request often throws a plain object or
+ * an `Error` with the provider error tucked into `cause`, and those fell through to the generic
+ * fallback — the exact case that sent the owner round the loop with "something went wrong".
+ */
+function connectorCopy(err: unknown): Text | undefined {
+  const code = rpcCode(err)
+  const text = messageChain(err)
+  // -32002: a request is already open in the wallet. The popup is usually behind the browser
+  // window, so to the person nothing happened and clicking again is the natural move — which is
+  // precisely what produces this. Naming it is the difference between "the app is broken" and
+  // "your wallet is waiting for you".
+  if (code === -32002 || text.includes('already pending') || text.includes('already processing')) {
+    return ERROR_TEXT.requestPending
+  }
+  if (text.includes('already connected')) return ERROR_TEXT.alreadyConnected
+  if (text.includes('provider not found') || text.includes('no injected provider')) {
+    return ERROR_TEXT.noProvider
+  }
+  return undefined
 }
 
 function looksLikeRejection(err: unknown): boolean {
@@ -304,6 +380,12 @@ export function errorName(err: unknown): string | undefined {
 export function humanizeError(err: unknown, lang: Lang, fallback: Text = ERROR_TEXT.fallback): string {
   if (!err) return t(lang, fallback)
   if (looksLikeRejection(err)) return t(lang, ERROR_TEXT.rejected)
+  // Whatever we end up showing, the original survives somewhere a person can go and read it. An
+  // error we could not classify is precisely the one worth having the full text of.
+  if (typeof console !== 'undefined') console.warn('[updown] unhandled error surfaced to the user:', err)
+
+  const connector = connectorCopy(err)
+  if (connector) return t(lang, connector)
 
   if (err instanceof BaseError) {
     const reverted = err.walk((e) => e instanceof ContractFunctionRevertedError)
@@ -328,10 +410,14 @@ export function humanizeError(err: unknown, lang: Lang, fallback: Text = ERROR_T
     if (lower.includes('nonce')) return t(lang, ERROR_TEXT.nonce)
     if (NETWORKY.test(lower)) return t(lang, ERROR_TEXT.network)
     if (RPCY.test(lower)) return t(lang, ERROR_TEXT.rpc)
-    return t(lang, passthrough(short, lang, fallback))
+    const spoken = passthrough(short, lang, fallback)
+    return spoken === fallback ? fallbackWithCode(err, lang, fallback) : t(lang, spoken)
   }
 
   const message = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
-  if (message.length < 220) return t(lang, passthrough(message, lang, fallback))
-  return t(lang, fallback)
+  if (message.length < 220) {
+    const spoken = passthrough(message, lang, fallback)
+    if (spoken !== fallback) return t(lang, spoken)
+  }
+  return fallbackWithCode(err, lang, fallback)
 }

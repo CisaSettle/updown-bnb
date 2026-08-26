@@ -3,17 +3,27 @@
 **Non-custodial, on-chain binary options (Up/Down) on BNB Smart Chain.** Settled by Chainlink price
 feeds, priced by a parimutuel two-sided pool — no house, no market maker, no order book.
 
-Pick **UP** or **DOWN** on BTC or BNB over a fixed round. When the round locks, the Chainlink price
+Pick **UP** or **DOWN** on BTC, ETH or BNB over a fixed round. When the round locks, the Chainlink price
 at that boundary becomes the strike (`lockPrice`); when it closes, the price at the next boundary
 becomes the settlement (`closePrice`). The winning side splits the losing side's pool pro-rata, minus
 a protocol fee that is charged **only on the losing pool** — so a winner is never paid less than
 their own principal. Nobody can lose more than their stake, and no admin key can touch user funds.
 
+- **Live app (BNB testnet):** <https://updown.bluffking.ai> — connect a wallet, take the faucet's
+  1,000 test USDT, and place a bet. Every price it shows can be re-derived from the chain; the app's
+  own proof panel names the Chainlink round id behind each strike and settlement so you can check it
+  without trusting the page.
 - **Product spec (bilingual EN / 中文):** [`docs/PRD.html`](docs/PRD.html) — open it in a browser
 - **Engineering spec:** [`docs/PRD.md`](docs/PRD.md)
 - **Operations:** [`docs/RUNBOOK.md`](docs/RUNBOOK.md)
 - **Security review log:** section 11 of `docs/PRD.html` (section 10 of `docs/PRD.md`) — every
-  cross-vendor audit finding, its fix, and the regression test that pins it
+  cross-vendor review round and independent-audit finding, what actually happened to it, and the
+  regression test that pins the ones that are closed. It also says plainly where the gate stands:
+  every code finding raised so far is closed and pinned, but the most recent round returned
+  CHANGES-REQUIRED on release-surface items, so no round has yet returned an empty OPEN list over
+  the tree as it stands
+- **Pre-launch verification record (bilingual, 中文 default):** [`docs/TEST-REPORT.html`](docs/TEST-REPORT.html)
+- **This page in 中文:** [`docs/README.html`](docs/README.html) · **runbook in 中文:** [`docs/RUNBOOK.html`](docs/RUNBOOK.html)
 
 ---
 
@@ -60,15 +70,23 @@ Three properties are worth knowing before reading any code:
 
 | Contract | Address |
 |---|---|
-| `UpDownRegistry` | [`0xC087225ae36bcD30C635918b0DE648f4Bc74CB51`](https://testnet.bscscan.com/address/0xC087225ae36bcD30C635918b0DE648f4Bc74CB51) |
-| BTC/USD 5m (USDT) | [`0xCcc1F589E261e3abED9dFC4e1Dd16d0C53e4c729`](https://testnet.bscscan.com/address/0xCcc1F589E261e3abED9dFC4e1Dd16d0C53e4c729) |
-| BTC/USD 1h (USDT) | [`0xa5CfaBD463Ba30B2Efb75fe8fC8988386aF3b180`](https://testnet.bscscan.com/address/0xa5CfaBD463Ba30B2Efb75fe8fC8988386aF3b180) |
-| BNB/USD 5m (native) | [`0xca09eaffb93323528d43657a2812C672142fDDE2`](https://testnet.bscscan.com/address/0xca09eaffb93323528d43657a2812C672142fDDE2) |
-| `TestUSDT` (faucet, 18 dec) | [`0x4CE40aDa8410cDB77672EC80fe03f7fb3AA4b7C7`](https://testnet.bscscan.com/address/0x4CE40aDa8410cDB77672EC80fe03f7fb3AA4b7C7) |
-| `RelayAggregator` BTC/USD | [`0x704D26081dE6aE17B8af1D3098Ef8E07425b9f32`](https://testnet.bscscan.com/address/0x704D26081dE6aE17B8af1D3098Ef8E07425b9f32) |
-| `RelayAggregator` BNB/USD | [`0xE231995244Ef333E40d331dD6bEd047bCed23E17`](https://testnet.bscscan.com/address/0xE231995244Ef333E40d331dD6bEd047bCed23E17) |
+| `UpDownRegistry` | [`0x8180410383497E8cC4A5E2af12BeA9756fB0027d`](https://testnet.bscscan.com/address/0x8180410383497E8cC4A5E2af12BeA9756fB0027d) |
+| BTC/USD 5m | [`0x4834529FF9591AD5cB6e4bb0a4e1C7F2Df3f5e0a`](https://testnet.bscscan.com/address/0x4834529FF9591AD5cB6e4bb0a4e1C7F2Df3f5e0a) |
+| BTC/USD 1h | [`0xF2FBbcc52f6616f8F01D7Cd3C2FFD1F93A5e81D1`](https://testnet.bscscan.com/address/0xF2FBbcc52f6616f8F01D7Cd3C2FFD1F93A5e81D1) |
+| ETH/USD 5m | [`0x47253E0E86FB531546ec516d357aCCB25d03e5A4`](https://testnet.bscscan.com/address/0x47253E0E86FB531546ec516d357aCCB25d03e5A4) |
+| ETH/USD 1h | [`0xFe611c1c7f60243A69A5Bb0B1cfE33500C77bff0`](https://testnet.bscscan.com/address/0xFe611c1c7f60243A69A5Bb0B1cfE33500C77bff0) |
+| BNB/USD 5m | [`0x1DA7da4913FB35d1e2C02D07886655A68faC8a10`](https://testnet.bscscan.com/address/0x1DA7da4913FB35d1e2C02D07886655A68faC8a10) |
+| BNB/USD 1h | [`0xa5f2318C557F9FfF3aaE9000AA014AdEA82aC389`](https://testnet.bscscan.com/address/0xa5f2318C557F9FfF3aaE9000AA014AdEA82aC389) |
+| `TestUSDT` (faucet, 18 dec) | [`0x5a8E20563fa4Ae26f5F1183D090D5EC0e80bCCdF`](https://testnet.bscscan.com/address/0x5a8E20563fa4Ae26f5F1183D090D5EC0e80bCCdF) |
+| `RelayAggregator` BTC/USD | [`0x2D8d981eF2407D1B0eB6b24FAdB50d8c49473050`](https://testnet.bscscan.com/address/0x2D8d981eF2407D1B0eB6b24FAdB50d8c49473050) |
+| `RelayAggregator` ETH/USD | [`0x61df0e24bb23431034884c78E482CBd92A78911a`](https://testnet.bscscan.com/address/0x61df0e24bb23431034884c78E482CBd92A78911a) |
+| `RelayAggregator` BNB/USD | [`0x2756b5B78e10dE6B15f174d764E4631374d51Aca`](https://testnet.bscscan.com/address/0x2756b5B78e10dE6B15f174d764E4631374d51Aca) |
 
-All seven are source-verified on [Sourcify](https://sourcify.dev) (`--verifier sourcify`, no API key
+**Six markets: BTC, ETH and BNB, each over a 5-minute and a 1-hour round, every one of them settled
+in USDT.** One settlement asset across the board means a trader compares six books in a single unit
+and needs one approval, rather than holding two different things to trade two different symbols.
+
+All eleven are source-verified on [Sourcify](https://sourcify.dev) (`--verifier sourcify`, no API key
 needed). Testnet substitutes keeper-fed `RelayAggregator` feeds for Chainlink because BSC testnet's
 own feeds run up to ~1500 s stale, which would void every 5-minute round.
 
@@ -77,6 +95,18 @@ own feeds run up to ~1500 s stale, which would void every 5-minute round.
 Mainnet is a deliberate, separate step. It needs a funded deployer, an owner address that should be
 a multisig behind a Timelock, and a clean cross-vendor review. `Deploy.s.sol` pins the mainnet
 settlement asset to BSC-USDT and refuses to deploy the testnet-only contracts there.
+
+The three Chainlink feeds it will deploy against are pinned in the script and each was read on chain
+— `description()`, `decimals()`, and a fresh `latestRoundData()` — before being written down. They
+are constructor arguments to an immutable contract, so a wrong one cannot be corrected, only
+abandoned. `scripts/deploy-mainnet.sh` re-checks all three are alive and inside the 5-minute
+market's 150 s staleness budget before it will broadcast.
+
+| Feed | Address |
+|---|---|
+| BTC / USD | [`0x264990fbd0A4796A3E3d8E37C4d5F87a3aCa5Ebf`](https://bscscan.com/address/0x264990fbd0A4796A3E3d8E37C4d5F87a3aCa5Ebf) |
+| ETH / USD | [`0x9ef1B8c0E4F7dc8bF5719Ea496883DC6401d5b2e`](https://bscscan.com/address/0x9ef1B8c0E4F7dc8bF5719Ea496883DC6401d5b2e) |
+| BNB / USD | [`0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE`](https://bscscan.com/address/0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE) |
 
 ---
 
@@ -205,7 +235,7 @@ clear message when the file is absent rather than falling back to a guess.
 | Chain | Chain id | Feeds | Status |
 |---|---|---|---|
 | BSC testnet | 97 | `RelayAggregator` — keeper-fed, because the native testnet Chainlink feeds run up to ~1500s stale and would void every 5-minute round | **Live**, all contracts source-verified |
-| BSC mainnet | 56 | Real Chainlink `AggregatorV3` feeds (BTC/USD, BNB/USD) | Not deployed — **owner-gated** |
+| BSC mainnet | 56 | Real Chainlink `AggregatorV3` feeds (BTC/USD, ETH/USD, BNB/USD) | Not deployed — **owner-gated** |
 
 > **Mainnet deployment is a separate, owner-gated step.** It spends real funds, it is irreversible,
 > and it requires the owner's explicit go-ahead plus a funded deployer key. No script, task or agent

@@ -7,19 +7,26 @@
  * the id the chain will accept — and to say loudly when a round is about to time out instead.
  *
  * The contract accepts `roundId` for boundary `targetTs` when:
- *   1. the print exists, its answer is > 0 and `0 < updatedAt <= block.timestamp`;
- *   2. `updatedAt <= targetTs`                    — the print is not from after the boundary;
- *   3. `targetTs - updatedAt <= oracleMaxAge`     — the feed was alive at the boundary;
- *   4. `latestRoundData()` is itself usable (`_tryLatestRoundId`: answer > 0 and `updatedAt != 0`),
- *      because the proof of finality is expressed relative to it;
- *   5. `roundId` IS that latest print, **or** its *successor* exists and is already past the
- *      boundary — which proves `roundId` really is the last one at or before it.
+ *   1. `roundId` belongs to `oraclePhase()`, the single aggregator phase this market is bound to
+ *      for life — `_tryRound` returns "no such print" for every id outside it;
+ *   2. the print exists, its answer is > 0 and `0 < updatedAt <= block.timestamp`;
+ *   3. `updatedAt <= targetTs`                    — the print is not from after the boundary;
+ *   4. `targetTs - updatedAt <= oracleMaxAge`     — the feed was alive at the boundary;
+ *   5. `roundId` is `type(uint80).max`, **or** the next id *in this phase* either does not exist or
+ *      is itself already past the boundary — which proves `roundId` is the last qualifying print.
  *
- * Chainlink proxies encode `roundId = phaseId << 64 | aggregatorRoundId`, so the successor of the
- * last round of a phase is the **first round of the next phase**, not `roundId + 1`. The contract
- * walks phases (`_successorUpdatedAt`, bounded by `MAX_PHASE_LOOKAHEAD`) and so does this mirror:
- * anything that disagrees with the chain here makes the keeper predict a void the chain would have
- * settled, or settle one it would have rejected.
+ * Two rules that used to live here are gone, because they are gone from the Solidity:
+ *
+ *   - **The phase walk.** Chainlink proxies encode `roundId = phaseId << 64 | aggregatorRoundId`,
+ *     and a proxy can confirm a replacement aggregator carrying history timestamped *before* the
+ *     switch — at which point two different ids both look like "the last print at or before the
+ *     boundary" and the caller picks. The market now pins one phase at construction and refuses
+ *     every other, so the successor is `roundId + 1` and nothing else. A mirror that still walked
+ *     forwards would certify a boundary the chain rejects; one that walked backwards would hand
+ *     `executeRound` an id from another phase, which reverts.
+ *   - **`_tryLatestRoundId`.** `_priceAt` no longer consults the feed's latest round at all: the
+ *     phase's own last print must stay provable even after the proxy has moved on. Keeping the
+ *     check here would make the keeper predict a void for a boundary the chain settles happily.
  */
 
 export interface OraclePrint {
@@ -34,19 +41,17 @@ export interface BoundaryProof {
   targetTs: number;
   /** The round's snapshotted `oracleMaxAge`, in seconds. */
   oracleMaxAge: number;
+  /**
+   * The aggregator phase the market is bound to, from `oraclePhase()`. A candidate outside it is
+   * not evidence about this market's price at all, and `executeRound` reverts on it.
+   */
+  oraclePhase: bigint;
   /** The candidate print returned by `findRoundIdAt`. */
   candidate: OraclePrint | null;
   /**
-   * The feed's latest round id as the contract's `_tryLatestRoundId` judges it, or **null** when
-   * that call reverts or answers with `answer <= 0` / `updatedAt == 0`. Build it with
-   * `usableLatestRoundId`: `_priceAt` gives up entirely when this fails, so a mirror that reads the
-   * raw round id and shrugs the rest off predicts a settlement the chain will refuse.
-   */
-  latestRoundId: bigint | null;
-  /**
-   * The candidate's successor as the contract resolves it — `roundId + 1`, else the first round of
-   * the next existing aggregator phase — or null when no successor exists at all.
-   * Build it with `resolveSuccessor`, never with a bare `roundId + 1` read.
+   * The print at `candidate.roundId + 1`, read through the same `_tryRound` filter, or null when
+   * that id does not exist, is unusable, or would fall outside `oraclePhase`. Build it with
+   * `successorId`, never with a phase walk: the contract probes exactly one id.
    */
   next: OraclePrint | null;
   /** Chain clock at the moment of the check, in Unix seconds. */
@@ -65,12 +70,6 @@ export const PHASE_SHIFT = 64n;
 /** Mask of the aggregator-local part of a proxy round id. */
 export const AGGREGATOR_ROUND_MASK = (1n << PHASE_SHIFT) - 1n;
 
-/** How many phases forward the contract's `_successorUpdatedAt` will look. Must match the chain. */
-export const MAX_PHASE_LOOKAHEAD = 8;
-
-/** How many phases back the keeper will look for the boundary print. Mirrors the forward bound. */
-export const MAX_PHASE_LOOKBACK = 8;
-
 export function phaseOf(roundId: bigint): bigint {
   return roundId >> PHASE_SHIFT;
 }
@@ -87,8 +86,17 @@ export function firstRoundOfPhase(phase: bigint): bigint {
  * Mirror of the contract's `_tryRound`: a print the market would refuse to look at does not exist
  * as far as settlement is concerned, and treating it as existing is what makes an off-chain mirror
  * disagree with the chain.
+ *
+ * The phase test comes first, exactly as it does on chain: outside the bound phase the contract
+ * never even calls the feed.
  */
-export function isUsablePrint(print: OraclePrint | null, requestedId: bigint, chainNowSec: number): boolean {
+export function isUsablePrint(
+  print: OraclePrint | null,
+  requestedId: bigint,
+  chainNowSec: number,
+  oraclePhase: bigint,
+): boolean {
+  if (phaseOf(requestedId) !== oraclePhase) return false;
   if (!print) return false;
   if (print.roundId !== requestedId) return false;
   if (print.answer <= 0n) return false;
@@ -98,66 +106,32 @@ export function isUsablePrint(print: OraclePrint | null, requestedId: bigint, ch
 }
 
 /**
- * Mirror of the contract's `_tryLatestRoundId`. Deliberately checks exactly what the chain checks —
- * `answer > 0` and `updatedAt != 0`, and neither the round id nor the block timestamp — because a
- * mirror that is stricter or looser than the chain here is a mirror that disagrees with it.
+ * The one id the contract probes to prove `roundId` is the last print at the boundary: `roundId + 1`,
+ * and only while it stays inside the bound phase.
+ *
+ * Null means the contract does not look at all — either because `roundId` is `type(uint80).max`
+ * (where `_priceAt` returns early) or because `roundId + 1` has rolled into the next phase, which
+ * `_tryRound` reads as "no such print". Both cases prove finality rather than denying it.
  */
-export function usableLatestRoundId(print: OraclePrint | null): bigint | null {
-  if (!print) return null;
-  if (print.answer <= 0n) return null;
-  if (print.updatedAt <= 0) return null;
-  return print.roundId;
-}
-
-/**
- * The round ids the contract probes, in order, to find `roundId`'s successor: `roundId + 1` first,
- * then the first round of each following phase up to `MAX_PHASE_LOOKAHEAD`, never past the phase
- * the feed's latest round lives in.
- */
-export function successorCandidates(roundId: bigint, latestRoundId: bigint): bigint[] {
-  const out: bigint[] = [];
-  if (roundId < UINT80_MAX) out.push(roundId + 1n);
-  const phase = phaseOf(roundId);
-  const latestPhase = phaseOf(latestRoundId);
-  if (latestPhase > phase) {
-    const reach = phase + BigInt(MAX_PHASE_LOOKAHEAD);
-    const limit = latestPhase < reach ? latestPhase : reach;
-    for (let p = phase + 1n; p <= limit; p += 1n) {
-      const candidate = firstRoundOfPhase(p);
-      if (candidate > UINT80_MAX) break;
-      out.push(candidate);
-    }
-  }
-  return out;
-}
-
-/**
- * Resolve the successor print exactly as `_successorUpdatedAt` does. `readPrint` must already apply
- * `isUsablePrint`, so a proxy that answers a missing round with zeroes cannot be mistaken for a
- * real print.
- */
-export async function resolveSuccessor(
-  roundId: bigint,
-  latestRoundId: bigint,
-  readPrint: (roundId: bigint) => Promise<OraclePrint | null>,
-): Promise<OraclePrint | null> {
-  for (const candidate of successorCandidates(roundId, latestRoundId)) {
-    const print = await readPrint(candidate);
-    if (print) return print;
-  }
-  return null;
+export function successorId(roundId: bigint, oraclePhase: bigint): bigint | null {
+  if (roundId >= UINT80_MAX) return null;
+  const next = roundId + 1n;
+  if (phaseOf(next) !== oraclePhase) return null;
+  return next;
 }
 
 /**
  * The last round id that exists in `phase`, found by exponential probing then binary search.
  *
- * The contract's `findRoundIdAt` only decrements, so it can never cross backwards out of a phase.
- * When a new phase's first print lands *after* the boundary, the settleable print is the previous
- * phase's last one — and this is the only way to name it without a phase-aggregator ABI.
+ * `findRoundIdAt` starts at the feed's *latest* round and only decrements, so once the proxy has
+ * confirmed a replacement aggregator it walks ids that are not in this market's phase at all and
+ * finds nothing. The market's own phase can still hold a provable print for the boundary that
+ * straddles the switch — its last one, whose successor no longer exists — and this is the only way
+ * to name it without a phase-aggregator ABI.
  *
- * `exists` must mirror `_tryRound`. Returns null when the phase has no first round at all. If the
- * probe budget runs out the highest id *proved* to exist is returned: still a sound `startFrom`
- * for a walk back, and the caller verifies the resulting candidate against the chain's rule anyway.
+ * `exists` must mirror `_tryRound`, phase test included. Returns null when the phase has no first
+ * round at all. If the probe budget runs out the highest id *proved* to exist is returned: still a
+ * sound `startFrom` for a walk back, and the caller verifies the resulting candidate anyway.
  */
 export async function findLastRoundOfPhase(
   phase: bigint,
@@ -202,12 +176,22 @@ export async function findLastRoundOfPhase(
 }
 
 /**
- * Would `executeRound(candidate.roundId)` settle this boundary, or void it?
+ * Would `executeRound(candidate.roundId)` settle this boundary, or refuse it?
  * Pure: every input is already-fetched chain state.
  */
 export function verifyBoundaryRound(proof: BoundaryProof): BoundaryVerdict {
-  const { candidate, targetTs, oracleMaxAge } = proof;
+  const { candidate, targetTs, oracleMaxAge, oraclePhase } = proof;
   if (!candidate) return { usable: false, reason: 'no oracle print found at or before the boundary' };
+  // First, exactly as on chain: outside the bound phase there is no print to talk about, and
+  // `executeRound` reverts rather than settling or voiding.
+  if (phaseOf(candidate.roundId) !== oraclePhase) {
+    return {
+      usable: false,
+      reason:
+        `print ${candidate.roundId} is in aggregator phase ${phaseOf(candidate.roundId)}, but this market is ` +
+        `bound to phase ${oraclePhase} for life; the contract will not accept it as a proof`,
+    };
+  }
   if (candidate.answer <= 0n) return { usable: false, reason: `print ${candidate.roundId} has a non-positive answer` };
   if (candidate.updatedAt <= 0) return { usable: false, reason: `print ${candidate.roundId} has updatedAt == 0` };
   if (candidate.updatedAt > proof.chainNowSec) {
@@ -223,33 +207,15 @@ export function verifyBoundaryRound(proof: BoundaryProof): BoundaryVerdict {
   if (ageSec > oracleMaxAge) {
     return { usable: false, reason: `print ${candidate.roundId} is ${ageSec}s stale at the boundary (max ${oracleMaxAge}s)` };
   }
-  if (proof.latestRoundId === null) {
-    // `_priceAt` bails out here: with no usable latest round there is nothing to express finality
-    // against, so the chain cannot accept ANY id for this boundary however good the print looks.
+  // The finality test, and the whole of it. `_priceAt` returns early at the uint80 ceiling and
+  // otherwise looks at exactly one id; a successor that does not exist in this phase proves the
+  // candidate is the phase's last print, which is precisely what the boundary needs.
+  const next = successorId(candidate.roundId, oraclePhase);
+  if (next !== null && proof.next !== null && proof.next.updatedAt <= targetTs) {
     return {
       usable: false,
-      reason:
-        `the feed's latestRoundData() is unusable (reverted, or answered with a non-positive price ` +
-        `or updatedAt == 0), so the chain cannot prove any print final at this boundary`,
+      reason: `print ${proof.next.roundId} is also at or before the boundary, so ${candidate.roundId} is stale`,
     };
-  }
-  if (candidate.roundId !== proof.latestRoundId) {
-    if (candidate.roundId >= UINT80_MAX) return { usable: false, reason: 'round id is at uint80 max' };
-    if (!proof.next) {
-      return {
-        usable: false,
-        reason:
-          `the successor of print ${candidate.roundId} is missing — neither ${candidate.roundId + 1n} nor the ` +
-          `first round of any of the next ${MAX_PHASE_LOOKAHEAD} aggregator phases exists — so the feed cannot ` +
-          `prove ${candidate.roundId} is the last print at the boundary`,
-      };
-    }
-    if (proof.next.updatedAt <= targetTs) {
-      return {
-        usable: false,
-        reason: `print ${proof.next.roundId} is also at or before the boundary, so ${candidate.roundId} is stale`,
-      };
-    }
   }
   return { usable: true, roundId: candidate.roundId, answer: candidate.answer, ageSec };
 }

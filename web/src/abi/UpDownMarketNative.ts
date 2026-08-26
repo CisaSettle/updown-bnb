@@ -86,6 +86,25 @@ export const upDownMarketNativeAbi = [
   },
   {
     "type": "function",
+    "name": "autoClaimOptIn",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "betDown",
     "inputs": [
       {
@@ -140,6 +159,24 @@ export const upDownMarketNativeAbi = [
     "type": "function",
     "name": "claim",
     "inputs": [
+      {
+        "name": "epochs",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "claimFor",
+    "inputs": [
+      {
+        "name": "user",
+        "type": "address",
+        "internalType": "address"
+      },
       {
         "name": "epochs",
         "type": "uint256[]",
@@ -673,6 +710,19 @@ export const upDownMarketNativeAbi = [
   },
   {
     "type": "function",
+    "name": "oraclePhase",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "outstanding",
     "inputs": [],
     "outputs": [
@@ -806,6 +856,19 @@ export const upDownMarketNativeAbi = [
     "name": "renounceOwnership",
     "inputs": [],
     "outputs": [],
+    "stateMutability": "pure"
+  },
+  {
+    "type": "function",
+    "name": "setAutoClaimOptIn",
+    "inputs": [
+      {
+        "name": "enabled",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [],
     "stateMutability": "nonpayable"
   },
   {
@@ -826,19 +889,6 @@ export const upDownMarketNativeAbi = [
         "name": "maxSide",
         "type": "uint256",
         "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "setOracle",
-    "inputs": [
-      {
-        "name": "oracle_",
-        "type": "address",
-        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -941,6 +991,25 @@ export const upDownMarketNativeAbi = [
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "AutoClaimOptInSet",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "enabled",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
   },
   {
     "type": "event",
@@ -1050,19 +1119,6 @@ export const upDownMarketNativeAbi = [
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "OracleUpdated",
-    "inputs": [
-      {
-        "name": "oracle",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
       }
     ],
     "anonymous": false
@@ -1335,6 +1391,11 @@ export const upDownMarketNativeAbi = [
   },
   {
     "type": "error",
+    "name": "AutoClaimNotOptedIn",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "BelowMinBet",
     "inputs": []
   },
@@ -1415,6 +1476,11 @@ export const upDownMarketNativeAbi = [
   },
   {
     "type": "error",
+    "name": "OracleUnusable",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "OwnableInvalidOwner",
     "inputs": [
       {
@@ -1434,6 +1500,11 @@ export const upDownMarketNativeAbi = [
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "OwnershipCannotBeRenounced",
+    "inputs": []
   },
   {
     "type": "error",

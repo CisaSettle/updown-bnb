@@ -97,11 +97,16 @@ export function validateBetInput(s: BetInputState): BetValidation {
   if (!s.genesisStarted) {
     return fail({ en: 'This market has not opened its first round yet.', zh: '这个市场还没有开出第一轮。' }, amount)
   }
+  // `executeRound` carries no `whenNotPaused`, so a pause is not a cancel button: the round that
+  // has already locked settles through it at the price the feed actually printed, and its winner
+  // can claim while the market is still paused. Only a round that never received a strike runs out
+  // its window and refunds. Saying "live rounds become fully refundable" here told the trader the
+  // opposite of what the chain does with the money already committed.
   if (s.paused) {
     return fail(
       {
-        en: 'This market is paused. Live rounds become fully refundable.',
-        zh: '这个市场已暂停。进行中的轮次转为全额可退。',
+        en: 'This market is paused, so no new bets are accepted. A round that has already locked still settles normally; one that had not locked becomes fully refundable, with no fee.',
+        zh: '这个市场已暂停，不再接受新的下注。已经锁定的轮次仍会照常结算；还没锁定的轮次转为全额可退，不收手续费。',
       },
       amount,
     )

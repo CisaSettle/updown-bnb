@@ -53,11 +53,37 @@ interface Print {
   updatedAt: number;
 }
 
+/** A round as `getRound(epoch)` returns it. Only the fields the keeper actually reads. */
+interface RoundState {
+  startTs: bigint;
+  lockTs: bigint;
+  closeTs: bigint;
+  bufferSeconds: number;
+  oracleMaxAge: number;
+  locked: boolean;
+  settled: boolean;
+  voided: boolean;
+}
+
 interface ChainState {
   currentEpoch: bigint;
   lockTs: number;
   chainNow: number;
   findRoundThrows: boolean;
+  /** `paused()`. Locked rounds still settle while it is true; nothing new is locked or opened. */
+  paused: boolean;
+  /** The phase the market is bound to for life, from `oraclePhase()`. Bare ids live in phase 0. */
+  oraclePhase: bigint;
+  /**
+   * `getRound(currentEpoch - 1)` — the round a paused market may still owe a settlement on.
+   * Null means there is no previous round at all (the anchor epoch).
+   */
+  previousRound: RoundState | null;
+  /**
+   * True to make the on-chain `findRoundIdAt` helper ignore the phase filter, as a market whose
+   * ABI and deployment disagree would. The keeper must refuse the id it hands back.
+   */
+  findRoundIgnoresPhase: boolean;
   /** The feed's whole round history, keyed by proxy round id. */
   prints: Map<bigint, Print>;
   /**
@@ -194,6 +220,10 @@ function makeHarness(over: HarnessOptions = {}) {
     lockTs: LOCK_TS,
     chainNow: LOCK_TS + 2,
     findRoundThrows: false,
+    paused: false,
+    oraclePhase: 0n,
+    previousRound: null,
+    findRoundIgnoresPhase: false,
     prints: new Map([[77n, { answer: 8_412_345_000_000n, updatedAt: LOCK_TS - 10 }]]),
     lyingRounds: new Set(),
     rpcFailRounds: new Set(),
@@ -208,8 +238,13 @@ function makeHarness(over: HarnessOptions = {}) {
     for (const id of state.prints.keys()) if (id > latest) latest = id;
     return latest;
   };
-  /** Mirror of the contract's `_tryRound`. */
+  /**
+   * Mirror of the contract's `_tryRound` — the phase test included. A market is bound to one
+   * aggregator phase for life and a print from any other is not evidence about its price at all,
+   * so the chain refuses to look at it and `executeRound` reverts.
+   */
   const tryRound = (id: bigint): Print | null => {
+    if (id >> 64n !== state.oraclePhase) return null;
     const print = state.prints.get(id);
     if (!print) return null;
     if (print.answer <= 0n || print.updatedAt <= 0 || print.updatedAt > state.chainNow) return null;
@@ -232,7 +267,9 @@ function makeHarness(over: HarnessOptions = {}) {
       case 'genesisStarted':
         return true;
       case 'paused':
-        return false;
+        return state.paused;
+      case 'oraclePhase':
+        return state.oraclePhase;
       case 'currentEpoch':
         return state.currentEpoch;
       case 'boundaryTimestamp':
@@ -242,22 +279,50 @@ function makeHarness(over: HarnessOptions = {}) {
       case 'updater':
       case 'owner':
         return KEEPER;
-      case 'getRound':
+      case 'getRound': {
+        const epoch = (args.args as [bigint])[0];
+        if (epoch === state.currentEpoch - 1n) {
+          // The round a paused market may still owe a settlement on. `closeTs(e-1) == lockTs(e)`,
+          // so its settlement boundary is the very boundary `executeRound` prices.
+          return (
+            state.previousRound ?? {
+              startTs: 0n,
+              lockTs: 0n,
+              closeTs: 0n,
+              bufferSeconds: 0,
+              oracleMaxAge: 0,
+              locked: false,
+              settled: false,
+              voided: false,
+            }
+          );
+        }
         return {
           startTs: BigInt(state.lockTs - INTERVAL),
           lockTs: BigInt(state.lockTs),
           closeTs: BigInt(state.lockTs + INTERVAL),
           bufferSeconds: 240,
           oracleMaxAge: 150,
+          locked: false,
+          settled: false,
+          voided: false,
         };
+      }
       case 'findRoundIdAt': {
         if (state.findRoundThrows) throw new Error('HTTP request failed.');
         // A faithful copy of the on-chain helper, phase-local decrement and all: it is exactly that
         // phase-locality the keeper has to compensate for off chain.
         const [targetTs, startFrom, maxSteps] = args.args as [bigint, bigint, bigint];
         let cursor = startFrom === 0n ? latestId() : startFrom;
+        const probe = state.findRoundIgnoresPhase
+          ? (id: bigint): Print | null => {
+              const print = state.prints.get(id);
+              if (!print || print.answer <= 0n || print.updatedAt > state.chainNow) return null;
+              return print;
+            }
+          : tryRound;
         for (let i = 0n; i < maxSteps; i += 1n) {
-          const print = tryRound(cursor);
+          const print = probe(cursor);
           if (print && BigInt(print.updatedAt) <= targetTs) return [cursor, true];
           if (cursor === 0n) break;
           cursor -= 1n;
@@ -446,11 +511,367 @@ describe('MarketWorker execute path', () => {
   });
 });
 
-describe('MarketWorker boundary lookup across an aggregator phase change', () => {
-  // `findRoundIdAt` only decrements, so it stops dead at the first round of a phase. When the feed
-  // rolls to a new aggregator whose first print lands AFTER the boundary, the phase-local walk finds
-  // nothing at all — while `_priceAt` would happily settle on the previous phase's last print. The
-  // keeper used to retry until the round timed out into refunds for no reason whatsoever.
+// ─────────────────────────────────────────────────────────────────────────────
+// A paused market still settles what it locked.
+//
+// `pause()` stops the market taking NEW risk. It does not cancel risk already taken: `executeRound`
+// is deliberately not pausable, so a round that was locked when the pause landed settles at its true
+// price, and only locking a new round and opening the next one stop.
+//
+// That is the contract's whole answer to an owner who is also a bettor watching the settlement print
+// land, seeing they lost, and pausing so the round runs out its window and every stake — theirs
+// included — comes back. The keeper is the only thing that ever calls `executeRound`, so a keeper
+// that treats "paused" as "nothing to do" hands that option straight back: pause, wait, cancelled.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('MarketWorker while the market is paused', () => {
+  /** `currentEpoch - 1`, locked before the pause and still inside its settlement window. */
+  const lockedPrevious = (over: Partial<RoundState> = {}): RoundState => ({
+    startTs: BigInt(LOCK_TS - 2 * INTERVAL),
+    lockTs: BigInt(LOCK_TS - INTERVAL),
+    // `closeTs(e - 1) == lockTs(e)`: its settlement boundary is the one executeRound prices.
+    closeTs: BigInt(LOCK_TS),
+    bufferSeconds: 240,
+    oracleMaxAge: 150,
+    locked: true,
+    settled: false,
+    voided: false,
+    ...over,
+  });
+
+  const gauge = (h: { deps: MarketDeps }, name: string): number | undefined =>
+    h.deps.metrics.get(name, { market: 'btcUsd5m' });
+
+  const relaySimulated = (h: { publicClient: { simulateContract: { mock: { calls: unknown[][] } } } }): number =>
+    h.publicClient.simulateContract.mock.calls.filter(
+      (call) => (call[0] as { functionName?: string })?.functionName === 'relay',
+    ).length;
+
+  it('keeps calling executeRound, so pausing cannot cancel a round that is already locked', async () => {
+    const h = makeHarness({ paused: true, previousRound: lockedPrevious() });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(executeSimulations(h).length).toBeGreaterThanOrEqual(1), {
+      timeout: 2_000,
+      interval: 5,
+    });
+    h.worker.stop();
+
+    // The same boundary proof it would have sent unpaused: the pause changes nothing about which
+    // price settles the locked round.
+    expect((executeSimulations(h)[0]?.[0] as { args: readonly bigint[] }).args[0]).toBe(77n);
+    expect(h.worker.pausedSettlement).toBe('pending');
+    expect(h.worker.active).toBe(false);
+  });
+
+  it('reports itself as paused AND still settling, rather than as inactive', async () => {
+    const h = makeHarness({ paused: true, previousRound: lockedPrevious() });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(gauge(h, 'updown_keeper_paused_settlement_pending')).toBe(1), {
+      timeout: 2_000,
+      interval: 5,
+    });
+    h.worker.stop();
+
+    // /metrics has to be able to tell these three apart: not paused, paused and finished, paused and
+    // mid-settlement. `market_active` alone says only "not trading", which is the least useful of
+    // the three and reads as "nothing to see".
+    expect(gauge(h, 'updown_keeper_market_paused')).toBe(1);
+    expect(gauge(h, 'updown_keeper_market_active')).toBe(0);
+    // ...and the same distinction reaches /healthz through the worker the report is built from.
+    expect(h.worker.paused).toBe(true);
+    expect(h.worker.pausedSettlement).toBe('pending');
+  });
+
+  it('goes quiet once the locked round has settled, instead of spinning the RPC', async () => {
+    // Nothing else can happen on a paused market: `executeRound` returns before locking anything,
+    // so `currentEpoch` never moves and calling again can only burn gas. One poll, then silence.
+    const h = makeHarness({ paused: true, previousRound: lockedPrevious({ settled: true }) });
+    await h.worker.bootstrap();
+    const readsBefore = h.calls.length;
+
+    h.worker.start();
+    await vi.waitFor(() => expect(h.worker.observed).toBe(true), { timeout: 2_000, interval: 5 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    h.worker.stop();
+
+    expect(h.worker.pausedSettlement).toBe('none');
+    expect(executeSimulations(h)).toHaveLength(0);
+    // Exactly one state read in 300ms — the idle poll is 30s, so anything more is a spin.
+    expect(h.calls.slice(readsBefore).filter((c) => c === 'genesisStarted')).toHaveLength(1);
+  });
+
+  it('does nothing at all when the round that could not lock is the only one outstanding', async () => {
+    // A round that never locked has no strike and no outcome anyone could have known. It refunds on
+    // its own timer through `_isExpired`, with no transaction from anybody — and it will not lock
+    // however often the keeper calls, because the market is paused.
+    const h = makeHarness({ paused: true, previousRound: lockedPrevious({ locked: false }) });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(h.worker.observed).toBe(true), { timeout: 2_000, interval: 5 });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    h.worker.stop();
+
+    expect(h.worker.pausedSettlement).toBe('none');
+    expect(executeSimulations(h)).toHaveLength(0);
+  });
+
+  it('does not report "currentEpoch did not advance" after settling while paused', async () => {
+    // `executeRound` returns straight after `_endRound` when paused, deliberately: the grid is
+    // SUPPOSED to stay where it is. Checking for progress there reported the market's one correct
+    // behaviour as a keeper failure, once per settlement, and would page an operator for it.
+    const h = makeHarness({
+      paused: true,
+      previousRound: lockedPrevious(),
+      dryRun: false,
+      receiptLogs: [settledLog(41n)],
+    });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(h.worker.lastExecutionMs).not.toBeNull(), { timeout: 2_000, interval: 5 });
+    h.worker.stop();
+
+    expect(failures(h, 'no-progress')).toBe(0);
+    expect(h.worker.settlementStats()?.completed).toBe(1);
+  });
+
+  it('still publishes the boundary relay, because that print is what settles the locked round', async () => {
+    // Testnet: without a print at or before this boundary `_priceAt` proves nothing, `executeRound`
+    // reverts, and the locked round times out into refunds — the pause-as-cancel outcome again, by
+    // a different route. The relay is not decoration here; it is the settlement.
+    const h = makeHarness({
+      relayFeeds: true,
+      paused: true,
+      previousRound: lockedPrevious(),
+      chainNow: LOCK_TS - 10,
+      nowOffsetMs: -10_000,
+    });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(relaySimulated(h)).toBeGreaterThanOrEqual(1), { timeout: 2_000, interval: 5 });
+    h.worker.stop();
+  });
+
+  it('does not relay for a boundary a paused market can no longer use', async () => {
+    // Nothing is locked and nothing will lock, so this boundary can never price anything. A print
+    // for it is a transaction spent on a chart.
+    const h = makeHarness({
+      relayFeeds: true,
+      paused: true,
+      previousRound: null,
+      chainNow: LOCK_TS - 10,
+      nowOffsetMs: -10_000,
+    });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    h.worker.stop();
+
+    expect(relaySimulated(h)).toBe(0);
+  });
+
+  it('publishes no density ticks while paused, even four minutes from the boundary', async () => {
+    // Cosmetic prints share the one key with the settlement that matters. The chart can have a gap;
+    // the round the pause left locked cannot have a delay.
+    const h = makeHarness({
+      relayFeeds: true,
+      paused: true,
+      previousRound: lockedPrevious(),
+      chainNow: LOCK_TS - 240,
+      nowOffsetMs: -240_000,
+      dryRun: false,
+      relayTickMs: 40,
+    });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    h.worker.stop();
+
+    expect(relaySimulated(h)).toBe(0);
+  });
+
+  const executeWrites = (h: {
+    walletClient: { writeContract: { mock: { calls: unknown[][] } } };
+  }): unknown[][] =>
+    h.walletClient.writeContract.mock.calls.filter(
+      (call) => (call[0] as { functionName?: string })?.functionName === 'executeRound',
+    );
+
+  it('waits for a boundary that has not arrived yet, then BROADCASTS — the pause does not shorten the round', async () => {
+    // The attack in its natural shape: the round that will lose is already locked, and the owner
+    // pauses while the next round is still live, before the boundary the settlement is priced at.
+    // Everything above proves the keeper acts on a boundary already in the past; this proves it
+    // still schedules across one, and gets as far as the wire rather than the simulation.
+    const h = makeHarness({
+      paused: true,
+      previousRound: lockedPrevious(),
+      chainNow: LOCK_TS - 3,
+      nowOffsetMs: -250,
+      dryRun: false,
+      receiptLogs: [settledLog(41n)],
+    });
+    h.deps.config.schedule.executeLeadMs = 60;
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    // Nothing may go out before the boundary: `executeRound` reverts `TooEarly` inside it.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(executeWrites(h)).toHaveLength(0);
+    h.state.chainNow = LOCK_TS + 2;
+
+    await vi.waitFor(() => expect(executeWrites(h).length).toBeGreaterThanOrEqual(1), {
+      timeout: 4_000,
+      interval: 5,
+    });
+    h.worker.stop();
+
+    expect((executeWrites(h)[0]?.[0] as { args: readonly bigint[] }).args[0]).toBe(77n);
+    expect(h.worker.pausedSettlement).toBe('pending');
+  });
+
+  it('settles even when the pause lands between the plan and the send', async () => {
+    // The race the owner actually has: the keeper planned this tick while the market was open, and
+    // the pause arrives while the tick is in flight. `executeRound` is not pausable, so the
+    // transaction still settles the locked round — the keeper must not re-check and abandon it.
+    const h = makeHarness({
+      paused: false,
+      previousRound: lockedPrevious(),
+      chainNow: LOCK_TS - 3,
+      nowOffsetMs: -250,
+      dryRun: false,
+      receiptLogs: [settledLog(41n)],
+    });
+    h.deps.config.schedule.executeLeadMs = 60;
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    setTimeout(() => {
+      h.state.paused = true;
+      h.state.chainNow = LOCK_TS + 2;
+    }, 120);
+
+    await vi.waitFor(() => expect(executeWrites(h).length).toBeGreaterThanOrEqual(1), {
+      timeout: 4_000,
+      interval: 5,
+    });
+    h.worker.stop();
+
+    expect((executeWrites(h)[0]?.[0] as { args: readonly bigint[] }).args[0]).toBe(77n);
+  });
+
+  it('judges the deadline by the LOCKED round own bufferSeconds, never the live round snapshot', async () => {
+    // `setParams` can change `bufferSeconds`, and `_startRound` snapshots it per round, so the round
+    // that locked before the pause and the round that is current can carry different windows. The
+    // one that decides whether `_endRound` still settles is the LOCKED round own.
+    //
+    // Read the neighbour instead — it is right there in `snapshot.round` and looks equivalent — and
+    // an owner who shrinks the buffer and then pauses gets the cancel button back: the keeper would
+    // call the settlement missed and stop calling while the chain would still have settled it. That
+    // is why this is pinned rather than left to the reader.
+    const h = makeHarness({
+      paused: true,
+      previousRound: lockedPrevious({ bufferSeconds: 60 }),
+      chainNow: LOCK_TS + 100,
+      nowOffsetMs: 100_000,
+    });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(h.worker.observed).toBe(true), { timeout: 2_000, interval: 5 });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    h.worker.stop();
+
+    // The live round carries 240s and would still be inside its window here; the locked round
+    // carried 60s and is not.
+    expect(h.worker.pausedSettlement).toBe('missed');
+    expect(executeSimulations(h)).toHaveLength(0);
+  });
+
+  it('and keeps calling one second INSIDE that same short window', async () => {
+    // The other half of the pair: the short buffer must not be read as "already gone" either.
+    const h = makeHarness({
+      paused: true,
+      previousRound: lockedPrevious({ bufferSeconds: 60 }),
+      chainNow: LOCK_TS + 59,
+      nowOffsetMs: 59_000,
+    });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(executeSimulations(h).length).toBeGreaterThanOrEqual(1), {
+      timeout: 3_000,
+      interval: 5,
+    });
+    h.worker.stop();
+
+    expect(h.worker.pausedSettlement).toBe('pending');
+  });
+
+  it('does not spin while a settlement is pending but its boundary is still minutes away', async () => {
+    // "Pending" must not become "poll flat out for a whole buffer". The market is driven on the
+    // round schedule, which means ONE plan and one armed timer — the same as an open market — not a
+    // busy loop against the RPC provider for the length of the pause.
+    const h = makeHarness({
+      paused: true,
+      previousRound: lockedPrevious(),
+      chainNow: LOCK_TS - 240,
+      nowOffsetMs: -240_000,
+    });
+    await h.worker.bootstrap();
+    const readsBefore = h.calls.length;
+
+    h.worker.start();
+    await vi.waitFor(() => expect(h.worker.observed).toBe(true), { timeout: 2_000, interval: 5 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    h.worker.stop();
+
+    expect(h.worker.pausedSettlement).toBe('pending');
+    expect(h.calls.slice(readsBefore).filter((c) => c === 'genesisStarted')).toHaveLength(1);
+    expect(executeSimulations(h)).toHaveLength(0);
+  });
+
+  it('shouts once, and only once, when a locked round runs out its window during the pause', async () => {
+    // The failure this whole path exists to prevent, reported rather than hidden: a decided outcome
+    // has just become refunds. It cannot be un-made by another transaction, so the keeper does not
+    // spend one — it says so, once for that epoch, and /healthz turns red.
+    const h = makeHarness({
+      paused: true,
+      previousRound: lockedPrevious(),
+      chainNow: LOCK_TS + 241,
+      nowOffsetMs: 241_000,
+    });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(failures(h, 'paused-settlement-missed')).toBe(1), { timeout: 2_000, interval: 5 });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    h.worker.stop();
+
+    expect(h.worker.pausedSettlement).toBe('missed');
+    expect(failures(h, 'paused-settlement-missed')).toBe(1);
+    expect(executeSimulations(h)).toHaveLength(0);
+    expect(gauge(h, 'updown_keeper_paused_settlement_pending')).toBe(0);
+  });
+});
+
+describe('MarketWorker boundary lookup after the feed leaves the phase the market is bound to', () => {
+  // The market pins ONE aggregator phase at construction and refuses every other for life. Once the
+  // proxy confirms a replacement aggregator, `findRoundIdAt` — which starts at the feed's latest
+  // round and only decrements — is walking ids `_tryRound` refuses, and finds nothing at all.
+  //
+  // The bound phase can still hold a provable print for the boundary that straddles the switch: its
+  // own LAST one, whose successor no longer exists inside the phase, which is exactly what `_priceAt`
+  // reads as "this is the last print at or before the boundary". Naming it keeps a settleable round
+  // from timing out into refunds — and it is the only id the keeper may name, because anything from
+  // the new phase would make `executeRound` revert.
   const phaseChangedFeed = (): Map<bigint, Print> =>
     new Map<bigint, Print>([
       [round(1n, 1n), { answer: 8_400_000_000_000n, updatedAt: LOCK_TS - 250 }],
@@ -462,8 +883,8 @@ describe('MarketWorker boundary lookup across an aggregator phase change', () =>
       [round(2n, 1n), { answer: 8_405_000_000_000n, updatedAt: LOCK_TS + 5 }],
     ]);
 
-  it('settles on the previous phase\'s last print instead of letting the round void', async () => {
-    const h = makeHarness({ prints: phaseChangedFeed(), chainNow: LOCK_TS + 20 });
+  it('settles on the bound phase\'s last print instead of letting the round void', async () => {
+    const h = makeHarness({ prints: phaseChangedFeed(), oraclePhase: 1n, chainNow: LOCK_TS + 20 });
     await h.worker.bootstrap();
 
     h.worker.start();
@@ -473,8 +894,9 @@ describe('MarketWorker boundary lookup across an aggregator phase change', () =>
     });
     h.worker.stop();
 
-    // The id the contract's own `_priceAt` accepts: last of phase 1, successor is (2 << 64) | 1,
-    // which is past the boundary and therefore proves it.
+    // The id the contract's own `_priceAt` accepts: the last print of phase 1. Its successor inside
+    // that phase does not exist, and the contract does not look anywhere else — so it is provably
+    // the last print at or before the boundary.
     expect(h.publicClient.simulateContract).toHaveBeenCalledWith(
       expect.objectContaining({ functionName: 'executeRound', args: [round(1n, 5n)] }),
     );
@@ -482,11 +904,13 @@ describe('MarketWorker boundary lookup across an aggregator phase change', () =>
     expect(failures(h, 'boundary-unusable')).toBe(0);
   });
 
-  it('steps back over a whole phase that is entirely after the boundary', async () => {
+  it('is unmoved by how many phases the feed has been through since', async () => {
+    // Two aggregator rollovers instead of one. The bound phase is still 1 and the answer is still
+    // its last print: the keeper never walks into phase 2 or 3, whose ids the contract rejects.
     const prints = phaseChangedFeed();
     prints.set(round(2n, 1n), { answer: 8_405_000_000_000n, updatedAt: LOCK_TS + 3 });
     prints.set(round(3n, 1n), { answer: 8_406_000_000_000n, updatedAt: LOCK_TS + 8 });
-    const h = makeHarness({ prints, chainNow: LOCK_TS + 20 });
+    const h = makeHarness({ prints, oraclePhase: 1n, chainNow: LOCK_TS + 20 });
     await h.worker.bootstrap();
 
     h.worker.start();
@@ -504,7 +928,7 @@ describe('MarketWorker boundary lookup across an aggregator phase change', () =>
   it('still reports a feed that genuinely has no print at or before the boundary', async () => {
     // Nothing to fall back to: every print is after the boundary, so this round really does void.
     const prints = new Map<bigint, Print>([[round(2n, 1n), { answer: 1n, updatedAt: LOCK_TS + 5 }]]);
-    const h = makeHarness({ prints, chainNow: LOCK_TS + 20 });
+    const h = makeHarness({ prints, oraclePhase: 2n, chainNow: LOCK_TS + 20 });
     await h.worker.bootstrap();
 
     h.worker.start();
@@ -513,24 +937,30 @@ describe('MarketWorker boundary lookup across an aggregator phase change', () =>
   });
 });
 
-describe('MarketWorker when the feed\'s latest round is unusable', () => {
-  // `_priceAt` proves finality against `_tryLatestRoundId`, which refuses a latest round whose
-  // answer is non-positive or whose `updatedAt` is 0 — and then rejects the boundary outright, so
-  // `executeRound` reverts and the round runs down its buffer into refunds. The keeper's whole
-  // reason for reproducing the proof is to say so BEFORE it sends; reading only the latest round
-  // *id* made it announce "boundary print verified" for a boundary the chain settles nothing at.
-  it('predicts the rejection instead of certifying a boundary the chain refuses', async () => {
+describe('MarketWorker and the feed\'s latest round', () => {
+  // `_priceAt` used to prove finality against `_tryLatestRoundId`, and gave up on the boundary
+  // whenever that read was refused. It does not any more, and it must not: the bound phase's own
+  // last print has to stay provable after the proxy has moved on to an aggregator this market will
+  // never accept. A mirror that kept the old rule announces "this round WILL VOID into refunds" and
+  // counts a failure about a boundary the chain settles perfectly well.
+  it('does not refuse a boundary because the feed\'s latest print has a non-positive answer', async () => {
     const prints = new Map<bigint, Print>([
       [77n, { answer: 8_412_345_000_000n, updatedAt: LOCK_TS - 10 }], // the candidate
-      [78n, { answer: 8_413_000_000_000n, updatedAt: LOCK_TS + 5 }], // a successor past the boundary
+      [78n, { answer: 8_413_000_000_000n, updatedAt: LOCK_TS + 5 }], // its successor, past the boundary
       [79n, { answer: 0n, updatedAt: LOCK_TS + 8 }], // latestRoundData(): answer <= 0
     ]);
     const h = makeHarness({ prints, chainNow: LOCK_TS + 20 });
     await h.worker.bootstrap();
 
     h.worker.start();
-    await vi.waitFor(() => expect(failures(h, 'boundary-unusable')).toBe(1), { timeout: 2_000, interval: 5 });
+    await vi.waitFor(() => expect(executeSimulations(h).length).toBeGreaterThanOrEqual(1), {
+      timeout: 2_000,
+      interval: 5,
+    });
     h.worker.stop();
+
+    expect((executeSimulations(h)[0]?.[0] as { args: readonly bigint[] }).args[0]).toBe(77n);
+    expect(failures(h, 'boundary-unusable')).toBe(0);
   });
 
   it('does the same when the latest round carries updatedAt == 0', async () => {
@@ -543,8 +973,38 @@ describe('MarketWorker when the feed\'s latest round is unusable', () => {
     await h.worker.bootstrap();
 
     h.worker.start();
-    await vi.waitFor(() => expect(failures(h, 'boundary-unusable')).toBe(1), { timeout: 2_000, interval: 5 });
+    await vi.waitFor(() => expect(executeSimulations(h).length).toBeGreaterThanOrEqual(1), {
+      timeout: 2_000,
+      interval: 5,
+    });
     h.worker.stop();
+
+    expect((executeSimulations(h)[0]?.[0] as { args: readonly bigint[] }).args[0]).toBe(77n);
+    expect(failures(h, 'boundary-unusable')).toBe(0);
+  });
+});
+
+describe('MarketWorker refusing an id from outside the market\'s phase', () => {
+  it('will not send one, however confidently the chain helper hands it over', async () => {
+    // `findRoundIdAt` is phase-filtered on chain, so this should be unreachable — which is exactly
+    // why it is worth pinning. If the keeper is ever pointed at a market whose helper and whose
+    // `oraclePhase()` disagree, an out-of-phase id is not a weak proof but no proof at all:
+    // `_tryRound` refuses to look at it and `executeRound` REVERTS. Sending it burns gas and
+    // settles nothing, so the keeper stops at its own gate and says which phase it is bound to.
+    const prints = new Map<bigint, Print>([
+      [round(2n, 5n), { answer: 8_404_000_000_000n, updatedAt: LOCK_TS - 10 }],
+    ]);
+    const h = makeHarness({ prints, oraclePhase: 1n, findRoundIgnoresPhase: true, chainNow: LOCK_TS + 20 });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(failures(h, 'boundary-wrong-phase')).toBe(1), { timeout: 2_000, interval: 5 });
+    h.worker.stop();
+
+    // Whatever else happens, the phase-2 id never reaches the chain.
+    for (const call of executeSimulations(h)) {
+      expect((call[0] as { args: readonly bigint[] }).args[0]).not.toBe(round(2n, 5n));
+    }
   });
 });
 
@@ -973,31 +1433,26 @@ describe('MarketWorker relay landing', () => {
   });
 });
 
-describe('MarketWorker boundary verification when latestRoundData cannot be read', () => {
-  it('does not report a settleable round as doomed because latestRoundData failed at the transport', async () => {
-    // The sibling of the `getRoundData` case. `_tryLatestRoundId` catches a REVERT, and `_priceAt`
-    // really does give up when it does — but an RPC that simply did not answer is not that. Reading
-    // both the same way made the keeper count a `boundary-unusable` failure and log "this round WILL
-    // VOID into refunds" about a boundary the chain would have settled, every time the RPC blinked.
-    const prints = new Map<bigint, Print>([
-      [77n, { answer: 8_412_345_000_000n, updatedAt: LOCK_TS - 10 }], // the boundary print
-      [78n, { answer: 8_413_000_000_000n, updatedAt: LOCK_TS + 5 }], // successor, past the boundary
-    ]);
+describe('MarketWorker when latestRoundData cannot be read at all', () => {
+  it('does not read a transport failure as "the feed has no print at this boundary"', async () => {
+    // The direct walk found nothing, so the keeper has to ask whether the feed has left the phase
+    // this market is bound to — and `latestRoundData()` is the read that answers it. An RPC that
+    // simply did not answer is not the feed saying no. Collapsing the two would have the keeper
+    // announce a void and stop trying, on a boundary it has established nothing about at all.
+    const prints = new Map<bigint, Print>([[77n, { answer: 8_412_345_000_000n, updatedAt: LOCK_TS + 5 }]]);
     const h = makeHarness({ prints, latestRoundDataFails: true, chainNow: LOCK_TS + 20 });
     await h.worker.bootstrap();
 
     h.worker.start();
-    await vi.waitFor(() => expect(executeSimulations(h).length).toBeGreaterThanOrEqual(1), {
+    await vi.waitFor(() => expect(failures(h, 'boundary-lookup')).toBeGreaterThanOrEqual(1), {
       timeout: 2_000,
       interval: 5,
     });
     h.worker.stop();
 
-    // The id the contract's own helper named still goes to the chain, which judges it for itself...
-    expect((executeSimulations(h)[0]?.[0] as { args: readonly bigint[] }).args[0]).toBe(77n);
-    // ...and the keeper does not pretend a read that never happened was a verdict.
-    expect(failures(h, 'boundary-unusable')).toBe(0);
+    // "Could not look" is not "nothing there": no void was predicted, and no id was sent.
     expect(failures(h, 'boundary-not-found')).toBe(0);
+    expect(executeSimulations(h)).toHaveLength(0);
   });
 });
 
@@ -1021,7 +1476,7 @@ describe('MarketWorker boundary verification against a lying proxy', () => {
   });
 });
 
-describe('MarketWorker previous-phase search when the feed cannot be read', () => {
+describe('MarketWorker bound-phase search when the feed cannot be read', () => {
   const phaseChanged = (): Map<bigint, Print> =>
     new Map<bigint, Print>([
       [round(1n, 1n), { answer: 8_400_000_000_000n, updatedAt: LOCK_TS - 250 }],
@@ -1033,14 +1488,15 @@ describe('MarketWorker previous-phase search when the feed cannot be read', () =
       [round(2n, 1n), { answer: 8_405_000_000_000n, updatedAt: LOCK_TS + 5 }],
     ]);
 
-  it('does not read an RPC failure inside the phase walk as "the phase does not exist"', async () => {
-    // The settleable print is the last of phase 1, and the only way to reach it is to walk back a
-    // phase. When that walk's very first read fails at the transport, turning the exception into
+  it('does not read an RPC failure inside the bound-phase walk as "the phase does not exist"', async () => {
+    // The settleable print is the last of the bound phase, and the only way to reach it is to probe
+    // that phase directly. When the first probe fails at the transport, turning the exception into
     // `null` made a phase that is right there look like a phase that never existed: `searchFailed`
     // stayed false, the keeper announced the round would void, and repeated failures ran a
     // perfectly settleable round into a timeout.
     const h = makeHarness({
       prints: phaseChanged(),
+      oraclePhase: 1n,
       rpcFailRounds: new Set([round(1n, 1n)]),
       chainNow: LOCK_TS + 20,
     });
@@ -1058,10 +1514,10 @@ describe('MarketWorker previous-phase search when the feed cannot be read', () =
     expect(h.publicClient.simulateContract).not.toHaveBeenCalled();
   });
 
-  it('still walks back to the previous phase when the reads actually succeed', async () => {
+  it('still finds the bound phase\'s last print when the reads actually succeed', async () => {
     // The same feed without the transport failure: the print is found and settled, so the test above
     // is pinning the failed READ and not merely a feed the walk cannot serve.
-    const h = makeHarness({ prints: phaseChanged(), chainNow: LOCK_TS + 20 });
+    const h = makeHarness({ prints: phaseChanged(), oraclePhase: 1n, chainNow: LOCK_TS + 20 });
     await h.worker.bootstrap();
 
     h.worker.start();

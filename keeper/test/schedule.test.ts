@@ -305,9 +305,14 @@ describe('relayCapacity', () => {
     expect(relayCapacity(20_000, 900)).toBe(44);
   });
 
-  it('never claims capacity below the caller\'s own relay', () => {
-    expect(relayCapacity(20_000, 1)).toBe(1);
-    expect(relayCapacity(20_000, 0)).toBe(1);
+  // This used to assert a floor of 1, which is what hid the misconfiguration it was meant to
+  // surface: with a lead wider than the whole staleness budget, the print lands too early and
+  // `_priceAt` rejects it, so the honest capacity is zero and `relaySlots > capacity` has to fire.
+  it('reports zero when the budget cannot carry even one relay', () => {
+    expect(relayCapacity(20_000, 1)).toBe(0);
+    expect(relayCapacity(20_000, 0)).toBe(0);
+    // …and one the moment it genuinely can: a 20s lead needs ~30s of budget once the margin is off.
+    expect(relayCapacity(20_000, 40)).toBeGreaterThanOrEqual(1);
   });
 });
 

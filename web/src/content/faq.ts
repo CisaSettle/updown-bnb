@@ -50,8 +50,8 @@ export const FAQ: FaqSection[] = [
         blocks: [
           {
             p: {
-              en: 'A binary option on price, settled entirely on BNB Smart Chain. You pick UP or DOWN on BTC or BNB over a fixed round — 5 minutes or 1 hour. When the round locks, an on-chain price becomes the strike; when it closes, another on-chain price decides the outcome. The winning side splits the losing side’s stake.',
-              zh: '一个完全在 BNB 智能链上结算的价格二元期权。你在一个固定时长的轮次里（5 分钟或 1 小时）押 BTC 或 BNB 的涨或跌。轮次锁定时，一个链上价格成为行权价；轮次结束时，另一个链上价格决定结果。赢的一方瓜分输的一方的本金。',
+              en: 'A binary option on price, settled entirely on BNB Smart Chain. You pick UP or DOWN on BTC, ETH or BNB over a fixed round — 5 minutes or 1 hour. When the round locks, an on-chain price becomes the strike; when it closes, another on-chain price decides the outcome. The winning side splits the losing side’s stake.',
+              zh: '一个完全在 BNB 智能链上结算的价格二元期权。你在一个固定时长的轮次里（5 分钟或 1 小时）押 BTC、ETH 或 BNB 的涨或跌。轮次锁定时，一个链上价格成为行权价；轮次结束时，另一个链上价格决定结果。赢的一方瓜分输的一方的本金。',
             },
           },
           {
@@ -105,8 +105,8 @@ export const FAQ: FaqSection[] = [
               {
                 title: { en: 'You collect', zh: '领取' },
                 body: {
-                  en: 'Winnings and refunds are pulled, not pushed: you call claim when you want the money. There is no deadline and no one can stop you.',
-                  zh: '赔付和退款是"你来取"而不是"我来发"：你想拿钱的时候自己调 claim。没有截止时间，也没有任何人能拦住你。',
+                  en: 'Winnings and refunds are pulled, not pushed: you call claim when you want the money. There is no deadline and no one can stop you — and anyone can pay the gas to push it to you.',
+                  zh: '赔付和退款是"你来取"而不是"我来发"：你想拿钱的时候自己调 claim。没有截止时间，也没有任何人能拦住你——而且任何人都可以自掏 gas 把钱推给你。',
                 },
               },
             ],
@@ -119,6 +119,36 @@ export const FAQ: FaqSection[] = [
           },
         ],
       },
+        {
+          id: 'auto-claim',
+          q: { en: 'Why is collecting not automatic?', zh: '为什么不自动领取？' },
+          blocks: [
+            {
+              p: {
+                en: 'Because paying everyone out during settlement would put your money at the mercy of strangers. Settlement is one transaction that has to close the round for every bettor at once. If that transaction also had to send funds to each winner, then a single winner whose address rejects the transfer — a contract with no payable receive, a token blocklist, an address that simply burns all the gas it is given — would make the whole transaction fail. The round could not settle. Everybody else would be stuck behind that one address, and it would cost an attacker one minimum bet to do it on purpose.',
+                zh: '因为"结算时给所有人打钱"会把你的钱交到陌生人手里。结算是一笔交易，要一次性为本轮所有下注者收尾。如果这笔交易还得给每个赢家转账，那么只要有一个赢家的地址拒收——没有 payable receive 的合约、代币黑名单、或者一个把 gas 烧光的地址——整笔交易就会失败，这一轮就结算不了。所有其他人都会被这一个地址卡住，而攻击者只需要下一笔最小注就能故意这么干。',
+              },
+            },
+            {
+              p: {
+                en: 'So the contract never sends money on its own. It writes down what it owes you, and that entry sits there until it is collected. It has no expiry, it is not pausable, and it has no owner check — which is the same reason a pause cannot strand you.',
+                zh: '所以合约从不主动打钱。它只是记下欠你多少，这条记录就一直放在那里等人来取。它不会过期、不受暂停影响、也没有任何权限检查——这也正是暂停困不住你的原因。',
+              },
+            },
+            {
+              p: {
+                en: 'That is the guarantee. The convenience is layered on top of it, not traded against it. Call setAutoClaimOptIn(true) once and anyone at all — our keeper, a sweeper bot, a friend — can then spend their own gas to collect for you, with the contract paying **you**, at **your** address. The caller cannot redirect a single wei; all they can buy is the right to have paid your gas. Turn it off the same way, any time. Either way you can always claim yourself.',
+                zh: '这是**保证**。便利是叠在保证之上的，而不是拿保证换来的。你调用一次 setAutoClaimOptIn(true)，之后任何人——我们的 keeper、清扫机器人、你的朋友——都可以自掏 gas 替你领取，而合约把钱付给**你**、打到**你的地址**。调用者一个 wei 都改不了流向，他能买到的只是替你付了一次 gas。想关掉，同样一句话，随时。开着关着，你都能自己领。',
+              },
+            },
+            {
+              p: {
+                en: 'Why does it need your say-so at all, rather than being on for everyone? Because the contract cannot tell what kind of account you are. An address reports no code while its constructor is still running, and again after it has self-destructed, so a contract can take a position from inside its own constructor and afterwards look exactly like a wallet. Some contracts genuinely cannot spend from their own address — the whole reason claimTo exists — and paying one of those would strand its winnings and cancel the route it had planned. Rather than guess, and be wrong about somebody, the contract asks.',
+                zh: '那为什么还要你点头，不能默认对所有人打开？因为合约无法判断你是哪一种账户。一个地址在自己的构造函数还没跑完时、以及自毁之后，都会报告没有代码——所以一个合约可以在自己的 constructor 里下注，事后看起来和普通钱包一模一样。而确实有些合约没法从自己地址上把钱花出去，这正是 claimTo 存在的理由：把钱打给这种账户会把它的赔付卡死，还顺手取消了它安排好的路径。与其猜错某个人，合约选择先问你一句。',
+              },
+            },
+          ],
+        },
     ],
   },
 
@@ -187,8 +217,8 @@ export const FAQ: FaqSection[] = [
           },
           {
             p: {
-              en: 'Whoever settles the round hands the contract a feed round id, and the contract proves it is the right one: the print must be at or before the boundary, must be recent enough that the feed was genuinely alive there, and must be the last one that qualifies — either the feed’s newest print, or the very next print must already be past the boundary. A wrong id does not settle the round at a wrong price; the transaction simply reverts.',
-              zh: '来结算的人把一个喂价轮次 id 交给合约，合约会**证明**它是对的：这笔报价必须在边界时刻或之前、必须足够新以证明喂价当时确实活着、并且必须是符合条件的最后一笔——要么它就是喂价的最新一笔，要么紧接着的下一笔已经越过了边界。交错 id 不会导致按错误价格结算，那笔交易只会直接失败。',
+              en: 'Whoever settles the round hands the contract a feed round id, and the contract proves it is the right one: the print must come from the one aggregator this market is bound to, must be at or before the boundary, must be recent enough that the feed was genuinely alive there, and must be the last one that qualifies — either nothing later exists on that aggregator, or the very next print is already past the boundary. A wrong id does not settle the round at a wrong price; the transaction simply reverts.',
+              zh: '来结算的人把一个喂价轮次 id 交给合约，合约会**证明**它是对的：这笔报价必须来自本市场绑定的那一个聚合器、必须在边界时刻或之前、必须足够新以证明喂价当时确实活着、并且必须是符合条件的最后一笔——要么该聚合器上再没有更晚的报价，要么紧接着的下一笔已经越过了边界。交错 id 不会导致按错误价格结算，那笔交易只会直接失败。',
             },
           },
           {
@@ -378,18 +408,24 @@ $ cast call $FEED "getRoundData(uint80)(uint80,int256,uint256,uint256,uint80)" \
                 zh: '单边池——没有人押另一边，所以根本无从赢起。',
               },
               {
-                en: 'The feed went dark — no usable price existed at the boundary before the round’s window ran out.',
-                zh: '喂价中断——在该轮时限用尽之前，边界时刻不存在可用的价格。',
+                en: 'The feed went dark — no usable price existed at the boundary before the round’s window ran out. The same happens if the feed ever moves to a new aggregator phase: nothing can be proved after that, so every round runs out its window and refunds.',
+                zh: '喂价中断——在该轮时限用尽之前，边界时刻不存在可用的价格。喂价如果换到了新的聚合器相位（phase），结果也一样：此后任何报价都无法被证明，于是每一轮都会耗尽时限并全额退回。',
               },
               {
                 en: 'Nobody settled the round in time — the window elapsed, so it can no longer be settled at all.',
                 zh: '没有人及时结算——时限已过，该轮从此不可能再被结算。',
               },
               {
-                en: 'The market was paused while your round was live.',
-                zh: '你的轮次进行中时市场被暂停。',
+                en: 'The market was paused **before your round locked** — it never received a strike, so nobody could have known its outcome.',
+                zh: '市场在**你的轮次锁定之前**被暂停——它从未拿到行权价，谁都不可能预知它的结果。',
               },
             ],
+          },
+          {
+            p: {
+              en: 'A pause is not on that list for a round that has already locked. Once a round has its strike, it settles through a pause at the price the feed actually printed, and the winning side is paid — see “What can the admin do?” below.',
+              zh: '对一个**已经锁定**的轮次来说，暂停不在上面这张清单里。轮次一旦拿到行权价，就会穿过暂停、按喂价真实报出的价格结算，赢的一方照常拿钱——详见下面的"管理员能做什么？"。',
+            },
           },
           {
             note: {
@@ -419,23 +455,27 @@ $ cast call $FEED "getRoundData(uint80)(uint80,int256,uint256,uint256,uint80)" \
               ],
               rows: [
                 [
-                  { en: 'Pause the market, which stops new bets and refunds live rounds in full', zh: '暂停市场——停止新下注，并让进行中的轮次全额退款' },
+                  { en: 'Pause the market — new bets stop, and no further round locks or opens', zh: '暂停市场——停止新下注，此后不再有轮次被锁定或开出' },
+                  { en: 'Cancel a round that has already locked — it settles through a pause, at the price the feed actually printed', zh: '取消一个已经锁定的轮次——它会照常穿过暂停结算，用的就是喂价真实报出的价格' },
+                ],
+                [
+                  { en: 'Change the fee, which only ever applies to rounds starting after the call, and the bet-size limits, which apply to the open round at once — neither reaches a bet already placed', zh: '修改手续费（永远只对调用之后开始的轮次生效）和下注额度上限（对正在开放下注的那一轮立即生效）——两者都够不到已经下好的注' },
                   { en: 'Touch your principal or your unclaimed winnings, by any path at all', zh: '通过任何途径动你的本金或未领取的赔付' },
                 ],
                 [
-                  { en: 'Change the fee and the limits — but only for rounds that start afterwards', zh: '修改手续费和限额——但只对之后开始的轮次生效' },
+                  { en: 'Withdraw the accrued protocol fee', zh: '提取已累计的协议手续费' },
                   { en: 'Block, delay or reverse a withdrawal — claiming is not pausable and has no owner check', zh: '阻止、拖延或撤销一次提取——领取不受暂停影响且无权限检查' },
                 ],
                 [
-                  { en: 'Withdraw the accrued protocol fee', zh: '提取已累计的协议手续费' },
-                  { en: 'Choose, supply or override a settlement price', zh: '选择、提供或覆盖任何结算价格' },
-                ],
-                [
-                  { en: 'Replace the price feed, and only while the market is paused', zh: '更换价格喂价，且只能在市场暂停时进行' },
-                  { en: 'Settle, un-void or un-expire a round, or revive one that already expired', zh: '结算、撤销作废、撤销过期，或让已过期的轮次复活' },
+                  { en: 'Rescue a token someone sent to the market by mistake — never the settlement asset', zh: '取回别人误转进市场合约的代币——但结算资产永远取不走' },
+                  { en: 'Choose, supply, override or replace the price source — the feed address is immutable and there is no setter for it', zh: '选择、提供、覆盖或更换价格来源——喂价地址是不可变的，合约里根本没有对应的设置函数' },
                 ],
                 [
                   { en: 'Hand ownership to another address, in two steps', zh: '把所有权分两步移交给另一个地址' },
+                  { en: 'Settle a round at a price of their choosing, un-void or un-expire one, or revive one that already expired — anyone may call executeRound, and it takes the same proof from everybody', zh: '按自己选定的价格结算某一轮、撤销作废、撤销过期，或让已过期的轮次复活——executeRound 谁都能调用，而且对谁都要求同一份证明' },
+                ],
+                [
+                  { en: 'Hide a market from this app’s list, through the registry — the contract keeps running and every claim still works', zh: '通过注册表把某个市场从本应用的列表里隐藏——合约照常运行，所有领取照常可用' },
                   { en: 'Renounce ownership — it is disabled, because an ownerless market could never be paused or repaired again', zh: '放弃所有权——该功能已被禁用，因为无主的市场将永远无法暂停或修复' },
                 ],
               ],
@@ -443,8 +483,41 @@ $ cast call $FEED "getRoundData(uint80)(uint80,int256,uint256,uint256,uint80)" \
           },
           {
             note: {
-              en: 'The honest part: pausing is worth money to an owner who is also betting. Once a settlement price is visible, an owner who can see they are losing could pause instead of letting the round settle, and get their stake back. It cannot take your money — it can only cancel a round — but it is a real option, and it is why the mainnet owner is a multisig behind a time delay: by the time a pause could land, the round has already settled.',
-              zh: '说实话的部分：暂停对一个同时下注的 owner 来说是有价值的。一旦结算价可见，看到自己要输的 owner 可以选择暂停而不是让轮次结算，从而拿回本金。它拿不走你的钱——只能取消一个轮次——但这确实是一个真实存在的期权，也正是主网 owner 必须是**带时间锁的多签**的原因：等一笔暂停交易能够生效时，那一轮早就结算完了。',
+              en: 'The honest part: a pause is not a cancel button, but it is not nothing either. A round that has already locked settles straight through a pause, at its true price, and the winner can claim while the market is paused — so an owner who watches the settlement print land, sees they have lost and hits pause gains exactly nothing. What a pause does end is a round that had **not** locked yet: it never received a strike, so nobody could have known its outcome, and every stake in it comes back in full. That is the whole residual, and it is bounded by design: an owner can stop the market, never a bet whose result is already visible.',
+              zh: '说实话的部分：暂停不是一个"取消按钮"，但它也不是完全没有代价。**已经锁定**的轮次会径直穿过暂停、按真实价格结算，赢家在市场暂停期间照样可以领取——所以一个眼看结算价落定、发现自己输了才去按暂停的管理员，什么也捞不到。暂停真正终结的是**还没锁定**的轮次：它从未拿到行权价，谁都不可能预知它的结果，因此里面每一笔本金全额退回。这就是全部的残余风险，而且它天生有界：管理员能停下市场，却停不下一笔结果已经摆在明面上的下注。',
+            },
+          },
+        ],
+      },
+      {
+        id: 'price-source',
+        q: {
+          en: 'Can the admin change where the price comes from?',
+          zh: '管理员能改动价格的来源吗？',
+        },
+        blocks: [
+          {
+            p: {
+              en: 'No. The feed address is fixed when the market is deployed and cannot be changed afterwards — it is immutable, and the contract has no function that sets it. Read oracle() on the market once and you have read the only price source it will ever have.',
+              zh: '不能。喂价地址在市场部署的那一刻就定死了，之后无法更改——它是不可变的，合约里根本没有任何设置它的函数。对市场调用一次 oracle()，你读到的就是它这辈子唯一的价格来源。',
+            },
+          },
+          {
+            p: {
+              en: 'This is not a small detail. A settable price source would be a path from the admin key straight to the settlement price of a round that has **already locked**: pause the market, point it at a feed you control, settle the locked round at whatever price you like, point it back, unpause. A locked position has no exit, so no time delay and no multisig fixes that — the only answer is that the source cannot change at all.',
+              zh: '这不是细枝末节。一个可设置的价格来源，等于给管理员私钥开了一条直通**已锁定**轮次结算价的路：暂停市场、把它指向一个自己控制的喂价、按任意价格结算那个已锁定的轮次、再指回去、解除暂停。已锁定的仓位没有退出通道，所以时间锁和多签都救不了——唯一的答案就是这个来源根本不能改。',
+            },
+          },
+          {
+            p: {
+              en: 'The market is also bound for life to the single Chainlink aggregator it was deployed against. A print from any other aggregator is not a valid proof and is rejected outright. If the feed genuinely moves on, nothing can be proved any more: every round runs out its settlement window, every stake is refunded in full with no fee, and the market retires. A new market is deployed against the new feed. Nothing gets stuck, and nothing is ever settled on a price you cannot check.',
+              zh: '这个市场同时被终身绑定在它部署时对应的那一个 Chainlink 聚合器上。来自任何其他聚合器的报价都不是有效证明，会被直接拒绝。如果喂价真的换代了，此后任何价格都无法被证明：每一轮都会耗尽自己的结算时限，每一笔本金全额退回、不收手续费，这个市场就此退役。新的市场会针对新的喂价重新部署。不会有钱被卡住，也不会有任何一轮按你无法核查的价格结算。',
+            },
+          },
+          {
+            note: {
+              en: 'That is true of the markets you are trading right now, not only of the source: chain 97 was redeployed on the current code, and you can check it yourself — oraclePhase() answers, and setOracle reverts because it is not there.',
+              zh: '这一点对你现在正在交易的市场就是成立的，不只是对源码而言：97 链已在当前代码上重新部署，你可以自己验证——oraclePhase() 能回答，而 setOracle 会回滚，因为它根本不存在。',
             },
           },
         ],
@@ -460,12 +533,12 @@ $ cast call $FEED "getRoundData(uint80)(uint80,int256,uint256,uint256,uint80)" \
                 zh: '你可能亏光押进去的钱。二元期权是全有或全无，而 5 分钟的价格波动在扣费之前接近抛硬币——3% 的手续费意味着随机下注的人长期必然亏损。',
               },
               {
-                en: 'Smart contract risk. The code has been through several rounds of adversarial review and a large test suite, and it is verified on chain so you can read it, but no review makes a contract certainly correct.',
-                zh: '智能合约风险。这份代码经过多轮对抗式评审和大量测试，并且已在链上完成源码验证、你可以自己读——但没有任何评审能保证一份合约绝对无误。',
+                en: 'Smart contract risk. The code has been through six rounds of adversarial cross-vendor review and an independent audit, on top of a large test suite, and it is verified on chain so you can read it. The most recent of those found a critical bug — an admin path to the settlement price of an already-locked round — which is why the price source is now immutable. That is the argument for reading the review log, not for trusting that the next one finds nothing.',
+                zh: '智能合约风险。这份代码经过六轮对抗式跨厂商评审和一次独立审计，外加大量测试，并且已在链上完成源码验证、你可以自己读。其中最近的一次查出了一个严重漏洞——管理员可以插手一个已锁定轮次的结算价——这正是价格来源现在改为不可变的原因。这说明的是"评审记录值得一读"，而不是"下一轮评审一定查不出东西"。',
               },
               {
-                en: 'Oracle risk. Settlement is only as good as the feed. A feed that stops publishing voids rounds into refunds rather than settling them wrongly, which is the safe failure, but a feed reporting a wrong price would settle a wrong outcome.',
-                zh: '预言机风险。结算的可靠性上限就是喂价的可靠性。喂价停止发布时，轮次会作废退款而不是错误结算——这是安全的失败方式；但如果喂价报出错误价格，就会导致错误的结算结果。',
+                en: 'Oracle risk. Settlement is only as good as the feed. A feed that stops publishing lets rounds run out their window into refunds rather than settling them wrongly, and a feed that moves to a new aggregator retires the market into refunds — both are the safe failure. But a feed reporting a wrong price would settle a wrong outcome, and nothing on chain can tell the difference.',
+                zh: '预言机风险。结算的可靠性上限就是喂价的可靠性。喂价停止发布时，轮次会耗尽时限转为退款而不是错误结算；喂价换到新的聚合器时，市场会退役并全部退款——这两种都是安全的失败方式。但如果喂价报出的价格本身就是错的，就会结算出错误的结果，而链上没有任何东西能分辨这一点。',
               },
               {
                 en: 'Thin books. In a round where almost nobody took your side, your multiple is large but the round may void for want of a counterparty — you get your stake back, not a win.',

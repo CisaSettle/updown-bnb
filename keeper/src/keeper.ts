@@ -445,6 +445,10 @@ export class Keeper {
       lastExecutionMs: worker.lastExecutionMs,
       supervisedSinceMs: worker.supervisedSinceMs,
       active: worker.active,
+      // Paused is not inactive. A market with a round locked before the pause is mid-settlement, and
+      // /healthz has to say so — the keeper is still driving it, and if it stops the round refunds.
+      paused: worker.paused,
+      pausedSettlement: worker.pausedSettlement,
       observed: worker.observed,
       degraded: worker.degradedReason,
       // Executing on time is not the same as settling anything. Without this, a market that voids

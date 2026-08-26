@@ -23,7 +23,7 @@ export function TestnetBanner({ onFaucet }: { onFaucet?: () => void }) {
     <div className="border-b border-amber-300 bg-amber-100 text-amber-950 dark:border-amber-900 dark:bg-amber-950/70 dark:text-amber-100">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 text-xs sm:px-6">
         <span className="chip bg-amber-500/30 font-bold uppercase tracking-wide">{t(lang, ui.testnet.chip)}</span>
-        <p className="min-w-0 flex-1">{t(lang, ui.testnetNotice(lang))}</p>
+        <p className="min-w-0 flex-1 basis-full leading-relaxed sm:basis-0">{t(lang, ui.testnetNotice(lang))}</p>
         {hasFaucetToken ? (
           <button
             type="button"

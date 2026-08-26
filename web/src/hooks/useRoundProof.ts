@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react'
 import { zeroAddress } from 'viem'
-import { useReadContract, useReadContracts } from 'wagmi'
+import { useReadContracts } from 'wagmi'
 import { aggregatorV3Abi } from '../abi'
 import { CHAIN_ID } from '../config/chains'
 import type { Address } from '../config/deployment'
@@ -13,7 +13,6 @@ import {
   type BoundaryReport,
   type ProofOutcome,
 } from '../lib/proof'
-import { latestUsableRoundId } from '../lib/settlement'
 
 export type ProofStatus = 'idle' | 'loading' | 'ready' | 'error'
 
@@ -33,9 +32,9 @@ export interface RoundProofState {
 /**
  * Read the feed back and re-run the contract's boundary proof for one round.
  *
- * Two reads, in the order the contract itself needs them:
- *   1. `latestRoundData()` — which is `_tryLatestRoundId`, and decides which successor ids exist.
- *   2. `getRoundData(id)` for each recorded id and each id the successor walk would consult.
+ * One multicall, containing `getRoundData(id)` for each recorded id and its immediate successor.
+ * `_priceAt` does not consult `latestRoundData`; a reverted successor read proves that the recorded
+ * id is the last print in the pinned phase.
  *
  * Everything after that is `verifyBoundary`, which is pure and tested against the Solidity. The
  * hook's only job is to be honest about the reads: while they are in flight the status is
@@ -60,22 +59,9 @@ export function useRoundProof(args: {
   const settledForGood = Boolean(round?.settled || round?.voided)
   const poll = active && !settledForGood ? 15_000 : (false as const)
 
-  const latestQuery = useReadContract({
-    chainId: CHAIN_ID,
-    address: oracle,
-    abi: aggregatorV3Abi,
-    functionName: 'latestRoundData',
-    query: { enabled: active, staleTime: 5_000, refetchInterval: poll },
-  })
-
-  // `_tryLatestRoundId`, not `latestRoundData()[0]`: an unusable latest print makes the contract's
-  // own successor walk unstartable, and the panel must then say the last-print rule went unchecked
-  // rather than quietly skip it.
-  const latestRoundId = useMemo(() => latestUsableRoundId(latestQuery.data), [latestQuery.data])
-
   const ids = useMemo(
-    () => proofReadIds(boundaries.map((b) => b.oracleId), latestRoundId),
-    [boundaries, latestRoundId],
+    () => proofReadIds(boundaries.map((b) => b.oracleId)),
+    [boundaries],
   )
 
   const printsQuery = useReadContracts({
@@ -93,23 +79,21 @@ export function useRoundProof(args: {
   })
 
   const refetch = useCallback(() => {
-    void latestQuery.refetch()
     void printsQuery.refetch()
-  }, [latestQuery, printsQuery])
+  }, [printsQuery])
 
   return useMemo(() => {
     if (!active) {
       return { status: 'idle', outcome: 'incomplete', reports: [], isFetching: false, refetch }
     }
 
-    const error = (latestQuery.error ?? printsQuery.error) as Error | undefined
-    const loading = latestQuery.isLoading || (ids.length > 0 && printsQuery.isLoading)
+    const error = printsQuery.error as Error | undefined
+    const loading = ids.length > 0 && printsQuery.isLoading
     const status: ProofStatus = error ? 'error' : loading ? 'loading' : 'ready'
 
     // A read that errored can still be holding a previous success in cache. That data was true of
     // a moment we can no longer vouch for, so it is not fed into the proof at all: the checks come
-    // back "not checked" rather than re-asserting a pass nobody just verified. Same for the feed's
-    // latest round id, which decides whether the successor walk can run at all.
+    // back "not checked" rather than re-asserting a pass nobody just verified.
     const reports = proofReportsFromReads({
       boundaries,
       oracleMaxAge: round?.oracleMaxAge ?? 0,
@@ -117,28 +101,22 @@ export function useRoundProof(args: {
       priceDecimals,
       ids,
       results: status === 'ready' ? (printsQuery.data as readonly unknown[] | undefined) : undefined,
-      latestRoundId: status === 'ready' ? latestRoundId : undefined,
     })
 
-    const stamps = [latestQuery.dataUpdatedAt, printsQuery.dataUpdatedAt].filter((n) => typeof n === 'number' && n > 0)
+    const stamps = [printsQuery.dataUpdatedAt].filter((n) => typeof n === 'number' && n > 0)
     return {
       status,
       outcome: combineOutcomes(reports),
       reports,
       error,
       checkedAt: stamps.length > 0 ? Math.max(...stamps) : undefined,
-      isFetching: latestQuery.isFetching || printsQuery.isFetching,
+      isFetching: printsQuery.isFetching,
       refetch,
     }
   }, [
     active,
     boundaries,
     ids,
-    latestRoundId,
-    latestQuery.error,
-    latestQuery.isLoading,
-    latestQuery.isFetching,
-    latestQuery.dataUpdatedAt,
     printsQuery.data,
     printsQuery.error,
     printsQuery.isLoading,

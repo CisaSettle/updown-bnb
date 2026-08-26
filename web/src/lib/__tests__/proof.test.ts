@@ -41,7 +41,6 @@ function run(over: Partial<Parameters<typeof verifyBoundary>[0]> = {}) {
     nowSeconds: NOW,
     priceDecimals: 8,
     candidate,
-    latestRoundId: 12n,
     prints: prints(candidate, successor),
     ...over,
   })
@@ -155,17 +154,15 @@ describe('verifyBoundary — the successor check is part of the rule', () => {
     expect(status(report, 'last')).toBe('fail')
   })
 
-  it('passes trivially when the candidate is the feed’s newest print and nothing follows it', () => {
-    const report = run({ latestRoundId: 10n, prints: prints(candidate) })
+  it('passes when the completed immediate-successor read reports no usable print', () => {
+    const report = run({ successorChecked: true, prints: prints(candidate) })
     expect(report.outcome).toBe('verified')
     expect(status(report, 'last')).toBe('pass')
   })
 
-  it('still catches a successor that appeared after a cached "latest" was taken', () => {
-    // The stale-cache trap: `latestRoundData` says round 10 is newest, but round 11 exists and is
-    // at or before the boundary. The contract would reject that id today, so neither may this.
+  it('catches an immediate successor at or before the boundary', () => {
     const backdated = print(11n, Number(BOUNDARY) - 2)
-    const report = run({ latestRoundId: 10n, prints: prints(candidate, backdated) })
+    const report = run({ prints: prints(candidate, backdated) })
     expect(report.outcome).toBe('failed')
     expect(status(report, 'last')).toBe('fail')
   })
@@ -179,29 +176,29 @@ describe('verifyBoundary — the successor check is part of the rule', () => {
     expect(status(report, 'match')).toBe('pass')
   })
 
-  it('reports "not checked" when the feed’s latest round is unreadable', () => {
-    const report = run({ latestRoundId: undefined })
-    expect(report.outcome).toBe('incomplete')
-    expect(status(report, 'last')).toBe('unknown')
-  })
-
-  it('follows the successor across an aggregator phase change, as the contract does', () => {
-    const lastOfPhase = (1n << 64n) | 40n
+  // A market is bound to one aggregator phase for life and settlement refuses every id outside it,
+  // so the phase's final round has no successor the chain would consult. The panel must call that
+  // a pass on its own evidence — not an unread check — or it would show a round as unverified that
+  // the chain settles without complaint.
+  it('passes the successor check at a phase seam, where nothing can follow', () => {
+    const lastOfPhase = (1n << 64n) | 900n
     const firstOfNext = firstRoundOfPhase(2n)
     const phaseSpec: BoundarySpec = { ...spec, oracleId: lastOfPhase }
     const cand = print(lastOfPhase, Number(BOUNDARY) - 10)
-    const next = print(firstOfNext, Number(BOUNDARY) + 30)
+    // a print in the NEXT phase, at or before the boundary, would have displaced the candidate
+    // under the old cross-phase walk. The chain never sees it.
+    const next = print(firstOfNext, Number(BOUNDARY) - 1)
     const report = verifyBoundary({
       spec: phaseSpec,
       oracleMaxAge: MAX_AGE,
       nowSeconds: NOW,
       priceDecimals: 8,
       candidate: cand,
-      latestRoundId: firstOfNext,
+      successorChecked: true,
       prints: prints(cand, next),
     })
     expect(report.outcome).toBe('verified')
-    expect(report.successor?.roundId).toBe(firstOfNext)
+    expect(report.successor).toBeUndefined()
   })
 })
 
@@ -235,7 +232,6 @@ describe('verifyBoundary — nothing is green by default', () => {
       nowSeconds: NOW,
       priceDecimals: 8,
       candidate: fresh,
-      latestRoundId: 10n,
       prints: prints(fresh),
     })
     expect(status(report, 'usable')).toBe('unknown')
@@ -260,7 +256,7 @@ describe('outcome arithmetic', () => {
     const bad = run({ prints: prints(candidate, print(11n, Number(BOUNDARY) - 1)) })
     expect(combineOutcomes([good, good])).toBe('verified')
     expect(combineOutcomes([good, bad])).toBe('failed')
-    expect(combineOutcomes([good, run({ latestRoundId: undefined })])).toBe('incomplete')
+    expect(combineOutcomes([good, run({ successorChecked: false, prints: prints(candidate) })])).toBe('incomplete')
   })
 })
 
@@ -305,28 +301,29 @@ describe('proofBoundaries', () => {
 
 describe('proofReadIds', () => {
   it('reads each recorded id and the successor the contract would consult', () => {
-    expect(proofReadIds([10n, 12n], 20n)).toEqual([10n, 11n, 12n, 13n])
+    expect(proofReadIds([10n, 12n])).toEqual([10n, 11n, 12n, 13n])
   })
 
   it('reads id + 1 even when the cached latest says there is nothing after it', () => {
-    expect(proofReadIds([10n], 10n)).toEqual([10n, 11n])
+    expect(proofReadIds([10n])).toEqual([10n, 11n])
   })
 
-  it('falls back to the candidates alone when the latest round is unreadable', () => {
-    expect(proofReadIds([10n, 11n], undefined)).toEqual([10n, 11n])
+  it('reads successors without consulting the feed latest round', () => {
+    expect(proofReadIds([10n, 11n])).toEqual([10n, 11n, 12n])
   })
 
   it('de-duplicates where one round’s close is the next candidate’s successor', () => {
-    expect(proofReadIds([10n, 11n], 20n)).toEqual([10n, 11n, 12n])
+    expect(proofReadIds([10n, 11n])).toEqual([10n, 11n, 12n])
   })
 
-  it('includes the first round of following phases when the feed has rolled over', () => {
-    const ids = proofReadIds([(1n << 64n) | 40n], firstRoundOfPhase(2n))
-    expect(ids).toContain(firstRoundOfPhase(2n))
+  it('never reads into a later phase, because settlement cannot', () => {
+    const ids = proofReadIds([(1n << 64n) | 40n])
+    expect(ids).not.toContain(firstRoundOfPhase(2n))
+    expect(ids).toEqual([(1n << 64n) | 40n, (1n << 64n) | 41n])
   })
 
   it('skips a boundary with no id', () => {
-    expect(proofReadIds([undefined], 20n)).toEqual([])
+    expect(proofReadIds([undefined])).toEqual([])
   })
 })
 

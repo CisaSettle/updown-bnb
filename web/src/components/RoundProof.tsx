@@ -148,7 +148,7 @@ function BoundaryCard({
         </span>
       </div>
 
-      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div>
           <p className="label">{t(lang, { en: 'The market recorded', zh: '市场记录的价格' })}</p>
           <p className="num mt-0.5 text-lg font-bold">{formatPrice(report.recordedPrice, priceDecimals)}</p>

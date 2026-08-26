@@ -6,7 +6,11 @@ import { ONE, renderIn, round, usdt } from './fixtures'
 
 // The panel only needs an identity and a transaction runner from wagmi; neither is exercised by a
 // static render, and neither may drag a live connection into a unit test.
-vi.mock('wagmi', () => ({ useAccount: () => ({ isConnected: true }) }))
+vi.mock('wagmi', () => ({
+  useAccount: () => ({ isConnected: true, address: '0x00000000000000000000000000000000000000A1' }),
+  useReadContract: () => ({ data: false, refetch: async () => undefined }),
+  useWriteContract: () => ({ writeContractAsync: async () => '0x' }),
+}))
 vi.mock('../../hooks/useTxRunner', () => ({
   useTxRunner: () => ({ writeContractAsync: async () => '0x', run: async () => true, busyKey: null }),
 }))

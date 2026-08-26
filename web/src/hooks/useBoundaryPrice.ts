@@ -9,7 +9,6 @@ import { asBigInt, asBool } from '../lib/read'
 import {
   boundaryProofFromReads,
   boundaryReadIds,
-  latestUsableRoundId,
   needsBoundaryPrice,
   type BoundaryProof,
 } from '../lib/settlement'
@@ -25,8 +24,8 @@ const FIND_MAX_STEPS = 256n
  * that timestamp — for the window between close and execution.
  *
  * Two steps, because the successor ids we have to check depend on the candidate:
- *   1. `findRoundIdAt(closeTs, 0, n)` on the market + `latestRoundData()` on the feed.
- *   2. `getRoundData` for the candidate and for every id `_successorUpdatedAt` would consult.
+ *   1. `findRoundIdAt(closeTs, 0, n)` on the market.
+ *   2. `getRoundData` for the candidate and for `candidate + 1`, exactly as `_priceAt` does.
  *
  * Everything is then judged by `boundaryProofFromReads`, which is `_priceAt` line for line. If the
  * proof does not stand up the caller gets `unresolved` and the card says so instead of showing a
@@ -53,14 +52,6 @@ export function useBoundaryPrice(
     query: { enabled, refetchInterval: 5_000, staleTime: 3_000 },
   })
 
-  const latestQuery = useReadContract({
-    chainId: CHAIN_ID,
-    address: oracle,
-    abi: aggregatorV3Abi,
-    functionName: 'latestRoundData',
-    query: { enabled, refetchInterval: 5_000, staleTime: 3_000 },
-  })
-
   const candidateId = useMemo(() => {
     const raw = findQuery.data as readonly unknown[] | undefined
     const id = asBigInt(raw?.[0])
@@ -70,13 +61,8 @@ export function useBoundaryPrice(
     return found ? id : undefined
   }, [findQuery.data])
 
-  // `_tryLatestRoundId`, not `latestRoundData()[0]`: an unusable latest print (`answer <= 0` or
-  // `updatedAt == 0`) makes `_priceAt` fail for *every* round id, so the mirror can prove nothing
-  // and must fall back to the pending state rather than assert an outcome the chain would reject.
-  const latestRoundId = useMemo(() => latestUsableRoundId(latestQuery.data), [latestQuery.data])
-
   // The candidate plus every id the contract's own successor walk would look at, in its order.
-  const ids = useMemo(() => boundaryReadIds(candidateId, latestRoundId), [candidateId, latestRoundId])
+  const ids = useMemo(() => boundaryReadIds(candidateId), [candidateId])
 
   const printsQuery = useReadContracts({
     contracts: ids.map(
@@ -100,12 +86,11 @@ export function useBoundaryPrice(
       oracleMaxAge,
       nowSeconds,
       candidateId,
-      latestRoundId,
       ids,
       results: printsQuery.data as readonly unknown[] | undefined,
     })
 
-    const isLoading = findQuery.isLoading || latestQuery.isLoading || (ids.length > 0 && printsQuery.isLoading)
+    const isLoading = findQuery.isLoading || (ids.length > 0 && printsQuery.isLoading)
     return { proof, isLoading }
   }, [
     wanted,
@@ -114,10 +99,8 @@ export function useBoundaryPrice(
     printsQuery.data,
     printsQuery.isLoading,
     candidateId,
-    latestRoundId,
     oracleMaxAge,
     nowSeconds,
     findQuery.isLoading,
-    latestQuery.isLoading,
   ])
 }

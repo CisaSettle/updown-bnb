@@ -17,7 +17,20 @@ export const EXAMPLE_PATH = join(WEB_ROOT, 'src', 'config', 'deployments.example
 const REQUIRED_ADDRESS_KEYS = ['registry']
 // Written by the Foundry deploy script; treated as optional so the UI keeps building if the
 // deploy artifact gains or drops a key.
-const OPTIONAL_ADDRESS_KEYS = ['btcUsd5m', 'btcUsd1h', 'bnbUsd5m', 'btcFeed', 'bnbFeed', 'usdt', 'owner', 'operator']
+const OPTIONAL_ADDRESS_KEYS = [
+  'btcUsd5m',
+  'btcUsd1h',
+  'ethUsd5m',
+  'ethUsd1h',
+  'bnbUsd5m',
+  'bnbUsd1h',
+  'btcFeed',
+  'ethFeed',
+  'bnbFeed',
+  'usdt',
+  'owner',
+  'operator',
+]
 const ZERO = '0x0000000000000000000000000000000000000000'
 const isAddr = (v) => typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/.test(v)
 

@@ -349,24 +349,42 @@ async function scenarioPermissionlessAndPause() {
   await send(BOB, m, MARKET, 'executeRound', [await boundaryId(m, Number(r.lockTs))])
   record(S, 'an account with no role can drive the round engine', (await read(m, 'getRound', [epoch])).locked === true)
 
-  // pause with the round still live
+  // Pause with the round ALREADY LOCKED. Everything below asserts the semantics the security fix
+  // established, and each line replaces one that asserted the opposite:
+  //   - a pause used to clear `genesisStarted`, so a restart needed `genesisStart()` again;
+  //   - `executeRound` used to be pausable, so a paused round ran down its buffer into a refund.
+  // Together those let an owner who was also a bettor cancel a round they were about to lose:
+  // watch the settlement print land, see the loss, hit pause, get refunded. The point of the fix
+  // is that a round whose outcome is already visible cannot be taken back, so that is what this
+  // scenario now proves on chain.
   await send(RUNNER, m, MARKET, 'pause', [])
   record(S, 'paused', (await read(m, 'paused')) === true)
-  record(S, 'pausing also closes the genesis flag', (await read(m, 'genesisStarted')) === false)
+  record(S, 'pausing does not un-start the market', (await read(m, 'genesisStarted')) === true)
   const eb = await expectRevert(BOB, m, MARKET, 'betDown', [epoch, 10n ** 18n])
   record(S, 'betting is refused while paused', eb === 'EnforcedPause' || eb === 'WrongEpoch' || eb === 'NotStarted', eb)
-  const ee = await expectRevert(BOB, m, MARKET, 'executeRound', [await latestRoundId(feed)])
-  record(S, 'the round engine is refused while paused', ee === 'EnforcedPause', ee)
 
-  await until(Number(r.closeTs) + BUFFER + 2, 'the live round to time out under the pause', S)
-  record(S, 'the paused live round becomes refundable on its own', (await read(m, 'refundable', [epoch, RUNNER.address])) === true)
-  const [ra, rb] = await claimAndMeasure(m, epoch)
-  record(S, 'claiming still works while the market is paused', ra === 10n * 10n ** 18n && rb === 10n * 10n ** 18n, `+${formatUnits(ra, 18)} / +${formatUnits(rb, 18)} USDT`)
-  record(S, 'no fee taken from a paused round', (await read(m, 'treasuryAmount')) === 0n)
+  // UP wins: locked at 80,000, settles at 81,000. RUNNER is on UP.
+  await until(Number(r.closeTs) - RELAY_LEAD, 'the settlement relay window', S)
+  await relayAtBoundary(feed, 81_000n * 10n ** 8n, Number(r.closeTs), S)
+  await until(Number(r.closeTs) + 1, 'the close boundary', S)
+  await send(BOB, m, MARKET, 'executeRound', [await boundaryId(m, Number(r.closeTs))])
 
-  // restart
+  const done = await read(m, 'getRound', [epoch])
+  record(S, 'a locked round settles straight through the pause', done.settled === true && done.voided === false)
+  record(S, 'and at its real price, not as a refund', done.closePrice > 0n, `close ${done.closePrice}`)
+  record(S, 'the fee is taken on a real settlement, paused or not', (await read(m, 'treasuryAmount')) > 0n)
+  record(S, 'the loser is owed nothing, pause or not', (await read(m, 'refundable', [epoch, BOB.address])) === false)
+
+  const beforeWin = await usdtOf(RUNNER.address)
+  await send(RUNNER, m, MARKET, 'claim', [[epoch]])
+  const won = (await usdtOf(RUNNER.address)) - beforeWin
+  record(S, 'the winner collects while the market is still paused', won > 10n * 10n ** 18n, `+${formatUnits(won, 18)} USDT`)
+
+  // Restart. No genesisStart(): the market was stopped, never un-born, and calling it now would
+  // revert AlreadyStarted — which the runbook used to tell an operator to do.
   await send(RUNNER, m, MARKET, 'unpause', [])
-  await send(RUNNER, m, MARKET, 'genesisStart', [])
+  const eg = await expectRevert(RUNNER, m, MARKET, 'genesisStart', [])
+  record(S, 'genesisStart is refused after a restart, because it was never needed', eg === 'AlreadyStarted', eg)
   const next = await read(m, 'currentEpoch')
   record(S, 'epoch numbering never rewinds across a restart', next > epoch, `${epoch} -> ${next}`)
   const old = await read(m, 'getRound', [epoch])

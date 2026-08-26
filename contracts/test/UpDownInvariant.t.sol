@@ -103,13 +103,33 @@ abstract contract UpDownHandler is Test {
 
     // ── turning the crank ────────────────────────────────────────────────────
 
+    /**
+     * @dev Move the campaign clock to `ts`, but **never backwards**. `block.timestamp` is
+     *      monotonically non-decreasing on a real chain, and the round engine leans on that: a
+     *      round that has become refundable (`_isExpired`) must stay refundable, because that is
+     *      what makes `_lockRound`/`_endRound` void it instead of striking or settling it.
+     *
+     *      A bare `vm.warp(r.lockTs)` breaks the assumption. The crank handlers aim at the current
+     *      round's boundary, and that boundary can already be in the past — a pause holds
+     *      `currentEpoch` still while an earlier crank has already pushed the clock up to
+     *      `lockTs + buffer + 600`. Rewinding to it makes an expired round un-expire, and the
+     *      campaign then finds a "bug" no chain can produce: a loser collects a timeout refund,
+     *      time steps back, the same round is struck and settled, and its stake is paid out a
+     *      second time inside the winner's pool. That is a defect in this harness, not in the
+     *      market — so the clock only ever moves forward, and a handler aiming at a boundary that
+     *      has already passed simply acts at the time it really is.
+     */
+    function _warpTo(uint256 ts) internal {
+        if (ts > block.timestamp) vm.warp(ts);
+    }
+
     /// @dev The honest path: publish at the boundary, execute `delay` seconds later.
     function execute(uint256 actorSeed, uint256 priceSeed, uint256 delay) external {
         UpDownMarketBase.Round memory r = market.getRound(market.currentEpoch());
         if (r.lockTs == 0) return;
-        vm.warp(uint256(r.lockTs));
+        _warpTo(uint256(r.lockTs));
         uint80 rid = feed.setAnswer(_nextPrice(priceSeed));
-        vm.warp(uint256(r.lockTs) + bound(delay, 0, uint256(market.bufferSeconds()) + 600));
+        _warpTo(uint256(r.lockTs) + bound(delay, 0, uint256(market.bufferSeconds()) + 600));
         uint256 justClosed = market.currentEpoch() - 1;
         vm.prank(_actor(actorSeed));
         try market.executeRound(rid) {
@@ -123,9 +143,9 @@ abstract contract UpDownHandler is Test {
     function executeWithCherryPickedRound(uint256 actorSeed, uint256 priceSeed) external {
         UpDownMarketBase.Round memory r = market.getRound(market.currentEpoch());
         if (r.lockTs == 0) return;
-        vm.warp(uint256(r.lockTs) - 1);
+        _warpTo(uint256(r.lockTs) - 1);
         uint80 early = feed.setAnswer(_nextPrice(priceSeed));
-        vm.warp(uint256(r.lockTs));
+        _warpTo(uint256(r.lockTs));
         feed.setAnswer(_nextPrice(priceSeed >> 8)); // the true boundary print
         vm.prank(_actor(actorSeed));
         try market.executeRound(early) {
@@ -136,7 +156,7 @@ abstract contract UpDownHandler is Test {
     function executeWithDeadOracle(uint256 seed) external {
         UpDownMarketBase.Round memory r = market.getRound(market.currentEpoch());
         if (r.lockTs == 0) return;
-        vm.warp(uint256(r.lockTs));
+        _warpTo(uint256(r.lockTs));
         uint80 rid;
         if (seed % 3 == 0) {
             rid = feed.setAnswer(_nextPrice(seed));

@@ -4,7 +4,6 @@ pragma solidity 0.8.28;
 import {Script, console2} from "forge-std/Script.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
-import {UpDownMarketNative} from "../src/UpDownMarketNative.sol";
 import {UpDownRegistry} from "../src/UpDownRegistry.sol";
 import {RelayAggregator} from "../src/testnet/RelayAggregator.sol";
 import {TestUSDT} from "../src/testnet/TestUSDT.sol";
@@ -42,15 +41,36 @@ contract Deploy is Script {
     uint256 constant USDT_MIN = 1e18;
     uint256 constant USDT_MAX = 5_000e18;
     uint256 constant USDT_SIDE = 100_000e18;
-    // native BNB limits
-    uint256 constant BNB_MIN = 0.005 ether;
-    uint256 constant BNB_MAX = 10 ether;
-    uint256 constant BNB_SIDE = 500 ether;
+    // `UpDownMarketNative` is deliberately not deployed here any more: every market settles in
+    // USDT. The contract stays in the tree, built and tested, because the choice is a deployment
+    // decision rather than a change of what the protocol supports — but dead limits and a dead
+    // import in the deploy script would suggest a native market is one env var away, and it is not.
 
-    // Chainlink AggregatorV3 feeds, verified live on 2026-08-26
-    address constant BSC_BTC_USD = 0x264990fbd0A4796A3E3d8E37C4d5F87a3aCa5Ebf;
-    address constant BSC_BNB_USD = 0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE;
+    // Chainlink AggregatorV3 feeds on BSC mainnet. Each was read live on 2026-08-26 —
+    // `description()`, `decimals()` and a fresh `latestRoundData()` — before being written here.
+    // These are constructor arguments to an immutable contract: a wrong address cannot be corrected
+    // afterwards, only abandoned.
+    address constant BSC_BTC_USD = 0x264990fbd0A4796A3E3d8E37C4d5F87a3aCa5Ebf; // "BTC / USD", 8dp
+    address constant BSC_ETH_USD = 0x9ef1B8c0E4F7dc8bF5719Ea496883DC6401d5b2e; // "ETH / USD", 8dp
+    address constant BSC_BNB_USD = 0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE; // "BNB / USD", 8dp
     address constant BSC_USDT = 0x55d398326f99059fF775485246999027B3197955;
+
+    /**
+     * One market to deploy. Everything that differs between the six lives here, so adding a symbol
+     * or a duration is a row rather than an edit in five places.
+     *
+     * `key` is the deployments-file key. The keeper discovers its markets by reading those keys and
+     * treats anything ending in `Feed` as a price source rather than a market, so the two naming
+     * conventions are load-bearing, not cosmetic.
+     */
+    struct MarketSpec {
+        string key;
+        string label;
+        address feed;
+        uint256 interval;
+        uint16 buffer;
+        uint32 maxAge;
+    }
 
     address owner;
     address operator;
@@ -73,11 +93,13 @@ contract Deploy is Script {
         vm.startBroadcast(pk);
 
         address btcFeed;
+        address ethFeed;
         address bnbFeed;
         address usdt;
 
         if (isMainnet) {
             btcFeed = BSC_BTC_USD;
+            ethFeed = BSC_ETH_USD;
             bnbFeed = BSC_BNB_USD;
             usdt = BSC_USDT;
             // The settlement asset is immutable and the market only supports standard ERC20s, so
@@ -86,33 +108,45 @@ contract Deploy is Script {
         } else {
             // testnet-only substitutes
             btcFeed = address(new RelayAggregator(owner, operator, 8, "BTC / USD", 80_000e8));
+            ethFeed = address(new RelayAggregator(owner, operator, 8, "ETH / USD", 2_400e8));
             bnbFeed = address(new RelayAggregator(owner, operator, 8, "BNB / USD", 700e8));
             usdt = address(new TestUSDT());
         }
 
         UpDownRegistry registry = new UpDownRegistry(deployer); // ownership handed over below
 
-        address btc5m = address(
-            new UpDownMarketERC20(
-                owner, btcFeed, usdt, I5M, FEE_BPS, BUF5M, AGE5M, USDT_MIN, USDT_MAX, USDT_SIDE
-            )
-        );
-        address btc1h = address(
-            new UpDownMarketERC20(
-                owner, btcFeed, usdt, I1H, FEE_BPS, BUF1H, AGE1H, USDT_MIN, USDT_MAX, USDT_SIDE
-            )
-        );
-        address bnb5m = address(
-            new UpDownMarketNative(owner, bnbFeed, I5M, FEE_BPS, BUF5M, AGE5M, BNB_MIN, BNB_MAX, BNB_SIDE)
-        );
+        // Every market settles in USDT. A native-BNB market is a different thing to hold and a
+        // different thing to reason about — one settlement asset across the board means a trader
+        // compares six books in one unit, and the whole surface has one approval path.
+        MarketSpec[] memory specs = new MarketSpec[](6);
+        specs[0] = MarketSpec("btcUsd5m", "BTC/USD 5m", btcFeed, I5M, BUF5M, AGE5M);
+        specs[1] = MarketSpec("btcUsd1h", "BTC/USD 1h", btcFeed, I1H, BUF1H, AGE1H);
+        specs[2] = MarketSpec("ethUsd5m", "ETH/USD 5m", ethFeed, I5M, BUF5M, AGE5M);
+        specs[3] = MarketSpec("ethUsd1h", "ETH/USD 1h", ethFeed, I1H, BUF1H, AGE1H);
+        specs[4] = MarketSpec("bnbUsd5m", "BNB/USD 5m", bnbFeed, I5M, BUF5M, AGE5M);
+        specs[5] = MarketSpec("bnbUsd1h", "BNB/USD 1h", bnbFeed, I1H, BUF1H, AGE1H);
 
-        // interval constants are compile-time and far below uint64
-        // forge-lint: disable-next-line(unsafe-typecast)
-        registry.register(btc5m, usdt, btcFeed, uint64(I5M), "BTC/USD 5m");
-        // forge-lint: disable-next-line(unsafe-typecast)
-        registry.register(btc1h, usdt, btcFeed, uint64(I1H), "BTC/USD 1h");
-        // forge-lint: disable-next-line(unsafe-typecast)
-        registry.register(bnb5m, address(0), bnbFeed, uint64(I5M), "BNB/USD 5m");
+        address[] memory deployed = new address[](specs.length);
+        for (uint256 i; i < specs.length; ++i) {
+            MarketSpec memory m = specs[i];
+            deployed[i] = address(
+                new UpDownMarketERC20(
+                    owner,
+                    m.feed,
+                    usdt,
+                    m.interval,
+                    FEE_BPS,
+                    m.buffer,
+                    m.maxAge,
+                    USDT_MIN,
+                    USDT_MAX,
+                    USDT_SIDE
+                )
+            );
+            // interval constants are compile-time and far below uint64
+            // forge-lint: disable-next-line(unsafe-typecast)
+            registry.register(deployed[i], usdt, m.feed, uint64(m.interval), m.label);
+        }
         registry.transferOwnership(owner); // Ownable2Step: `owner` must call acceptOwnership()
 
         vm.stopBroadcast();
@@ -121,18 +155,19 @@ contract Deploy is Script {
         // on chain, and the keeper and the web build both read this file as the source of truth —
         // a simulated one would point users at empty accounts.
         if (vm.isContext(VmSafe.ForgeContext.ScriptBroadcast)) {
-            _write(address(registry), btc5m, btc1h, bnb5m, btcFeed, bnbFeed, usdt, isMainnet);
+            _write(address(registry), specs, deployed, ethFeed, usdt, isMainnet);
         } else {
             console2.log("DRY RUN: deployments/%s.json not written (simulated addresses).", block.chainid);
         }
 
         console2.log("chainId       ", block.chainid);
         console2.log("registry      ", address(registry));
-        console2.log("BTC/USD 5m    ", btc5m);
-        console2.log("BTC/USD 1h    ", btc1h);
-        console2.log("BNB/USD 5m    ", bnb5m);
+        for (uint256 i; i < specs.length; ++i) {
+            console2.log(specs[i].label, deployed[i]);
+        }
         console2.log("usdt          ", usdt);
         console2.log("btcFeed       ", btcFeed);
+        console2.log("ethFeed       ", ethFeed);
         console2.log("bnbFeed       ", bnbFeed);
         console2.log("");
         console2.log("deployer      ", deployer);
@@ -142,22 +177,24 @@ contract Deploy is Script {
 
     function _write(
         address registry,
-        address btc5m,
-        address btc1h,
-        address bnb5m,
-        address btcFeed,
-        address bnbFeed,
+        MarketSpec[] memory specs,
+        address[] memory deployed,
+        address ethFeed,
         address usdt,
         bool isMainnet
     ) internal {
         string memory k = "deployment";
         vm.serializeUint(k, "chainId", block.chainid);
         vm.serializeAddress(k, "registry", registry);
-        vm.serializeAddress(k, "btcUsd5m", btc5m);
-        vm.serializeAddress(k, "btcUsd1h", btc1h);
-        vm.serializeAddress(k, "bnbUsd5m", bnb5m);
-        vm.serializeAddress(k, "btcFeed", btcFeed);
-        vm.serializeAddress(k, "bnbFeed", bnbFeed);
+        // One entry per market, keyed by the same string the keeper discovers markets by. Feeds are
+        // written from the specs too, so a feed can never be recorded for a market that was not
+        // actually deployed against it.
+        for (uint256 i; i < specs.length; ++i) {
+            vm.serializeAddress(k, specs[i].key, deployed[i]);
+        }
+        vm.serializeAddress(k, "btcFeed", specs[0].feed);
+        vm.serializeAddress(k, "ethFeed", ethFeed);
+        vm.serializeAddress(k, "bnbFeed", specs[4].feed);
         vm.serializeAddress(k, "usdt", usdt);
         vm.serializeAddress(k, "owner", owner);
         vm.serializeAddress(k, "operator", operator);

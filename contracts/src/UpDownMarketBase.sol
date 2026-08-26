@@ -88,7 +88,6 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     uint256 private constant BPS = 10_000;
     /// @dev Chainlink proxy round ids are `phaseId << 64 | aggregatorRoundId`.
     uint256 private constant PHASE_SHIFT = 64;
-    uint256 private constant MAX_PHASE_LOOKAHEAD = 8;
 
     /// @notice Round duration in seconds (betting phase and holding phase are each `interval`).
     uint256 public immutable interval;
@@ -197,6 +196,8 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     error SideCapExceeded();
     error AlreadyClaimed();
     error NothingToClaim();
+    /// @notice `claimFor` was called for an account that has not opted in. See `setAutoClaimOptIn`.
+    error AutoClaimNotOptedIn();
     error NotResolved();
     error NotWinner();
     error CannotRecoverAsset();
@@ -302,6 +303,52 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
         _claim(epochs, msg.sender);
     }
 
+    /**
+     * @notice Collect on someone else's behalf, paying them. Anyone may call this for anyone.
+     * @dev The money never leaves its owner: `user`'s ledger is read and `user` is paid. The caller
+     *      supplies only gas, and gains nothing but the right to have spent it. That is what makes
+     *      "you must remember to claim" a UI concern rather than a way to lose money — a sweeper,
+     *      the project's keeper, or a friend can settle up for a wallet that has gone quiet, and a
+     *      pull payment stays the guarantee underneath rather than the only route.
+     *
+     *      Deliberately one user per call. Batching many users into one transaction would let a
+     *      single recipient that cannot receive the asset revert the whole sweep.
+     */
+    function claimFor(address user, uint256[] calldata epochs) external {
+        if (user == address(0)) revert ZeroAddress();
+        // Being paid at your own address is a favour only if you can spend from there. An account
+        // that cannot — the very case `claimTo` exists for — is not helped by an unsolicited sweep
+        // but trapped by one: the money lands where it cannot move it from, and the position is
+        // marked claimed, so the `claimTo` it had planned reverts `AlreadyClaimed`. An attacker can
+        // front-run on purpose and strand the balance for good.
+        //
+        // An earlier draft tried to allow this for externally owned accounts only, on the grounds
+        // that a plain wallet can always move what it receives, and checked `user.code.length == 0`
+        // to tell the two apart. That check cannot be trusted: an address is also code-less while
+        // its constructor runs and after it has self-destructed, so a contract can take a position
+        // from inside its own constructor, self-destruct, and present a code-less address holding a
+        // live position. `extcodehash` reads zero in exactly the same window, so no variation of
+        // the test escapes it. There is no way to ask the EVM what kind of account this is.
+        //
+        // So nobody is swept on a guess about what they are. Being collected for is something you
+        // ask for, once, in your own transaction, and can withdraw the same way.
+        if (!autoClaimOptIn[user]) revert AutoClaimNotOptedIn();
+        _collect(user, epochs, user);
+    }
+
+    /// @notice Whether this account has asked to let anyone collect its winnings on its behalf.
+    mapping(address => bool) public autoClaimOptIn;
+
+    event AutoClaimOptInSet(address indexed account, bool enabled);
+
+    /// @notice Allow anyone to collect your winnings for you, paid to this same address.
+    /// @dev Costs you one transaction, once, and is revocable the same way. Nothing else changes:
+    ///      you can still call `claim`/`claimTo` yourself whether this is on or off.
+    function setAutoClaimOptIn(bool enabled) external {
+        autoClaimOptIn[msg.sender] = enabled;
+        emit AutoClaimOptInSet(msg.sender, enabled);
+    }
+
     /// @notice Same as `claim`, but pays a different address.
     /// @dev Needed by contract accounts that can bet but cannot receive the settlement asset
     ///      themselves (a native-market bettor with no payable receive/fallback, for example).
@@ -310,7 +357,14 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
         _claim(epochs, to);
     }
 
-    function _claim(uint256[] calldata epochs, address to) internal nonReentrant {
+    function _claim(uint256[] calldata epochs, address to) internal {
+        _collect(msg.sender, epochs, to);
+    }
+
+    /// @dev `holder` owns the position and `to` receives the money. `claim`/`claimTo` pass
+    ///      `msg.sender` as the holder; `claimFor` passes the account it is collecting for and pays
+    ///      that same account, so no caller can ever redirect someone else's winnings.
+    function _collect(address holder, uint256[] calldata epochs, address to) internal nonReentrant {
         uint256 len = epochs.length;
         if (len == 0) revert EmptyInput();
 
@@ -318,7 +372,7 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
         for (uint256 i; i < len; ++i) {
             uint256 epoch = epochs[i];
             Round storage r = _rounds[epoch];
-            BetInfo storage b = ledger[epoch][msg.sender];
+            BetInfo storage b = ledger[epoch][holder];
             if (b.claimed) revert AlreadyClaimed();
 
             uint256 amount;
@@ -337,7 +391,7 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
 
             b.claimed = true;
             total += amount;
-            emit Claimed(msg.sender, epoch, to, amount, refund);
+            emit Claimed(holder, epoch, to, amount, refund);
         }
 
         if (total == 0) revert NothingToClaim();
@@ -349,7 +403,8 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     // Round engine
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// @notice Open the first round. Callable again after a pause/unpause cycle to re-anchor the grid.
+    /// @notice Open the first round. Once only — a pause no longer un-starts the market, so there is
+    ///         nothing to re-anchor and a second call reverts `AlreadyStarted`.
     function genesisStart() external onlyOwner whenNotPaused {
         if (genesisStarted) revert AlreadyStarted();
         uint256 epoch = currentEpoch + 1;
@@ -754,10 +809,8 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
 
     /**
      * @notice Disabled. Ownership cannot be renounced.
-     * @dev Renouncing would strand `treasuryAmount` forever, make `pause()`
-     *      permanently unreachable, and — because `pause()` clears `genesisStarted` while
-     *      `genesisStart()` is `onlyOwner` — could leave a paused market unable to ever trade
-     *      again. Transfer ownership to a multisig or a Timelock instead.
+     * @dev Renouncing would strand `treasuryAmount` forever and make `pause()` permanently
+     *      unreachable. Transfer ownership to a multisig or a Timelock instead.
      */
     function renounceOwnership() public pure override {
         revert OwnershipCannotBeRenounced();

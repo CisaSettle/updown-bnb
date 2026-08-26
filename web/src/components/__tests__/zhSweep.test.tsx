@@ -29,6 +29,8 @@ vi.mock('wagmi', () => ({
   useConnect: () => ({ connectors: [], connect: () => {}, isPending: false }),
   useDisconnect: () => ({ disconnect: () => {} }),
   useSwitchChain: () => ({ switchChain: () => {}, isPending: false }),
+  useReadContract: () => ({ data: false, refetch: async () => undefined }),
+  useWriteContract: () => ({ writeContractAsync: async () => '0x' }),
 }))
 vi.mock('../../hooks/useTxRunner', () => ({
   useTxRunner: () => ({ writeContractAsync: async () => '0x', run: async () => true, busyKey: null }),
@@ -210,7 +212,7 @@ function proofState(over: Partial<RoundProofState> = {}): RoundProofState {
   return {
     status: 'ready',
     outcome: 'verified',
-    reports: [verifyBoundary({ spec, oracleMaxAge: 60, nowSeconds: 1_000_500, priceDecimals: 8, candidate: cand, latestRoundId: 12n, prints: new Map([['10', cand], ['11', succ]]) })],
+    reports: [verifyBoundary({ spec, oracleMaxAge: 60, nowSeconds: 1_000_500, priceDecimals: 8, candidate: cand, prints: new Map([['10', cand], ['11', succ]]) })],
     isFetching: false,
     checkedAt: 1_000_500 * 1000,
     refetch: () => {},

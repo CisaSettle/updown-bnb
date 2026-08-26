@@ -162,6 +162,57 @@ describe('humanizeError', () => {
     }
   })
 
+  // The symptom the owner hit: clicking connect produced only "出了点问题，重试一次" and there was
+  // no way, from the screen, to tell whether the app was broken or the wallet was simply waiting.
+  it('names the pending-request case instead of sending the reader round the same loop', () => {
+    const pending = new BaseError('Request of type wallet_requestPermissions already pending.')
+    expect(humanizeError(pending, 'zh')).toBe(ERROR_TEXT.requestPending.zh)
+    expect(humanizeError(pending, 'en')).toBe(ERROR_TEXT.requestPending.en)
+  })
+
+  // A wallet does not always hand you a viem error. It throws a plain object, or an Error with the
+  // provider error tucked into `cause`. Classifying only the wrapped shape is why this reached the
+  // owner as "something went wrong" in the first place.
+  it('recognises the same failure however the wallet chose to throw it', () => {
+    const bare = { code: -32002, message: 'Already processing eth_requestAccounts.' }
+    expect(humanizeError(bare, 'zh')).toBe(ERROR_TEXT.requestPending.zh)
+
+    const wrapped = new Error('Connector failed')
+    ;(wrapped as { cause?: unknown }).cause = { code: -32002, message: 'request pending' }
+    expect(humanizeError(wrapped, 'zh')).toBe(ERROR_TEXT.requestPending.zh)
+
+    const plainText = new Error('MetaMask: Already processing eth_requestAccounts.')
+    expect(humanizeError(plainText, 'en')).toBe(ERROR_TEXT.requestPending.en)
+
+    const nestedProvider = new Error('outer')
+    ;(nestedProvider as { cause?: unknown }).cause = new Error('No injected provider found')
+    expect(humanizeError(nestedProvider, 'zh')).toBe(ERROR_TEXT.noProvider.zh)
+  })
+
+  it('carries the error code through, because a number is prose in no language', () => {
+    // -32603 deliberately: an internal JSON-RPC error we do NOT have copy for, which is the case
+    // this rule exists to serve. A code we already name would prove nothing here.
+    const coded = Object.assign(new Error('Something viem phrases only in English.'), { code: -32603 })
+    const zh = humanizeError(coded, 'zh')
+    // the rule holds: no English sentence reaches a 中文 reader …
+    expect(zh).not.toMatch(/[A-Za-z]{4,}/)
+    // … but the one fact worth having is not thrown away with it
+    expect(zh).toContain('-32603')
+    // English keeps the sentence itself, which says more than a code — the code is what stands in
+    // for it when the sentence cannot be shown.
+    expect(humanizeError(coded, 'en')).toBe('Something viem phrases only in English.')
+  })
+
+  it('finds a code nested in a cause chain, where wallet errors usually put it', () => {
+    const wrapped = new Error('outer')
+    ;(wrapped as { cause?: unknown }).cause = Object.assign(new Error('inner'), { code: 4900 })
+    expect(humanizeError(wrapped, 'zh')).toContain('4900')
+  })
+
+  it('stays exactly as it was when there is no code to add', () => {
+    expect(humanizeError(new Error('no code here'), 'zh')).toBe(ERROR_TEXT.fallback.zh)
+  })
+
   it('never hands a 中文 reader an English sentence a library wrote', () => {
     // The line between the two passthroughs. A revert `reason` really was written on chain, so it
     // is shown verbatim in both languages — inventing a 中文 rendering would put words in the

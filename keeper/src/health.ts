@@ -2,10 +2,19 @@
  * Pure health evaluation.
  *
  * Contract: `/healthz` is 200 when every market the keeper is responsible for has executed within
- * two of its own intervals. A market the keeper *cannot* drive (paused, or genesis not started) is
- * reported as inactive rather than unhealthy — the keeper is doing its job; the market is closed.
- * A market whose activity is unknown (its state has never been read) is unhealthy: silence about a
- * market is a keeper failure, not a market state.
+ * two of its own intervals. A market the keeper *cannot* drive (genesis not started) is reported as
+ * inactive rather than unhealthy — the keeper is doing its job; the market is closed. A market whose
+ * activity is unknown (its state has never been read) is unhealthy: silence about a market is a
+ * keeper failure, not a market state.
+ *
+ * A PAUSED market is its own state, and never simply "inactive". `pause()` stops the market taking
+ * new risk; it does not cancel risk already taken, and `executeRound` is deliberately not pausable
+ * so that a round which was already locked still settles at its true price. That is what stops an
+ * owner who is also a bettor from watching the settlement print land, seeing they lost, and pausing
+ * to have the round time out into refunds — and it only holds while the keeper keeps calling. So the
+ * report distinguishes three things an operator needs to tell apart: a paused market with nothing
+ * outstanding, a paused market whose locked round is still being settled, and a paused market whose
+ * locked round has already run out of time. Only the last is unhealthy.
  *
  * A market can also be `degraded`: executing on schedule, and yet structurally unable to produce a
  * correct settlement — the keeper key not being the relay feed's `updater` is the case that matters,
@@ -20,7 +29,16 @@
  * supposed to do can happen and the per-market staleness budget takes intervals to notice.
  */
 
-export type MarketHealthState = 'ok' | 'stale' | 'inactive' | 'degraded' | 'unknown';
+export type MarketHealthState = 'ok' | 'stale' | 'inactive' | 'paused' | 'degraded' | 'unknown';
+
+/**
+ * What a paused market still owes.
+ *
+ * `'pending'` is the state that matters: paused, with a locked round the keeper must still settle.
+ * It is healthy — the keeper is on it — but it is emphatically not "nothing to do", and reporting it
+ * as inactive is what let a pause quietly become a cancel button.
+ */
+export type PausedSettlementState = 'none' | 'pending' | 'missed';
 
 /**
  * How the rounds this keeper has actually settled recently turned out.
@@ -71,6 +89,13 @@ export interface MarketHealthInput {
   supervisedSinceMs: number;
   /** False when the market is paused or has not had `genesisStart()` called. */
   active: boolean;
+  /** True when the market is paused. Locked rounds still settle; nothing new is locked or opened. */
+  paused?: boolean;
+  /**
+   * Whether a paused market still owes a settlement on a round that was locked before the pause,
+   * and whether it can still make it. Meaningless (and ignored) unless `paused`.
+   */
+  pausedSettlement?: PausedSettlementState;
   /** False until the keeper has successfully read this market's on-chain state at least once. */
   observed: boolean;
   /**
@@ -97,6 +122,10 @@ export interface MarketHealth {
   name: string;
   state: MarketHealthState;
   healthy: boolean;
+  /** True when the market is paused. Surfaced in the body so an operator sees it without guessing. */
+  paused: boolean;
+  /** What a paused market still owes; `'none'` whenever it is not paused. */
+  pausedSettlement: PausedSettlementState;
   /** Seconds since the last successful execution; null when there has never been one. */
   secondsSinceExecution: number | null;
   /** The staleness budget in seconds (`2 * interval`). */
@@ -169,49 +198,63 @@ export function evaluateMarketHealth(
   const secondsSinceExecution =
     input.lastExecutionMs === null ? null : Math.max(0, Math.floor((nowMs - input.lastExecutionMs) / 1000));
   const settlement = input.settlement ?? null;
+  const paused = input.paused === true;
+  const pausedSettlement: PausedSettlementState = paused ? (input.pausedSettlement ?? 'none') : 'none';
+  const base = { name: input.name, secondsSinceExecution, budgetSec, settlement, paused, pausedSettlement };
 
   if (input.bootstrapError) {
     return {
-      name: input.name,
+      ...base,
       state: 'unknown',
       healthy: false,
-      secondsSinceExecution,
-      budgetSec,
-      settlement,
       reason: `market failed to bootstrap and is not being supervised: ${input.bootstrapError}`,
     };
   }
   if (!input.observed) {
-    return {
-      name: input.name,
-      state: 'unknown',
-      healthy: false,
-      secondsSinceExecution,
-      budgetSec,
-      settlement,
-      reason: 'market state has never been read successfully',
-    };
+    return { ...base, state: 'unknown', healthy: false, reason: 'market state has never been read successfully' };
   }
   if (input.degraded) {
+    return { ...base, state: 'degraded', healthy: false, reason: input.degraded };
+  }
+  if (paused) {
+    // A locked round whose settlement window ran out during a pause has just turned a decided
+    // outcome into refunds — the exact loss `executeRound` being un-pausable exists to prevent. It
+    // is the one paused state that is a failure, and it says so.
+    if (pausedSettlement === 'missed') {
+      return {
+        ...base,
+        state: 'degraded',
+        healthy: false,
+        reason:
+          'market is paused and a round that was LOCKED before the pause ran out its settlement ' +
+          'window: every stake in it, the losing side included, is refundable now. executeRound is ' +
+          'not pausable precisely so this cannot happen.',
+      };
+    }
+    if (pausedSettlement === 'pending') {
+      return {
+        ...base,
+        state: 'paused',
+        healthy: true,
+        reason:
+          'market is paused AND still being settled: a round locked before the pause is inside its ' +
+          'settlement window and the keeper is still calling executeRound for it. Pause stops new ' +
+          'risk, never risk already taken.',
+      };
+    }
     return {
-      name: input.name,
-      state: 'degraded',
-      healthy: false,
-      secondsSinceExecution,
-      budgetSec,
-      settlement,
-      reason: input.degraded,
+      ...base,
+      state: 'paused',
+      healthy: true,
+      reason: 'market is paused and no locked round is waiting to settle; nothing for the keeper to do',
     };
   }
   if (!input.active) {
     return {
-      name: input.name,
+      ...base,
       state: 'inactive',
       healthy: true,
-      secondsSinceExecution,
-      budgetSec,
-      settlement,
-      reason: 'market is paused or genesisStart() has not been called; nothing for the keeper to do',
+      reason: 'genesisStart() has not been called; nothing for the keeper to do',
     };
   }
 
@@ -223,12 +266,9 @@ export function evaluateMarketHealth(
   const ageSec = Math.max(0, Math.floor((nowMs - since) / 1000));
   if (ageSec > budgetSec) {
     return {
-      name: input.name,
+      ...base,
       state: 'stale',
       healthy: false,
-      secondsSinceExecution,
-      budgetSec,
-      settlement,
       reason:
         input.lastExecutionMs === null
           ? `no execution within ${budgetSec}s of supervision starting`
@@ -241,26 +281,10 @@ export function evaluateMarketHealth(
   // settled) and only against keeper-side void reasons.
   const voidReason = faultVoidReason(settlement, options);
   if (voidReason !== null) {
-    return {
-      name: input.name,
-      state: 'degraded',
-      healthy: false,
-      secondsSinceExecution,
-      budgetSec,
-      settlement,
-      reason: voidReason,
-    };
+    return { ...base, state: 'degraded', healthy: false, reason: voidReason };
   }
 
-  return {
-    name: input.name,
-    state: 'ok',
-    healthy: true,
-    secondsSinceExecution,
-    budgetSec,
-    settlement,
-    reason: 'executed within budget',
-  };
+  return { ...base, state: 'ok', healthy: true, reason: 'executed within budget' };
 }
 
 export function evaluateHealth(

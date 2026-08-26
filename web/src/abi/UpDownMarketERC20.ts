@@ -104,6 +104,25 @@ export const upDownMarketERC20Abi = [
   },
   {
     "type": "function",
+    "name": "autoClaimOptIn",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "betDown",
     "inputs": [
       {
@@ -168,6 +187,24 @@ export const upDownMarketERC20Abi = [
     "type": "function",
     "name": "claim",
     "inputs": [
+      {
+        "name": "epochs",
+        "type": "uint256[]",
+        "internalType": "uint256[]"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "claimFor",
+    "inputs": [
+      {
+        "name": "user",
+        "type": "address",
+        "internalType": "address"
+      },
       {
         "name": "epochs",
         "type": "uint256[]",
@@ -701,6 +738,19 @@ export const upDownMarketERC20Abi = [
   },
   {
     "type": "function",
+    "name": "oraclePhase",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "outstanding",
     "inputs": [],
     "outputs": [
@@ -834,6 +884,19 @@ export const upDownMarketERC20Abi = [
     "name": "renounceOwnership",
     "inputs": [],
     "outputs": [],
+    "stateMutability": "pure"
+  },
+  {
+    "type": "function",
+    "name": "setAutoClaimOptIn",
+    "inputs": [
+      {
+        "name": "enabled",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "outputs": [],
     "stateMutability": "nonpayable"
   },
   {
@@ -854,19 +917,6 @@ export const upDownMarketERC20Abi = [
         "name": "maxSide",
         "type": "uint256",
         "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "setOracle",
-    "inputs": [
-      {
-        "name": "oracle_",
-        "type": "address",
-        "internalType": "address"
       }
     ],
     "outputs": [],
@@ -969,6 +1019,25 @@ export const upDownMarketERC20Abi = [
       }
     ],
     "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "AutoClaimOptInSet",
+    "inputs": [
+      {
+        "name": "account",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "enabled",
+        "type": "bool",
+        "indexed": false,
+        "internalType": "bool"
+      }
+    ],
+    "anonymous": false
   },
   {
     "type": "event",
@@ -1078,19 +1147,6 @@ export const upDownMarketERC20Abi = [
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "OracleUpdated",
-    "inputs": [
-      {
-        "name": "oracle",
-        "type": "address",
-        "indexed": true,
-        "internalType": "address"
       }
     ],
     "anonymous": false
@@ -1363,6 +1419,11 @@ export const upDownMarketERC20Abi = [
   },
   {
     "type": "error",
+    "name": "AutoClaimNotOptedIn",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "BelowMinBet",
     "inputs": []
   },
@@ -1443,6 +1504,11 @@ export const upDownMarketERC20Abi = [
   },
   {
     "type": "error",
+    "name": "OracleUnusable",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "OwnableInvalidOwner",
     "inputs": [
       {
@@ -1462,6 +1528,11 @@ export const upDownMarketERC20Abi = [
         "internalType": "address"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "OwnershipCannotBeRenounced",
+    "inputs": []
   },
   {
     "type": "error",

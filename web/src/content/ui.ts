@@ -83,6 +83,12 @@ export const connect = {
   installWallet: { en: 'Install a wallet', zh: '安装钱包' },
   connecting: { en: 'Connecting…', zh: '连接中…' },
   connect: { en: 'Connect wallet', zh: '连接钱包' },
+  openInWallet: { en: 'Open in wallet app', zh: '在钱包 App 中打开' },
+  openInWalletHint: {
+    en: 'A phone browser cannot talk to your wallet directly. This reopens the page inside your wallet app, where it can.',
+    zh: '手机浏览器没法直接和钱包通话。这会把本页在你的钱包 App 里重新打开，在那里就可以了。',
+  },
+  noWalletYet: { en: "Don't have one? Install MetaMask", zh: '还没有钱包？安装 MetaMask' },
   failed: { en: 'Could not connect', zh: '没能连上' },
 } satisfies Record<string, Text>
 
@@ -213,8 +219,8 @@ export const liveCard = {
   },
   refundTitle: { en: 'Full refund, zero fee', zh: '全额退回，零手续费' },
   refundBody: {
-    en: 'A round is voided and every stake refunded in full, with no fee taken, if the settlement price is exactly the strike (a tie), if one side of the book is empty, if the oracle print is unusable, if the settlement window is missed, or if the market is paused. Winners are paid from the losing pool only, so a winner never receives less than their own stake.',
-    zh: '出现下面任何一种情况，轮次作废、每一笔本金全额退回、不收手续费：结算价正好等于行权价（平局）、盘口有一边是空的、预言机报价不可用、错过结算时限，或者市场被暂停。赢家的钱只从输的那一边的池子里出，所以赢家拿到的钱永远不会少于自己的本金。',
+    en: 'A round is voided and every stake refunded in full, with no fee taken, if the settlement price is exactly the strike (a tie), if one side of the book is empty, if no usable oracle print exists at the boundary, if the settlement window is missed, or if the market was paused before the round locked. A round that had already locked is not on that list: it settles through a pause at the price the feed printed. Winners are paid from the losing pool only, so a winner never receives less than their own stake.',
+    zh: '出现下面任何一种情况，轮次作废、每一笔本金全额退回、不收手续费：结算价正好等于行权价（平局）、盘口有一边是空的、边界时刻没有可用的预言机报价、错过结算时限，或者市场在该轮锁定之前就被暂停。已经锁定的轮次不在这张清单里：它会穿过暂停，按喂价报出的价格结算。赢家的钱只从输的那一边的池子里出，所以赢家拿到的钱永远不会少于自己的本金。',
   },
 } satisfies Record<string, Text>
 
@@ -379,7 +385,26 @@ export const odds = {
     en: 'A round that locks one-sided is refunded in full, with zero fee — nobody can lose money for want of an opponent.',
     zh: '单边锁定的轮次全额退回，零手续费——没有人会因为找不到对手而亏钱。',
   },
+  howTitle: { en: 'How this number is worked out', zh: '这个数字是怎么算出来的' },
+  howIntro: {
+    en: 'Winners split the losing side, minus the fee. The fee comes off the losing pool only, so a winner is never paid less than their stake.',
+    zh: '赢的一方分掉输的一方，扣掉手续费。手续费只从输的池子里扣，所以赢家拿到的永远不会低于本金。',
+  },
+  howYourShare: {
+    en: 'Your share of your own side is what decides your cut — the contract never records a price for your order.',
+    zh: '决定你分多少的，是你在自己这一边占的比例——合约从不为你的订单记录任何价格。',
+  },
 } satisfies Record<string, Text>
+
+/** The odds formula with this round's live pools substituted in, so it can be checked by eye. */
+export function oddsFormula(side: 'up' | 'down', win: string, lose: string, feePct: string, result: string): Text {
+  const other = side === 'up' ? 'DOWN' : 'UP'
+  const mine = side === 'up' ? 'UP' : 'DOWN'
+  return {
+    en: `( ${mine} ${win} + ${other} ${lose} x ${feePct} ) / ${mine} ${win} = ${result}`,
+    zh: `( ${mine}池 ${win} + ${other}池 ${lose} x ${feePct} ) / ${mine}池 ${win} = ${result}`,
+  }
+}
 
 export function oddsWaiting(otherStake: string): Text {
   return {
@@ -627,6 +652,17 @@ export const positions = {
     zh: '这些轮次已经领过了。正在刷新你的仓位。',
   },
   claimAllTx: { en: 'Claim all', zh: '全部领取' },
+  autoClaim: { en: 'Let anyone collect for me', zh: '允许他人替我领取' },
+  autoClaimTx: { en: 'Auto-collect setting', zh: '自动领取设置' },
+  autoClaimOn: {
+    en: 'On. Anyone can now spend their own gas to send your winnings to this address — they cannot send them anywhere else. You can still collect yourself, and you can turn this off at any time.',
+    zh: '已开启。现在任何人都可以自掏 gas 把你的赔付打到这个地址——他们没法打去别处。你依然可以自己领取，也可以随时关掉。',
+  },
+  autoClaimOff: {
+    en: 'Off. Nothing is ever pushed at you: your winnings wait in the contract until you collect them. There is no deadline and nobody can stop you.',
+    zh: '未开启。不会有任何东西被推给你：你的赔付存在合约里，直到你自己领取。没有期限，也没有人能拦住你。',
+  },
+  autoClaimBusy: { en: 'Confirming…', zh: '确认中…' },
 } satisfies Record<string, Text>
 
 export function toCollect(amount: string): Text {
@@ -714,8 +750,8 @@ export const history = {
     zh: '本轮的结算时限过去了却没有人结算，所以里面每一笔本金现在都可以全额退回。',
   },
   footer: {
-    en: '“Refunded” covers a tie, a one-sided book, an unusable oracle print, a missed settlement window or a pause — in all of those every stake is returned in full and no fee is charged. “Paid” is the multiple the winning side actually received.',
-    zh: '"全额退回"涵盖平局、单边池、预言机报价不可用、错过结算时限，以及市场暂停——这几种情况下每一笔本金都全额退回，不收手续费。"实付倍数"是赢的那一边实际拿到的倍数。',
+    en: '“Refunded” covers a tie, a one-sided book, no usable oracle print at the boundary, a missed settlement window, or a pause that landed before the round locked — in all of those every stake is returned in full and no fee is charged. A round that had already locked when a pause landed settles normally instead. “Paid” is the multiple the winning side actually received.',
+    zh: '"全额退回"涵盖平局、单边池、边界时刻没有可用的预言机报价、错过结算时限，以及在该轮锁定之前落下的暂停——这几种情况下每一笔本金都全额退回，不收手续费。而暂停落下时已经锁定的轮次，仍会照常结算。"实付倍数"是赢的那一边实际拿到的倍数。',
   },
 } satisfies Record<string, Text>
 

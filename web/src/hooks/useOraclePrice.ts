@@ -35,10 +35,8 @@ export function useOraclePrice(oracle: Address | undefined, nowSeconds: number):
 
   return useMemo(() => {
     const raw = latest.data as readonly unknown[] | undefined
-    // `_tryLatestRoundId`, not `latestRoundData()` at face value. A print with `answer <= 0` or
-    // `updatedAt == 0` is one the contract throws away, so showing it as "$0.00" — and letting the
-    // card draw a coloured move off it — would put a winner on screen that `executeRound` would
-    // never settle. No price is the honest answer there, and the card already renders "—" for it.
+    // Do not render a non-positive or timestamp-less latest answer as "$0.00". It is no usable live
+    // quote, and drawing a coloured strike-relative move from it would invent a winner on screen.
     const print = usableLatestPrint(pick(raw, 0))
     return {
       answer: print?.answer,

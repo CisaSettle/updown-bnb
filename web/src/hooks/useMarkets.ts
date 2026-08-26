@@ -22,9 +22,15 @@ export interface Market {
  */
 function fallbackMarkets(): Market[] {
   const raw: Array<Omit<Market, 'isNative' | 'enabled'>> = [
+    // Every market settles in USDT, BNB included: one unit to compare six books in, and one
+    // approval path. `isNative` is still derived rather than assumed, so a native market added
+    // later needs no change here.
     { address: deployment.btcUsd5m, asset: deployment.usdt, oracle: deployment.btcFeed, interval: 300, label: 'BTC/USD 5m' },
     { address: deployment.btcUsd1h, asset: deployment.usdt, oracle: deployment.btcFeed, interval: 3600, label: 'BTC/USD 1h' },
-    { address: deployment.bnbUsd5m, asset: zeroAddress, oracle: deployment.bnbFeed, interval: 300, label: 'BNB/USD 5m' },
+    { address: deployment.ethUsd5m, asset: deployment.usdt, oracle: deployment.ethFeed, interval: 300, label: 'ETH/USD 5m' },
+    { address: deployment.ethUsd1h, asset: deployment.usdt, oracle: deployment.ethFeed, interval: 3600, label: 'ETH/USD 1h' },
+    { address: deployment.bnbUsd5m, asset: deployment.usdt, oracle: deployment.bnbFeed, interval: 300, label: 'BNB/USD 5m' },
+    { address: deployment.bnbUsd1h, asset: deployment.usdt, oracle: deployment.bnbFeed, interval: 3600, label: 'BNB/USD 1h' },
   ]
   return raw
     .filter((m) => m.address.toLowerCase() !== zeroAddress)

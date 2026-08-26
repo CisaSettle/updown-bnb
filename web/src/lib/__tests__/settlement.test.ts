@@ -4,7 +4,6 @@ import {
   boundaryProofFromReads,
   boundaryReadIds,
   firstRoundOfPhase,
-  latestUsableRoundId,
   needsBoundaryPrice,
   priceView,
   proveBoundaryPrice,
@@ -216,9 +215,9 @@ describe('proveBoundaryPrice — the off-chain mirror of _priceAt', () => {
   const now = Number(CLOSE_TS) + 5
   const base = { targetTs: CLOSE_TS, oracleMaxAge: MAX_AGE, nowSeconds: now }
 
-  it('accepts the candidate when it is the feed latest round', () => {
+  it('accepts the candidate when the immediate-successor read reports no data', () => {
     const candidate: OraclePrint = { roundId: 42n, answer: 99n * E8, updatedAt: Number(CLOSE_TS) - 10 }
-    expect(proveBoundaryPrice({ ...base, candidate, latestRoundId: 42n })).toEqual({
+    expect(proveBoundaryPrice({ ...base, candidate, successorChecked: true })).toEqual({
       status: 'proven',
       price: 99n * E8,
       roundId: 42n,
@@ -231,7 +230,6 @@ describe('proveBoundaryPrice — the off-chain mirror of _priceAt', () => {
     const proof = proveBoundaryPrice({
       ...base,
       candidate,
-      latestRoundId: 43n,
       prints: prints(candidate, { roundId: 43n, answer: 101n * E8, updatedAt: Number(CLOSE_TS) + 2 }),
     })
     expect(proof.status).toBe('proven')
@@ -242,7 +240,6 @@ describe('proveBoundaryPrice — the off-chain mirror of _priceAt', () => {
     const proof = proveBoundaryPrice({
       ...base,
       candidate,
-      latestRoundId: 43n,
       // 43 also lands at or before the boundary, so 42 is not the settling print
       prints: prints(candidate, { roundId: 43n, answer: 98n * E8, updatedAt: Number(CLOSE_TS) - 1 }),
     })
@@ -251,18 +248,18 @@ describe('proveBoundaryPrice — the off-chain mirror of _priceAt', () => {
 
   it('rejects a print that lands after the boundary — a late relay can never settle it', () => {
     const candidate: OraclePrint = { roundId: 42n, answer: 99n * E8, updatedAt: Number(CLOSE_TS) + 1 }
-    expect(proveBoundaryPrice({ ...base, candidate, latestRoundId: 42n }).status).toBe('unresolved')
+    expect(proveBoundaryPrice({ ...base, candidate }).status).toBe('unresolved')
   })
 
   it('reports a refund when the last print at the boundary is older than oracleMaxAge', () => {
     const candidate: OraclePrint = { roundId: 42n, answer: 99n * E8, updatedAt: Number(CLOSE_TS) - MAX_AGE - 1 }
-    expect(proveBoundaryPrice({ ...base, candidate, latestRoundId: 42n }).status).toBe('stale')
+    expect(proveBoundaryPrice({ ...base, candidate }).status).toBe('stale')
     // exactly at the limit is still usable, same as the contract's `>` comparison
     expect(
       proveBoundaryPrice({
         ...base,
         candidate: { ...candidate, updatedAt: Number(CLOSE_TS) - MAX_AGE },
-        latestRoundId: 42n,
+        successorChecked: true,
       }).status,
     ).toBe('proven')
   })
@@ -274,59 +271,48 @@ describe('proveBoundaryPrice — the off-chain mirror of _priceAt', () => {
       { roundId: 42n, answer: 99n * E8, updatedAt: 0 },
       { roundId: 42n, answer: 99n * E8, updatedAt: now + 1 }, // from the future
     ]) {
-      expect(proveBoundaryPrice({ ...base, candidate, latestRoundId: 42n }).status).toBe('unresolved')
+      expect(proveBoundaryPrice({ ...base, candidate }).status).toBe('unresolved')
     }
-    expect(proveBoundaryPrice({ ...base, candidate: undefined, latestRoundId: 42n }).status).toBe('unresolved')
+    expect(proveBoundaryPrice({ ...base, candidate: undefined }).status).toBe('unresolved')
   })
 
   it('says unresolved rather than stale when the round snapshot has not loaded', () => {
     const candidate: OraclePrint = { roundId: 42n, answer: 99n * E8, updatedAt: Number(CLOSE_TS) - 10 }
-    expect(proveBoundaryPrice({ ...base, oracleMaxAge: 0, candidate, latestRoundId: 42n }).status).toBe('unresolved')
+    expect(proveBoundaryPrice({ ...base, oracleMaxAge: 0, candidate }).status).toBe('unresolved')
   })
 
-  it('walks phases: the successor of a phase-final round is the first round of the next phase', () => {
-    const lastOfPhase1 = firstRoundOfPhase(1n) + 500n
+  // The market pins `oraclePhase` at construction and `_tryRound` refuses every id outside it, so a
+  // print in the next phase is not evidence about this market's price and settlement never reads
+  // one. At the seam that is load-bearing: the phase's last print has no successor the chain will
+  // look at, so it stands as the boundary price. A mirror that walked into the next phase would
+  // call it stale and show a round as unprovable that the chain settles without complaint.
+  it('does not read across a phase boundary, because the chain does not', () => {
+    const lastOfPhase1 = (1n << 64n) | 900n // a real phase can end at any ordinary local id
     const candidate: OraclePrint = { roundId: lastOfPhase1, answer: 99n * E8, updatedAt: Number(CLOSE_TS) - 10 }
     const firstOfPhase2 = firstRoundOfPhase(2n)
 
-    // `roundId + 1` does not exist (the phase ended); the print after it is in phase 2.
+    // a phase-2 print at or before the boundary would have displaced the candidate under the old
+    // cross-phase walk; the chain never sees it, so the candidate still settles the boundary.
     const proof = proveBoundaryPrice({
       ...base,
       candidate,
-      latestRoundId: firstOfPhase2 + 3n,
-      prints: prints(candidate, { roundId: firstOfPhase2, answer: 101n * E8, updatedAt: Number(CLOSE_TS) + 4 }),
-    })
-    expect(proof.status).toBe('proven')
-
-    // …and if that next-phase print is itself at or before the boundary, the candidate is stale
-    // history, not the settling print.
-    const notFinal = proveBoundaryPrice({
-      ...base,
-      candidate,
-      latestRoundId: firstOfPhase2 + 3n,
+      successorChecked: true, // getRoundData(lastOfPhase1 + 1) reverted: this is the final round
       prints: prints(candidate, { roundId: firstOfPhase2, answer: 101n * E8, updatedAt: Number(CLOSE_TS) - 1 }),
     })
-    expect(notFinal.status).toBe('unresolved')
+    expect(proof.status).toBe('proven')
+    if (proof.status === 'proven') expect(proof.price).toBe(99n * E8)
   })
 })
 
 describe('successorCandidates', () => {
-  it('tries roundId + 1 before any phase, and only looks forward', () => {
+  it('is roundId + 1 and nothing else, whatever the feed has moved on to', () => {
     const id = firstRoundOfPhase(3n) + 9n
-    const latest = firstRoundOfPhase(5n)
-    expect(successorCandidates(id, latest)).toEqual([id + 1n, firstRoundOfPhase(4n), firstRoundOfPhase(5n)])
+    expect(successorCandidates(id)).toEqual([id + 1n])
   })
 
-  it('does not phase-walk when the latest round is in the same phase', () => {
-    const id = firstRoundOfPhase(3n) + 9n
-    expect(successorCandidates(id, id + 5n)).toEqual([id + 1n])
-  })
-
-  it('caps the walk at MAX_PHASE_LOOKAHEAD, like the contract', () => {
-    const id = firstRoundOfPhase(1n)
-    const candidates = successorCandidates(id, firstRoundOfPhase(50n))
-    expect(candidates).toHaveLength(1 + 8)
-    expect(candidates.at(-1)).toBe(firstRoundOfPhase(9n))
+  it('stops at the phase seam: a phase-final round has no successor the chain would read', () => {
+    const lastOfPhase = (3n << 64n) | ((1n << 64n) - 1n) // phase 3, aggregator round 2^64-1
+    expect(successorCandidates(lastOfPhase)).toEqual([])
   })
 })
 
@@ -340,114 +326,62 @@ function cell(value: unknown): unknown {
   return { status: 'success', result: value }
 }
 
-describe('latestUsableRoundId — the mirror of _tryLatestRoundId', () => {
-  const fresh = Number(CLOSE_TS)
-
-  it('takes the id only when the latest print itself is usable', () => {
-    expect(latestUsableRoundId(tuple(9n, 100n * E8, fresh))).toBe(9n)
-    // `_tryLatestRoundId` returns false on either of these, and `_priceAt` then fails for EVERY
-    // round id — there is no boundary the chain would accept.
-    expect(latestUsableRoundId(tuple(9n, 0n, fresh))).toBeUndefined()
-    expect(latestUsableRoundId(tuple(9n, -1n, fresh))).toBeUndefined()
-    expect(latestUsableRoundId(tuple(9n, 100n * E8, 0))).toBeUndefined()
-  })
-
-  it('treats an unread or malformed answer as no id at all', () => {
-    expect(latestUsableRoundId(undefined)).toBeUndefined()
-    expect(latestUsableRoundId([])).toBeUndefined()
-    expect(latestUsableRoundId('0x')).toBeUndefined()
-  })
-
-  it('adds no check the Solidity does not make', () => {
-    // Unlike `_tryRound`, `_tryLatestRoundId` has no `updatedAt <= block.timestamp` test and no id
-    // round-trip. A stricter mirror would refuse boundaries the chain settles happily — the same
-    // bug pointed the other way.
-    expect(latestUsableRoundId(tuple(9n, 100n * E8, fresh + 600))).toBe(9n)
-  })
-})
-
 describe('the boundary mirror the card actually runs, from raw feed reads', () => {
   const now = Number(CLOSE_TS) + 5
   const printedAt = Number(CLOSE_TS) - 12
   const settling = 99n * E8 // DOWN against the 100.00 strike
   const live = 101n * E8
 
-  /** The hook's whole read path: latest → ids → getRoundData → proof → what the card renders. */
-  function card(latestRaw: unknown, candidateId: bigint | undefined, rounds: Record<string, unknown>) {
-    const latestRoundId = latestUsableRoundId(latestRaw)
-    const ids = boundaryReadIds(candidateId, latestRoundId)
+  /** The hook's whole read path: candidate → getRoundData(candidate, candidate + 1) → proof → card. */
+  function card(candidateId: bigint | undefined, rounds: Record<string, unknown>) {
+    const ids = boundaryReadIds(candidateId)
     const proof = boundaryProofFromReads({
       targetTs: CLOSE_TS,
       oracleMaxAge: MAX_AGE,
       nowSeconds: now,
       candidateId,
-      latestRoundId,
       ids,
-      results: ids.map((id) => cell(rounds[id.toString()])),
+      results: ids.map((id) =>
+        Object.hasOwn(rounds, id.toString())
+          ? cell(rounds[id.toString()])
+          : { status: 'failure', error: new Error('No data present') },
+      ),
     })
     return { ids, proof, view: priceView({ round: round(), nowSeconds: now, livePrice: live, boundary: proof }) }
   }
 
   it('proves the settling print while the feed is healthy', () => {
     const latest = tuple(7n, settling, printedAt)
-    const res = card(latest, 7n, { '7': latest })
-    expect(res.ids).toEqual([7n])
+    const res = card(7n, { '7': latest })
+    expect(res.ids).toEqual([7n, 8n])
     expect(res.proof).toEqual({ status: 'proven', price: settling, roundId: 7n, updatedAt: printedAt })
     expect(res.view.kind).toBe('boundary')
     expect(res.view.price).toBe(settling)
   })
 
-  for (const [why, latestRaw] of [
-    ['answer <= 0', tuple(7n, 0n, Number(CLOSE_TS))],
-    ['a negative answer', tuple(7n, -1n, Number(CLOSE_TS))],
-    ['updatedAt == 0', tuple(7n, settling, 0)],
-  ] as const) {
-    it(`proves nothing when the feed's latest print has ${why} — executeRound would revert`, () => {
-      const candidate = tuple(7n, settling, printedAt)
-      const res = card(latestRaw, 7n, { '7': candidate })
-
-      // `_tryLatestRoundId` fails, so `_priceAt` can prove no round id at all: there is nothing
-      // worth reading and nothing the card may assert.
-      expect(res.ids).toEqual([])
-      expect(res.proof).toEqual({ status: 'unresolved' })
-      expect(res.view.kind).toBe('pending')
-      expect(res.view.showMove).toBe(false)
-      expect(res.view.price).toBeUndefined()
-
-      // The regression this pins: taking `latestRoundData()[0]` at face value — the id is right
-      // there in the tuple — "proves" a settling price the chain rejects with InvalidBoundaryProof.
-      const naive = boundaryProofFromReads({
-        targetTs: CLOSE_TS,
-        oracleMaxAge: MAX_AGE,
-        nowSeconds: now,
-        candidateId: 7n,
-        latestRoundId: (latestRaw as bigint[])[0],
-        ids: [7n],
-        results: [cell(candidate)],
-      })
-      expect(naive.status).toBe('proven')
-      expect(priceView({ round: round(), nowSeconds: now, livePrice: live, boundary: naive }).kind).toBe('boundary')
-    })
-  }
+  it('proves a phase-final print when its ordinary next id reverts', () => {
+    const candidate = tuple((1n << 64n) | 900n, settling, printedAt)
+    const res = card((1n << 64n) | 900n, { [((1n << 64n) | 900n).toString()]: candidate })
+    expect(res.proof.status).toBe('proven')
+    expect(res.view.kind).toBe('boundary')
+  })
 
   it('still reads the successor ids the contract would consult when the feed is healthy', () => {
-    const latest = tuple(9n, live, Number(CLOSE_TS) + 2)
-    const res = card(latest, 7n, { '7': tuple(7n, settling, printedAt), '8': tuple(8n, live, Number(CLOSE_TS) - 1) })
+    const res = card(7n, { '7': tuple(7n, settling, printedAt), '8': tuple(8n, live, Number(CLOSE_TS) - 1) })
     expect(res.ids).toEqual([7n, 8n])
     // round 8 also landed at or before the boundary, so 7 is not the settling print
     expect(res.proof.status).toBe('unresolved')
   })
 
   it('drops a print the feed returned under a different id, exactly as _tryRound does', () => {
-    const latest = tuple(7n, settling, printedAt)
-    const res = card(latest, 7n, { '7': tuple(6n, settling, printedAt) })
+    const res = card(7n, { '7': tuple(6n, settling, printedAt) })
     expect(res.proof).toEqual({ status: 'unresolved' })
     expect(res.view.kind).toBe('pending')
   })
 
   it('has nothing to read when the chain could not name a candidate either', () => {
-    expect(boundaryReadIds(undefined, 9n)).toEqual([])
-    expect(card(tuple(9n, settling, printedAt), undefined, {}).proof).toEqual({ status: 'unresolved' })
+    expect(boundaryReadIds(undefined)).toEqual([])
+    expect(card(undefined, {}).proof).toEqual({ status: 'unresolved' })
   })
 })
 
@@ -479,8 +413,8 @@ describe('usableLatestPrint — the live price obeys the same rule as the settli
   ] as const) {
     it(`shows no live price at all when the feed's latest print has ${why}`, () => {
       const res = liveCard(raw)
-      // `_tryRound` and `_tryLatestRoundId` both throw this print away, so `executeRound` will
-      // never settle on it. It is not a price of $0.00 — it is the absence of a price.
+      // The live-price surface throws this print away. It is not a price of $0.00 — it is the
+      // absence of a usable current quote.
       expect(res.print).toBeUndefined()
       expect(res.view.kind).toBe('live')
       expect(res.view.price).toBeUndefined() // renders "—", and PriceBlock draws no move
@@ -497,9 +431,4 @@ describe('usableLatestPrint — the live price obeys the same rule as the settli
     expect(usableLatestPrint([])).toBeUndefined()
   })
 
-  it('is the same rule the boundary id path uses, so the two cannot drift', () => {
-    for (const raw of [tuple(9n, 101n * E8, fresh), tuple(9n, 0n, fresh), tuple(9n, 101n * E8, 0), undefined]) {
-      expect(latestUsableRoundId(raw)).toBe(usableLatestPrint(raw)?.roundId)
-    }
-  })
 })

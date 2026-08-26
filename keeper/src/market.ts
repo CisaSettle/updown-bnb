@@ -38,12 +38,9 @@ import {
 } from './schedule.js';
 import {
   findLastRoundOfPhase,
-  firstRoundOfPhase,
   isUsablePrint,
-  MAX_PHASE_LOOKBACK,
   phaseOf,
-  resolveSuccessor,
-  usableLatestRoundId,
+  successorId,
   verifyBoundaryRound,
   type BoundaryProof,
   type BoundaryVerdict,
@@ -58,6 +55,7 @@ import {
   TerminalTxError,
   TxQueue,
   type SendPolicy,
+  didBroadcast,
 } from './tx.js';
 import { computeBackoff, errorText, isContractRejection, type BackoffOptions } from './backoff.js';
 
@@ -89,10 +87,12 @@ export const FAILURE_KINDS = [
   'boundary-lookup',
   'boundary-not-found',
   'boundary-unusable',
+  'boundary-wrong-phase',
   'execute-revert',
   'execute-send',
   'execute-simulate',
   'no-progress',
+  'paused-settlement-missed',
   'price',
   'read',
   'relay-deadline',
@@ -166,10 +166,42 @@ export interface MarketProfile {
   bufferSeconds: number;
   oracleMaxAge: number;
   oracle: Address;
+  /**
+   * The aggregator phase the market is bound to for life. Immutable on chain, so it is read once.
+   * A boundary id outside it is not a proof the contract will look at — `executeRound` reverts.
+   */
+  oraclePhase: bigint;
   settlementAsset: Address;
   isNative: boolean;
   /** Non-null only when this market reads a keeper-fed testnet relay feed. */
   relay: RelayProfile | null;
+}
+
+/**
+ * Where a paused market's last locked round stands.
+ *
+ * `pause()` stops the market taking NEW risk; it does not cancel risk already taken. A round that
+ * was locked when the pause landed still settles at its true price, and `executeRound` is not
+ * pausable so that it can. That is the whole defence against an owner who is also a bettor watching
+ * the settlement print land, seeing they lost, and pausing to run the round out into refunds — and
+ * it is worth nothing unless the keeper, the only thing that ever turns the crank, keeps calling.
+ */
+export type PausedSettlementState =
+  /** Not paused, or nothing locked is waiting: pausing took no risk with it. */
+  | 'none'
+  /** Paused, and a locked round is still inside its window. The keeper must settle it. */
+  | 'pending'
+  /** Paused, and a locked round's settlement window elapsed: its stakes are refunds now. */
+  | 'missed';
+
+/** The locked round a paused market still owes a settlement, as `executeRound` sees it. */
+export interface PendingSettlement {
+  /** `currentEpoch - 1`: the round `executeRound` closes. */
+  epoch: bigint;
+  /** Its `closeTs`, which is the boundary `executeRound` must price (`lockTs(currentEpoch)`). */
+  boundaryTs: number;
+  /** `closeTs + bufferSeconds`, from this round's own snapshot. Past it, it can only void. */
+  deadlineTs: number;
 }
 
 export interface MarketSnapshot {
@@ -177,6 +209,12 @@ export interface MarketSnapshot {
   paused: boolean;
   currentEpoch: bigint;
   round: RoundTiming;
+  /**
+   * Non-null only while paused, and only when `currentEpoch - 1` is locked and neither settled nor
+   * voided — the one piece of work a paused market still owes. Unpaused, settlement is driven by
+   * the round grid and this stays null.
+   */
+  pendingSettlement: PendingSettlement | null;
 }
 
 /**
@@ -450,10 +488,15 @@ export class MarketWorker {
   #inFlight = false;
   #observed = false;
   #active = false;
+  #paused = false;
+  #pausedSettlement: PausedSettlementState = 'none';
+  /** Epoch already reported as having missed its settlement, so it is shouted about once. */
+  #missedSettlementEpoch: bigint | null = null;
   #lastExecutionMs: number | null = null;
   #supervisedSinceMs: number;
   #currentEpoch: bigint = 0n;
   #lastInactiveLogMs = 0;
+  #lastPausedSettlementLogMs = 0;
   #lastRelayCapacityLogMs = 0;
   #idleTicks = 0;
   /** Completed rounds seen in this keeper's own receipts, newest last. Bounded two ways. */
@@ -488,6 +531,22 @@ export class MarketWorker {
 
   get active(): boolean {
     return this.#active;
+  }
+
+  /** True when the market is paused: no new lock, no new round — but locked rounds still settle. */
+  get paused(): boolean {
+    return this.#paused;
+  }
+
+  /**
+   * Whether a paused market still owes a settlement, and whether it can still make it.
+   *
+   * This is the state `/healthz` has to distinguish from "inactive". A paused market with a locked
+   * round is not closed: it is mid-settlement, and if the keeper stops calling `executeRound` the
+   * round times out and every stake in it — including the loser's — is handed back.
+   */
+  get pausedSettlement(): PausedSettlementState {
+    return this.#pausedSettlement;
   }
 
   get intervalSec(): number {
@@ -527,19 +586,27 @@ export class MarketWorker {
     let bufferSeconds: number;
     let oracleMaxAge: number;
     let oracle: Address;
+    let oraclePhase: bigint;
     let settlementAsset: Address;
     try {
-      [interval, bufferSeconds, oracleMaxAge, oracle, settlementAsset] = await Promise.all([
+      // `oraclePhase` is part of this set on purpose: a market that cannot answer it is not a market
+      // this keeper knows how to drive, and guessing the phase would mean sending boundary ids the
+      // contract reverts on. Failing to bootstrap is the honest outcome.
+      [interval, bufferSeconds, oracleMaxAge, oracle, oraclePhase, settlementAsset] = await Promise.all([
         publicClient.readContract({ ...read, functionName: 'interval' }),
         publicClient.readContract({ ...read, functionName: 'bufferSeconds' }),
         publicClient.readContract({ ...read, functionName: 'oracleMaxAge' }),
         publicClient.readContract({ ...read, functionName: 'oracle' }),
+        publicClient.readContract({ ...read, functionName: 'oraclePhase' }),
         publicClient.readContract({ ...read, functionName: 'settlementAsset' }),
       ]);
     } catch (error) {
       throw new Error(
         `market "${this.name}" at ${this.address} does not look like an UpDown market on chain ` +
-          `${this.#deps.config.chainId} (${errorText(error)}). Check the deployments file and RPC_URL.`,
+          `${this.#deps.config.chainId} (${errorText(error)}). Check the deployments file and RPC_URL. ` +
+          `A market deployed before the oracle phase was pinned has no oraclePhase() and fails here ` +
+          `by design: without it the keeper cannot know which boundary ids the contract will accept, ` +
+          `so it would send ids that revert. Redeploy from the current source.`,
       );
     }
 
@@ -552,6 +619,7 @@ export class MarketWorker {
       bufferSeconds,
       oracleMaxAge,
       oracle,
+      oraclePhase,
       settlementAsset,
       isNative: settlementAsset === ZERO_ADDRESS,
       relay,
@@ -564,6 +632,7 @@ export class MarketWorker {
       bufferSeconds: profile.bufferSeconds,
       oracleMaxAge: profile.oracleMaxAge,
       oracle: profile.oracle,
+      oraclePhase: profile.oraclePhase,
       settlementAsset: profile.isNative ? 'native BNB' : profile.settlementAsset,
       relaySymbol: relay?.symbol ?? null,
     });
@@ -649,6 +718,11 @@ export class MarketWorker {
     m.setGauge(M.recentVoidRatio, HELP[M.recentVoidRatio] as string, 0, labels);
     m.setGauge(M.recentFaultVoidRatio, HELP[M.recentFaultVoidRatio] as string, 0, labels);
     m.setGauge(M.marketActive, HELP[M.marketActive] as string, 0, labels);
+    // Declared at zero like every other series: an operator asking "is this market paused, and is
+    // its locked round still being settled?" must get an answer before the first pause, not
+    // `no data` — which is what a Prometheus rule reads as "nothing to see".
+    m.setGauge(M.marketPaused, HELP[M.marketPaused] as string, 0, labels);
+    m.setGauge(M.pausedSettlementPending, HELP[M.pausedSettlementPending] as string, 0, labels);
     m.setGauge(M.marketHealthy, HELP[M.marketHealthy] as string, 0, labels);
   }
 
@@ -732,26 +806,44 @@ export class MarketWorker {
     this.#observed = true;
     this.#currentEpoch = snapshot.currentEpoch;
     this.#active = snapshot.genesisStarted && !snapshot.paused && snapshot.round.startTs > 0;
-    this.#deps.metrics.setGauge(M.marketActive, HELP[M.marketActive] as string, this.#active ? 1 : 0, {
-      market: this.name,
-    });
-    this.#deps.metrics.setGauge(M.currentEpoch, HELP[M.currentEpoch] as string, Number(snapshot.currentEpoch), {
-      market: this.name,
-    });
+    this.#paused = snapshot.paused;
+    this.#pausedSettlement = this.#classifyPausedSettlement(snapshot);
+    const labels = { market: this.name };
+    this.#deps.metrics.setGauge(M.marketActive, HELP[M.marketActive] as string, this.#active ? 1 : 0, labels);
+    this.#deps.metrics.setGauge(M.marketPaused, HELP[M.marketPaused] as string, snapshot.paused ? 1 : 0, labels);
+    this.#deps.metrics.setGauge(
+      M.pausedSettlementPending,
+      HELP[M.pausedSettlementPending] as string,
+      this.#pausedSettlement === 'pending' ? 1 : 0,
+      labels,
+    );
+    this.#deps.metrics.setGauge(M.currentEpoch, HELP[M.currentEpoch] as string, Number(snapshot.currentEpoch), labels);
+    if (this.#pausedSettlement !== 'missed') this.#missedSettlementEpoch = null;
 
-    if (!this.#active) {
-      const reason = !snapshot.genesisStarted
-        ? 'genesisStart() has not been called'
-        : snapshot.paused
-          ? 'market is paused'
-          : 'current round has not been started';
-      // Log at most once a minute so a long pause does not flood the log.
-      if (this.#now() - this.#lastInactiveLogMs > 60_000) {
-        this.#lastInactiveLogMs = this.#now();
-        this.#log.warn('market inactive; nothing to execute', { reason, epoch: snapshot.currentEpoch });
-      }
+    // A paused market with a LOCKED round is not idle, and this is the single most important line in
+    // the file. `pause()` deliberately does not stop `executeRound`, so that an owner who is also a
+    // bettor cannot watch the settlement print land, see they lost, and pause to have the round run
+    // out its window and hand every stake back. That defence is worth exactly nothing if the keeper
+    // — the only thing that ever calls `executeRound` — treats "paused" as "nothing to do". So a
+    // paused market keeps being driven until its locked round is settled, and only then goes quiet.
+    if (!this.#active && this.#pausedSettlement !== 'pending') {
+      this.#reportIdle(snapshot);
       this.#arm(this.#deps.config.schedule.idlePollMs, () => this.#plan());
       return;
+    }
+    if (this.#pausedSettlement === 'pending') {
+      const pending = snapshot.pendingSettlement as PendingSettlement;
+      // Once a minute, like every other repeating line: a settlement can stay pending for a whole
+      // buffer, and this must be legible in the log rather than drown it.
+      if (this.#now() - this.#lastPausedSettlementLogMs > 60_000) {
+        this.#lastPausedSettlementLogMs = this.#now();
+        this.#log.warn('market is PAUSED and still owes a settlement; executeRound is not pausable and neither is this', {
+          lockedEpoch: pending.epoch,
+          boundaryTs: pending.boundaryTs,
+          deadlineTs: pending.deadlineTs,
+          secondsLeft: pending.deadlineTs - Math.floor(this.#chainNow() / 1000),
+        });
+      }
     }
 
     // Chain time, not local: the boundary these wakes are aimed at is a `block.timestamp`, and a
@@ -767,7 +859,9 @@ export class MarketWorker {
       delayMs: plan.delayMs,
       missedEpochs: missed,
     });
-    if (missed > 0 && plan.kind !== 'capped') {
+    // A paused market's grid does not move: `executeRound` returns before locking or opening
+    // anything, so `currentEpoch` stays put and "missed epochs" is not a backlog to catch up on.
+    if (missed > 0 && plan.kind !== 'capped' && !snapshot.paused) {
       this.#log.warn('behind schedule; executeRound will fast-forward the grid', {
         epoch: snapshot.currentEpoch,
         lockTs: snapshot.round.lockTs,
@@ -777,6 +871,54 @@ export class MarketWorker {
     }
 
     this.#arm(this.#delayWithCooldown(plan, snapshot.round), () => this.#dispatch(plan, snapshot));
+  }
+
+  /**
+   * Where this market's paused settlement stands, judged against the CHAIN clock — the same clock
+   * `_endRound` compares `block.timestamp` with.
+   */
+  #classifyPausedSettlement(snapshot: MarketSnapshot): PausedSettlementState {
+    if (!snapshot.paused) return 'none';
+    const pending = snapshot.pendingSettlement;
+    if (pending === null) return 'none';
+    return Math.floor(this.#chainNow() / 1000) > pending.deadlineTs ? 'missed' : 'pending';
+  }
+
+  /**
+   * Say why there is nothing to do — once a minute at most, so a long pause does not flood the log.
+   *
+   * A missed paused settlement is not part of that budget: a locked round whose window ran out
+   * while the market was paused has just turned a real outcome into refunds, and it is reported once
+   * per epoch, at error, with the epoch named.
+   */
+  #reportIdle(snapshot: MarketSnapshot): void {
+    if (this.#pausedSettlement === 'missed') {
+      const pending = snapshot.pendingSettlement as PendingSettlement;
+      if (this.#missedSettlementEpoch !== pending.epoch) {
+        this.#missedSettlementEpoch = pending.epoch;
+        this.#countFailure('paused-settlement-missed');
+        this.#log.error(
+          'a LOCKED round ran out its settlement window while the market was paused; every stake in it is a refund now',
+          {
+            lockedEpoch: pending.epoch,
+            boundaryTs: pending.boundaryTs,
+            deadlineTs: pending.deadlineTs,
+            chainNow: Math.floor(this.#chainNow() / 1000),
+            hint: 'the round is refundable through _isExpired with no further transaction; investigate why the settlement did not land before unpausing',
+          },
+        );
+      }
+      return;
+    }
+    const reason = !snapshot.genesisStarted
+      ? 'genesisStart() has not been called'
+      : snapshot.paused
+        ? 'market is paused and no locked round is waiting to settle'
+        : 'current round has not been started';
+    if (this.#now() - this.#lastInactiveLogMs > 60_000) {
+      this.#lastInactiveLogMs = this.#now();
+      this.#log.warn('market inactive; nothing to execute', { reason, epoch: snapshot.currentEpoch });
+    }
   }
 
   #delayWithCooldown(plan: WakePlan, round: RoundTiming): number {
@@ -806,16 +948,26 @@ export class MarketWorker {
       // The lead can spend the whole staleness budget but not a millisecond more, so past a certain
       // feed count the boundary simply cannot be served: the last relays land after `lockTs` however
       // early the keeper wakes. Say so, because the only fixes are operational.
-      const capacity = relayCapacity(perRelayLeadMs, round.oracleMaxAge);
-      if (relaySlots > capacity && this.#now() - this.#lastRelayCapacityLogMs > 60_000) {
+      // `_validateWindows` forbids a zero `oracleMaxAge` on chain, so a zero here means the round
+      // has not been read yet — not that the budget is empty. Warning on that would be noise.
+      const capacity = round.oracleMaxAge > 0 ? relayCapacity(perRelayLeadMs, round.oracleMaxAge) : null;
+      if (capacity !== null && relaySlots > capacity && this.#now() - this.#lastRelayCapacityLogMs > 60_000) {
         this.#lastRelayCapacityLogMs = this.#now();
-        this.#log.warn('more relay feeds share this boundary than its staleness budget can serve', {
-          relaySlots,
-          capacity,
-          perRelayLeadMs,
-          oracleMaxAge: round.oracleMaxAge,
-          hint: 'lower RELAY_LEAD_MS, split the feeds across keeper keys, or relay fewer feeds',
-        });
+        this.#log.warn(
+          capacity === 0
+            ? 'this boundary cannot carry a single relay: the lead is wider than the staleness budget'
+            : 'more relay feeds share this boundary than its staleness budget can serve',
+          {
+            relaySlots,
+            capacity,
+            perRelayLeadMs,
+            oracleMaxAge: round.oracleMaxAge,
+            hint:
+              capacity === 0
+                ? 'RELAY_LEAD_MS exceeds what oracleMaxAge permits — every print would be rejected as stale'
+                : 'lower RELAY_LEAD_MS, split the feeds across keeper keys, or relay fewer feeds',
+          },
+        );
       }
     }
     // Publish this market's own boundary window, so every OTHER market on the same feed keeps its
@@ -843,6 +995,11 @@ export class MarketWorker {
    * no `relay()` to call and no business being written to by a keeper.
    */
   #tickEnabled(): boolean {
+    // Never while paused. The only transaction a paused market has any business sending is the one
+    // that settles the round it locked before the pause, and a density tick is decoration that
+    // would queue in front of it on the single key. The chart can have a gap; the round cannot have
+    // a delay, because its window is the difference between a settlement and a refund.
+    if (this.#paused) return false;
     return this.#deps.config.schedule.relayTickMs > 0 && this.#profile?.relay?.canWrite === true;
   }
 
@@ -908,6 +1065,41 @@ export class MarketWorker {
         bufferSeconds: round.bufferSeconds,
         oracleMaxAge: round.oracleMaxAge,
       },
+      // One extra read, and only while paused. It is the read that decides whether a paused market
+      // is closed or mid-settlement, and those are not the same market.
+      pendingSettlement: paused && genesisStarted ? await this.#readPendingSettlement(currentEpoch) : null,
+    };
+  }
+
+  /**
+   * The locked round a paused market still owes a settlement, or null.
+   *
+   * `executeRound` closes `currentEpoch - 1` and then, when paused, returns before locking anything
+   * else. So a paused market has at most this one piece of work, it never moves on to another, and
+   * once it is done there is nothing to call for again — which is what keeps a paused market from
+   * spinning the RPC forever.
+   *
+   * Only a round that actually LOCKED counts. One that never locked has no strike, no outcome
+   * anyone could have known, and refunds on its own timer through `_isExpired` with no transaction
+   * from anybody; calling `executeRound` for it would spend gas to emit an event and change nothing.
+   */
+  async #readPendingSettlement(currentEpoch: bigint): Promise<PendingSettlement | null> {
+    if (currentEpoch === 0n) return null;
+    const epoch = currentEpoch - 1n;
+    const round = await this.#deps.clients.publicClient.readContract({
+      address: this.address,
+      abi: marketAbi,
+      functionName: 'getRound',
+      args: [epoch],
+    });
+    if (round.startTs === 0n) return null; // before the anchor epoch there is no previous round
+    if (!round.locked || round.settled || round.voided) return null;
+    return {
+      epoch,
+      boundaryTs: Number(round.closeTs),
+      // This round's OWN snapshot, never the live parameter and never its neighbour's: `_endRound`
+      // judges it against `r.bufferSeconds`, taken when the round started.
+      deadlineTs: Number(round.closeTs) + round.bufferSeconds,
     };
   }
 
@@ -1141,19 +1333,31 @@ export class MarketWorker {
       this.#log.info('relay published', fields);
       return true;
     } catch (error) {
-      // Consume the pair even though this failed. `sendWithRetry` has already broadcast (and
-      // possibly re-broadcast) for this boundary, and from out here there is no way to tell a
-      // transaction that never reached the mempool from one that landed after the receipt wait
-      // gave up. Re-relaying would risk a second transaction for a boundary only one print can
-      // ever serve, and would spend a queue slot budgeted for a feed that still has a chance.
-      this.#deps.relays.abandon(relay.feed, boundaryTs, this.#now());
+      // Consume the pair only if something actually reached the wire. Once a transaction is out
+      // there, a second one for this boundary is unsafe: only one print can serve it, and from out
+      // here a transaction that never reached the mempool is indistinguishable from one that landed
+      // after the receipt wait gave up.
+      //
+      // But `sendWithRetry` also fails *before* it sends anything — the gas-price and nonce reads
+      // happen ahead of the retry loop, so a single RPC hiccup there used to burn the pair and
+      // silently give the boundary up for a failure that cost nothing and was safe to retry. The
+      // error now says which of the two happened, and that is the whole difference between a
+      // transient RPC blip and a round that goes unpriced.
+      const wasBroadcast = didBroadcast(error);
+      if (wasBroadcast) this.#deps.relays.abandon(relay.feed, boundaryTs, this.#now());
       this.#countFailure(error instanceof TerminalTxError ? 'relay-revert' : 'relay-send');
-      this.#log.error('relay transaction failed; the boundary may have no usable print', {
-        feed: relay.feed,
-        symbol: relay.symbol,
-        boundaryTs,
-        error,
-      });
+      this.#log.error(
+        wasBroadcast
+          ? 'relay transaction failed after broadcasting; the boundary may have no usable print'
+          : 'relay failed before broadcasting anything; the pair is kept and may be retried',
+        {
+          feed: relay.feed,
+          symbol: relay.symbol,
+          boundaryTs,
+          broadcast: wasBroadcast,
+          error,
+        },
+      );
       return false;
     }
   }
@@ -1654,8 +1858,19 @@ export class MarketWorker {
           });
         }
 
-        // Catch-up verification: one call fast-forwards the grid on chain, so confirm the epoch moved.
-        await this.#verifyProgress(epoch);
+        // Catch-up verification: one call fast-forwards the grid on chain, so confirm the epoch
+        // actually moved. NOT while paused — `executeRound` returns straight after `_endRound`
+        // there, deliberately, so `currentEpoch` is *supposed* to stay where it is and checking
+        // would report the market's one correct behaviour as a failure.
+        if (snapshot.paused) {
+          this.#log.info('settled a locked round on a PAUSED market; the grid stays where it is until unpause', {
+            epoch,
+            boundaryTs,
+            settledEpoch: outcomes.settled,
+          });
+        } else {
+          await this.#verifyProgress(epoch);
+        }
         return true;
       } catch (error) {
         const terminal = error instanceof TerminalTxError;
@@ -1674,7 +1889,8 @@ export class MarketWorker {
   /**
    * Find the oracle round id to pass to `executeRound`, and say loudly when the round cannot be
    * settled: the contract rejects an unprovable id outright, so the honest keeper's job is to hand
-   * it the id the chain's own rule names — including when that id lives in a previous phase.
+   * it the id the chain's own rule names — and never one from outside the phase the market is
+   * bound to, which cannot settle anything and only burns gas on a revert.
    */
   async #resolveBoundaryRoundId(
     boundaryTs: number,
@@ -1702,20 +1918,21 @@ export class MarketWorker {
     }
 
     if (!searchFailed && !found) {
-      // `findRoundIdAt` only ever decrements, so it stops dead at the first round of an aggregator
-      // phase. When a new phase's first print lands AFTER the boundary, the settleable prior-phase
-      // print is sitting right there and the phase-local walk can never see it — the round would
-      // time out into refunds for no reason. `_priceAt` accepts that print, so the keeper has to be
-      // able to name it: step back through the previous phases the way the contract steps forward.
-      const across = await this.#findBoundaryInPreviousPhases(boundaryTs, chainNowSec, baseSteps * 8n);
-      roundId = across.roundId;
-      found = across.found;
-      searchFailed = across.searchFailed;
+      // `findRoundIdAt` starts at the feed's LATEST round and only decrements. Once the proxy has
+      // confirmed a replacement aggregator, that starting id is in a phase this market is not bound
+      // to, `_tryRound` refuses every id on the way down, and the walk finds nothing — while the
+      // market's own phase may still hold a provable print for this boundary: its last one, whose
+      // successor no longer exists. Naming that print is the only thing this fallback does, and it
+      // never leaves the bound phase to do it.
+      const pinned = await this.#findBoundaryInPinnedPhase(boundaryTs, chainNowSec, baseSteps * 8n);
+      roundId = pinned.roundId;
+      found = pinned.found;
+      searchFailed = pinned.searchFailed;
       if (found) {
-        this.#log.warn('boundary print found in a previous aggregator phase', {
+        this.#log.warn('boundary print found by walking back inside the phase this market is bound to', {
           boundaryTs,
           boundaryRoundId: roundId,
-          phase: phaseOf(roundId),
+          oraclePhase: profile?.oraclePhase,
         });
       }
     }
@@ -1731,6 +1948,23 @@ export class MarketWorker {
           : 'the Chainlink feed has no print in the boundary window',
       });
       this.#countFailure('boundary-not-found');
+      return { roundId: 0n, searchFailed: false };
+    }
+
+    // The market is bound to one aggregator phase for life, and `_tryRound` throws away every print
+    // from any other: an out-of-phase id is not a weak proof, it is not a proof at all, and
+    // `executeRound` REVERTS on it rather than voiding. Sending one costs gas and settles nothing,
+    // so it is refused here, loudly, instead of being discovered on chain.
+    const oraclePhase = profile?.oraclePhase;
+    if (oraclePhase !== undefined && phaseOf(roundId) !== oraclePhase) {
+      this.#log.error('refusing to submit a boundary id from outside the phase this market is bound to', {
+        boundaryTs,
+        boundaryRoundId: roundId,
+        idPhase: phaseOf(roundId),
+        oraclePhase,
+        hint: 'the feed has moved to a new aggregator phase; this market can no longer be settled and should be retired once its rounds have refunded',
+      });
+      this.#countFailure('boundary-wrong-phase');
       return { roundId: 0n, searchFailed: false };
     }
 
@@ -1821,26 +2055,35 @@ export class MarketWorker {
   /**
    * `getRoundData` filtered exactly like the contract's `_tryRound`, so a proxy that answers a
    * missing round with zeroes cannot be mistaken here for a print the chain would honour.
+   *
+   * The phase test is part of `_tryRound` and therefore part of this: outside `oraclePhase` the
+   * contract does not even call the feed, and a mirror that reads such an id as a real print would
+   * certify a boundary `executeRound` reverts on.
    */
-  #strictPrintReader(oracle: Address, chainNowSec: number): (id: bigint) => Promise<OraclePrint | null> {
+  #strictPrintReader(
+    oracle: Address,
+    chainNowSec: number,
+    oraclePhase: bigint,
+  ): (id: bigint) => Promise<OraclePrint | null> {
     return async (id: bigint) => {
+      if (phaseOf(id) !== oraclePhase) return null;
       const print = await this.#readPrint(oracle, id);
-      return isUsablePrint(print, id, chainNowSec) ? print : null;
+      return isUsablePrint(print, id, chainNowSec, oraclePhase) ? print : null;
     };
   }
 
   /**
-   * The feed's latest print. Returned whole rather than as a bare id: the contract's
-   * `_tryLatestRoundId` looks at the answer and the timestamp too, and a mirror that only takes the
-   * id cannot tell a live feed from a dead one.
+   * The feed's latest print, used for exactly one thing: telling whether the proxy has moved to an
+   * aggregator phase this market is not bound to.
    *
-   * Null means the **contract** refused — a revert, exactly what `_tryLatestRoundId`'s `try/catch`
-   * swallows on chain, and the one case in which `_priceAt` really does give up on the boundary.
-   * A call that could not be made at all throws `OracleReadError`, for the same reason `#readPrint`
-   * does: a transport failure here is not the feed saying no. Collapsing it into null made
-   * `verifyBoundaryRound` announce "this round WILL VOID into refunds" and count a
-   * `boundary-unusable` failure every time an RPC blinked, about a boundary the chain would have
-   * settled perfectly well.
+   * It is deliberately NOT part of the boundary proof any more. `_priceAt` no longer consults
+   * `_tryLatestRoundId` at all — the bound phase's own last print has to stay provable after the
+   * proxy has moved on — so a mirror that still demanded a usable latest round would predict a void
+   * for a boundary the chain settles happily.
+   *
+   * Null means the **contract** refused (a revert). A call that could not be made at all throws
+   * `OracleReadError`, for the same reason `#readPrint` does: a transport failure here is not the
+   * feed saying no, and collapsing the two is how a keeper runs a settleable round into a timeout.
    */
   async #latestPrint(oracle: Address): Promise<OraclePrint | null> {
     try {
@@ -1859,47 +2102,58 @@ export class MarketWorker {
   }
 
   /**
-   * Find the boundary print in a phase older than the feed's current one.
+   * Find the boundary print inside the phase this market is bound to, when the direct walk cannot.
    *
-   * For each phase back (bounded like the contract's `MAX_PHASE_LOOKAHEAD`): skip it when it never
-   * existed or when even its first print is past the boundary, otherwise name its last round and
-   * let `findRoundIdAt` walk back from there — phase-locally, which is all it can do, but now
-   * inside the right phase.
+   * `findRoundIdAt` starts at the feed's latest round and only decrements, so once the proxy has
+   * confirmed a replacement aggregator it is walking ids from a phase `_tryRound` refuses and finds
+   * nothing at all. The bound phase can still hold a provable print for the boundary that straddles
+   * the switch — its own last one, whose successor no longer exists — and `_priceAt` accepts it.
+   *
+   * Strictly one phase, always the bound one. Stepping into any other would produce an id the
+   * contract reverts on, which is worse than finding nothing: it spends gas and settles no round.
    */
-  async #findBoundaryInPreviousPhases(
+  async #findBoundaryInPinnedPhase(
     boundaryTs: number,
     chainNowSec: number,
     steps: bigint,
   ): Promise<{ roundId: bigint; found: boolean; searchFailed: boolean }> {
-    const oracle = this.#profile?.oracle;
-    if (!oracle) return { roundId: 0n, found: false, searchFailed: false };
+    const profile = this.#profile;
+    if (!profile) return { roundId: 0n, found: false, searchFailed: false };
+    const oracle = profile.oracle;
+    const oraclePhase = profile.oraclePhase;
     try {
       // A read that could not be made throws, and the catch below turns it into `searchFailed`:
       // "we could not look" is never "there is nothing there". Null is the narrower case — the
-      // contract itself refusing — and it too stops the walk, because a feed whose
-      // `latestRoundData()` reverts gives `_priceAt` nothing to prove finality against, so the
-      // keeper should retry rather than name an id the chain cannot accept.
+      // contract itself refusing — and it too stops the walk: with the feed answering nothing at
+      // all there is no way to tell whether the phase has moved, so retrying beats guessing.
       const latest = await this.#latestPrint(oracle);
       if (latest === null) return { roundId: 0n, found: false, searchFailed: true };
 
-      const readStrict = this.#strictPrintReader(oracle, chainNowSec);
-      const exists = async (id: bigint): Promise<boolean> => (await readStrict(id)) !== null;
-      const latestPhase = phaseOf(latest.roundId);
+      // Same phase, so `findRoundIdAt` already started exactly where this would and walked the same
+      // ids. There is nothing left to try, and probing the phase again would only spend RPC calls.
+      if (phaseOf(latest.roundId) === oraclePhase) return { roundId: 0n, found: false, searchFailed: false };
 
-      for (let back = 1; back <= MAX_PHASE_LOOKBACK; back += 1) {
-        const phase = latestPhase - BigInt(back);
-        if (phase < 1n) break;
-        const first = await readStrict(firstRoundOfPhase(phase));
-        if (!first) continue; // this phase never existed on this proxy
-        if (first.updatedAt > boundaryTs) continue; // the whole phase is after the boundary
-        const last = await findLastRoundOfPhase(phase, exists);
-        if (last === null) continue;
-        const [rid, ok] = await this.#findRoundIdAt(boundaryTs, last, steps);
-        if (ok) return { roundId: rid, found: true, searchFailed: false };
-      }
+      // The feed has left the phase this market was bound to at construction. That is terminal for
+      // the market, by design: the bound phase's last print goes stale within one `oracleMaxAge`,
+      // after which no boundary can be proved and every round refunds through its own timeout.
+      this.#log.error('the oracle feed has moved to a new aggregator phase; this market is bound to the old one for life', {
+        oracle,
+        oraclePhase,
+        feedLatestPhase: phaseOf(latest.roundId),
+        feedLatestRoundId: latest.roundId,
+        boundaryTs,
+        hint: 'settlement can only continue while the bound phase\'s last print is still within oracleMaxAge of the boundary; after that every round refunds in full and the market must be redeployed',
+      });
+
+      const readStrict = this.#strictPrintReader(oracle, chainNowSec, oraclePhase);
+      const exists = async (id: bigint): Promise<boolean> => (await readStrict(id)) !== null;
+      const last = await findLastRoundOfPhase(oraclePhase, exists);
+      if (last === null) return { roundId: 0n, found: false, searchFailed: false };
+      const [rid, ok] = await this.#findRoundIdAt(boundaryTs, last, steps);
+      if (ok) return { roundId: rid, found: true, searchFailed: false };
       return { roundId: 0n, found: false, searchFailed: false };
     } catch (error) {
-      this.#log.warn('previous-phase boundary search failed', { boundaryTs, error: errorText(error) });
+      this.#log.warn('bound-phase boundary search failed', { boundaryTs, error: errorText(error) });
       return { roundId: 0n, found: false, searchFailed: true };
     }
   }
@@ -1907,31 +2161,33 @@ export class MarketWorker {
   /** Reproduce `_priceAt` locally so a silent void is predicted rather than discovered. */
   async #verifyBoundary(roundId: bigint, boundaryTs: number, oracleMaxAge: number, chainNowSec: number) {
     const profile = this.#profile;
-    const oracle = profile?.oracle;
-    if (!oracle) return verifyBoundaryRound(this.#emptyProof(boundaryTs, oracleMaxAge, chainNowSec));
+    if (!profile) return verifyBoundaryRound(this.#emptyProof(boundaryTs, oracleMaxAge, chainNowSec));
+    const { oracle, oraclePhase } = profile;
 
-    // `_priceAt` proves finality relative to `_tryLatestRoundId`, which refuses a latest round with a
-    // non-positive answer or `updatedAt == 0` and gives up on the whole boundary when it does. Taking
-    // the bare round id instead would let the keeper certify a boundary the chain rejects outright.
-    const latestRoundId = usableLatestRoundId(await this.#latestPrint(oracle));
-    // Strict, exactly like `_tryRound`: a proxy that answers this id with a *different* round's data
-    // has not given the chain anything it will accept, so neither may this mirror call it verified.
-    // The raw read let a positive answer for another id be logged as a verified boundary while
-    // `executeRound` rejected the very id the keeper was about to supply.
-    const candidate = await this.#strictPrintReader(oracle, chainNowSec)(roundId);
-    // The successor is whatever the CONTRACT would call the successor: `roundId + 1`, and failing
-    // that the first round of a following phase. Reading only `roundId + 1` makes this mirror
-    // disagree with the chain on exactly the aggregator upgrade the phase walk exists for.
-    const next =
-      candidate && latestRoundId !== null && roundId !== latestRoundId
-        ? await resolveSuccessor(roundId, latestRoundId, this.#strictPrintReader(oracle, chainNowSec))
-        : null;
-    const proof: BoundaryProof = { targetTs: boundaryTs, oracleMaxAge, candidate, latestRoundId, next, chainNowSec };
+    // Strict, exactly like `_tryRound`: the phase, and a proxy that answers this id with a
+    // *different* round's data. Neither has given the chain anything it will accept, so neither may
+    // this mirror call it verified. The raw read let a positive answer for another id be logged as
+    // a verified boundary while `executeRound` rejected the very id the keeper was about to supply.
+    const readStrict = this.#strictPrintReader(oracle, chainNowSec, oraclePhase);
+    const candidate = await readStrict(roundId);
+    // Exactly one successor id, exactly as the contract probes it: `roundId + 1`, and only while it
+    // stays in the bound phase. There is no phase walk any more — the market refuses other phases —
+    // so a successor that does not exist here is what PROVES the candidate is the last print.
+    const nextId = successorId(roundId, oraclePhase);
+    const next = candidate !== null && nextId !== null ? await readStrict(nextId) : null;
+    const proof: BoundaryProof = { targetTs: boundaryTs, oracleMaxAge, oraclePhase, candidate, next, chainNowSec };
     return verifyBoundaryRound(proof);
   }
 
   #emptyProof(boundaryTs: number, oracleMaxAge: number, chainNowSec: number): BoundaryProof {
-    return { targetTs: boundaryTs, oracleMaxAge, candidate: null, latestRoundId: null, next: null, chainNowSec };
+    return {
+      targetTs: boundaryTs,
+      oracleMaxAge,
+      oraclePhase: this.#profile?.oraclePhase ?? 0n,
+      candidate: null,
+      next: null,
+      chainNowSec,
+    };
   }
 
   #decodeOutcomes(receipt: TransactionReceipt): {

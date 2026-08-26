@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   applyGasPremium,
+  didBroadcast,
   ExhaustedTxError,
   isTimeout,
   padGas,
@@ -302,3 +303,106 @@ describe('sendWithRetry nonce recovery', () => {
     ).rejects.toBeInstanceOf(ExhaustedTxError);
   });
 });
+
+describe('a failure says whether it may have reached the wire', () => {
+  // The keeper decides whether a failed relay may be retried from this, and it cannot work it out
+  // any other way. Getting the question wrong is expensive in both directions: too strict and one
+  // RPC blip permanently gives the boundary up for every market on that feed; too loose and two
+  // transactions are sent for a boundary only one print can serve.
+  //
+  // So the question asked is the safe one — did we ever *call* `send`? — not the precise one, which
+  // cannot be answered: a node can accept `eth_sendRawTransaction` and lose the response on the way
+  // back, and from out here that is indistinguishable from a send that never happened.
+
+  it('is provably safe only for a failure before the first send', async () => {
+    const sent: string[] = []
+    await expect(
+      sendWithRetry(policy, deps({
+        getBaseGasPrice: async () => { throw new Error('RPC reset') },
+        send: async () => { sent.push('sent'); return HASH_A },
+      })),
+    ).rejects.toSatisfy((e: unknown) => didBroadcast(e) === false)
+    expect(sent, 'send must not have been reached').toEqual([])
+
+    await expect(
+      sendWithRetry(policy, deps({
+        getNonce: async () => { throw new Error('RPC reset') },
+        send: async () => { sent.push('sent'); return HASH_A },
+      })),
+    ).rejects.toSatisfy((e: unknown) => didBroadcast(e) === false)
+    expect(sent).toEqual([])
+  })
+
+  // The case that makes the hash the wrong thing to key on. `send` rejects without ever returning a
+  // hash, but the node may already hold the transaction — so this must read as "possibly in flight".
+  it('treats a send that rejected without a hash as possibly in flight', async () => {
+    await expect(
+      sendWithRetry(policy, deps({
+        send: async () => { throw new Error('socket hang up after the node accepted it') },
+      })),
+    ).rejects.toSatisfy((e: unknown) => didBroadcast(e) === true)
+  })
+
+  // The deeper version of the same hazard, and the one that hides from the caller entirely.
+  //
+  // Nonce 7 is accepted by the node and the response is lost, so `send` rejects with no hash. The
+  // retry reuses nonce 7 and the node answers "nonce too low" — because our own transaction took
+  // it. Re-reading the nonce and sending again puts a SECOND transaction on the wire for a boundary
+  // only one print can serve, and because `sendWithRetry` then returns successfully, the caller's
+  // `didBroadcast` guard is never consulted. Codex reproduced it as the nonce sequence [7, 7, 8].
+  it('never re-nonces past a send of ours that may already have landed', async () => {
+    const nonces: number[] = []
+    let current = 7
+    await expect(
+      sendWithRetry(policy, deps({
+        getNonce: async () => current,
+        send: async (ctx) => {
+          nonces.push(ctx.nonce)
+          if (nonces.length === 1) throw new Error('socket hang up')   // accepted, response lost
+          current = 8                                                   // the node has moved on
+          throw new Error('nonce too low')
+        },
+      })),
+    ).rejects.toSatisfy((e: unknown) => didBroadcast(e) === true)
+    // Two attempts at nonce 7, and crucially never a third at nonce 8.
+    expect(nonces).toEqual([7, 7])
+  })
+
+  // …while a nonce genuinely taken by somebody else must still be worked around, or every remaining
+  // attempt is a guaranteed failure.
+  it('still re-nonces when the slot was taken by a transaction that is not ours', async () => {
+    const nonces: number[] = []
+    let current = 7
+    const result = await sendWithRetry(policy, deps({
+      getNonce: async () => current,
+      send: async (ctx) => {
+        nonces.push(ctx.nonce)
+        // First attempt fails on the receipt wait, not the send, so nonce 7 is not ambiguous.
+        if (nonces.length === 1) { current = 8; return HASH_A }
+        return HASH_B
+      },
+      waitForReceipt: async (hash) => {
+        if (hash === HASH_A) throw new Error('nonce too low')
+        return receipt(hash)
+      },
+      getReceiptIfMined: async () => null,
+    }))
+    expect(nonces).toEqual([7, 8])
+    expect(result.receipt.transactionHash).toBe(HASH_B)
+  })
+
+  it('treats a reverted transaction as broadcast, because it plainly was', async () => {
+    await expect(
+      sendWithRetry(policy, deps({ waitForReceipt: async (h) => receipt(h, 'reverted') })),
+    ).rejects.toSatisfy((e: unknown) => didBroadcast(e) === true)
+  })
+
+  // An error from anywhere else carries no record, and the default has to be the cautious one.
+  it('defaults to caution for an error that carries no record at all', () => {
+    expect(didBroadcast(new Error('something else entirely'))).toBe(true)
+    expect(didBroadcast(undefined)).toBe(true)
+    expect(didBroadcast(new TerminalTxError('reverted', { hash: HASH_A }))).toBe(true)
+    // …and only an explicit `attempted: false` opens the door to a retry
+    expect(didBroadcast(new ExhaustedTxError('prep failed', 0, { attempted: false }))).toBe(false)
+  })
+})

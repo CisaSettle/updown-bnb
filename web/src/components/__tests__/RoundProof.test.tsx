@@ -27,7 +27,6 @@ function report(over: Partial<Parameters<typeof verifyBoundary>[0]> = {}) {
     nowSeconds: NOW,
     priceDecimals: 8,
     candidate,
-    latestRoundId: 12n,
     prints: new Map([
       [candidate.roundId.toString(), candidate],
       [successor.roundId.toString(), successor],
@@ -122,7 +121,7 @@ describe('RoundProofView — an unrunnable check is never dressed up as a pass',
     const html = render(
       state({
         outcome: 'incomplete',
-        reports: [report({ latestRoundId: undefined })],
+        reports: [report({ successorChecked: false, prints: new Map([['10', candidate]]) })],
       }),
     )
     expect(html).toContain('Partly checked')

@@ -235,7 +235,7 @@ export function LiveRoundCard({
         </div>
       </div>
 
-      <div className="grid gap-6 p-5 lg:grid-cols-2 lg:gap-8">
+      <div className="grid grid-cols-1 gap-6 p-5 lg:grid-cols-2 lg:gap-8">
         {/* ── Betting round (currentEpoch) ─────────────────────────────── */}
         <div className="space-y-5">
           <Countdown

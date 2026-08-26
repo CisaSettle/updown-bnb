@@ -4,6 +4,10 @@ Operational reference for deploying, verifying, running and recovering the UpDow
 Chain. Product background is in [`PRD.html`](PRD.html) (bilingual) and [`PRD.md`](PRD.md); repo
 orientation is in [`../README.md`](../README.md).
 
+**中文读者：** 本手册的双语版本在 [`RUNBOOK.html`](RUNBOOK.html)（默认中文，可切换英文），项目说明在
+[`README.html`](README.html)。两者都由这里的 Markdown 生成——Markdown 是权威版本，任一语言落后于另一语言时
+构建会直接失败。
+
 **The one thing to internalise before touching production:** a round that cannot settle honestly is
 *voided into full refunds*, never force-settled. Almost every incident below therefore ends in
 "users get their money back", not "users lost money". Time pressure during an incident is about
@@ -90,6 +94,7 @@ Mainnet feeds hard-coded in `Deploy.s.sol`:
 | | Address |
 |---|---|
 | BTC/USD | `0x264990fbd0A4796A3E3d8E37C4d5F87a3aCa5Ebf` |
+| ETH/USD | `0x9ef1B8c0E4F7dc8bF5719Ea496883DC6401d5b2e` |
 | BNB/USD | `0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE` |
 | USDT (18 dec) | `0x55d398326f99059fF775485246999027B3197955` |
 
@@ -111,8 +116,8 @@ FORK_RPC_URL=<archive-capable BSC RPC> forge test --match-contract ChainlinkFork
 ### 1.3 Deploy the stack
 
 `Deploy.s.sol` deploys, registers and writes the deployment artifact in one broadcast. On testnet it
-additionally deploys two `RelayAggregator` feeds and a faucet `TestUSDT`; on mainnet it deploys
-neither and wires the real Chainlink feeds and BSC-USDT instead. Any chain id other than 56 or 97 is
+additionally deploys three `RelayAggregator` feeds (BTC, ETH, BNB) and a faucet `TestUSDT`; on
+mainnet it deploys neither and wires the real Chainlink feeds and BSC-USDT instead. Any chain id other than 56 or 97 is
 rejected up front (`require(..., "unsupported chain")`).
 
 ```bash
@@ -130,17 +135,25 @@ forge script script/Deploy.s.sol \
   --broadcast --verify --slow -vvv
 ```
 
-It deploys, in order: (testnet only) relay feeds + TestUSDT → `UpDownRegistry` → `BTC/USD 5m`
-(ERC20) → `BTC/USD 1h` (ERC20) → `BNB/USD 5m` (native) → registers all three → transfers registry
-ownership to `OWNER` (two-step; `OWNER` must accept).
+It deploys, in order: (testnet only) relay feeds + TestUSDT → `UpDownRegistry` → six ERC20 markets
+from the `MarketSpec[]` table in the script — BTC, ETH and BNB over 5-minute and 1-hour rounds —
+registering each as it goes, then transfers registry ownership to `OWNER` (two-step; `OWNER` must
+accept).
+
+Every market settles in USDT. `UpDownMarketNative` is deliberately not deployed: a native-BNB market
+is a different thing to hold and to reason about, and one settlement asset means a trader compares
+six books in one unit with a single approval. The contract stays in the tree, built and tested,
+because that is a deployment choice rather than a change in what the protocol supports.
 
 Output artifact — **`contracts/deployments/<chainId>.json`**:
 
 ```json
 {
   "chainId": 97, "registry": "0x…",
-  "btcUsd5m": "0x…", "btcUsd1h": "0x…", "bnbUsd5m": "0x…",
-  "btcFeed": "0x…", "bnbFeed": "0x…", "usdt": "0x…",
+  "btcUsd5m": "0x…", "btcUsd1h": "0x…",
+  "ethUsd5m": "0x…", "ethUsd1h": "0x…",
+  "bnbUsd5m": "0x…", "bnbUsd1h": "0x…",
+  "btcFeed": "0x…", "ethFeed": "0x…", "bnbFeed": "0x…", "usdt": "0x…",
   "owner": "0x…", "operator": "0x…",
   "relayFeeds": true, "feeBps": 300
 }
@@ -152,9 +165,12 @@ Round parameters baked into the deploy (`Deploy.s.sol` constants):
 
 | Market | `interval` | `bufferSeconds` | `oracleMaxAge` | `feeBps` | min / max / side cap |
 |---|---|---|---|---|---|
-| BTC/USD 5m (USDT) | 300 | 240 | 150 | 300 | 1 / 5,000 / 100,000 USDT |
-| BTC/USD 1h (USDT) | 3600 | 1800 | 900 | 300 | 1 / 5,000 / 100,000 USDT |
-| BNB/USD 5m (BNB) | 300 | 240 | 150 | 300 | 0.005 / 10 / 500 BNB |
+| BTC/USD 5m | 300 | 240 | 150 | 300 | 1 / 5,000 / 100,000 USDT |
+| BTC/USD 1h | 3600 | 1800 | 900 | 300 | 1 / 5,000 / 100,000 USDT |
+| ETH/USD 5m | 300 | 240 | 150 | 300 | 1 / 5,000 / 100,000 USDT |
+| ETH/USD 1h | 3600 | 1800 | 900 | 300 | 1 / 5,000 / 100,000 USDT |
+| BNB/USD 5m | 300 | 240 | 150 | 300 | 1 / 5,000 / 100,000 USDT |
+| BNB/USD 1h | 3600 | 1800 | 900 | 300 | 1 / 5,000 / 100,000 USDT |
 
 ### 1.4a Verify sources — the scripted way
 
@@ -285,6 +301,54 @@ With no env set, the build reads `contracts/deployments/<VITE_CHAIN_ID or 97>.js
 to placeholder addresses. `VITE_RPC_URL` should point at a paid/private RPC in production — public
 BNB Chain endpoints rate-limit aggressively under real traffic.
 
+### 1.9 Where the site is served, and how to move it
+
+The app is built by `.github/workflows/pages.yml` and served by GitHub Pages at
+**<https://updown.bluffking.ai>**. These bindings must all agree:
+
+| Piece | Where | Why |
+| --- | --- | --- |
+| Custom domain `updown.bluffking.ai` | repository **Settings → Pages** | the authoritative host binding for an Actions-published Pages site. `deploy-pages` does not infer or update this setting from a file inside the artifact |
+| `updown` CNAME → `cisasettle.github.io` | Cloudflare zone `bluffking.ai`, **DNS-only (grey cloud)** | points the hostname at GitHub and leaves the canonical CNAME visible to GitHub's DNS check and certificate provisioning. A proxied record can obscure that check and adds a second TLS/proxy configuration, so keep it DNS-only unless there is a deliberate reason to add Cloudflare later |
+| `_github-pages-challenge-CisaSettle.bluffking.ai` TXT | Cloudflare zone, value issued when the `CisaSettle` account verifies the apex `bluffking.ai` under **Settings → Pages** | proves control of the apex and its subdomains to GitHub, and prevents another GitHub account from claiming one if a repository or Pages binding is removed while DNS still points at GitHub |
+| `web/public/CNAME` | copied to `dist/` by Vite, so it rides inside the Pages artifact | portable host metadata and compatibility with branch-based Pages/other static hosts. It is harmless in an Actions artifact, but it is **not** the repository custom-domain setting |
+
+Before the first deploy, verify the domain under the `CisaSettle` GitHub account, set the repository
+custom domain, and wait for GitHub's DNS check and certificate provisioning to finish. Then enable
+**Enforce HTTPS** in Settings → Pages. Do not treat a successful workflow run as proof that any of
+those control-plane steps happened: the artifact can deploy successfully while the custom hostname
+still serves a Pages error.
+
+After deploy, check both entry points and the certificate:
+
+```bash
+curl -I https://updown.bluffking.ai/
+curl -I https://cisasettle.github.io/updown-bnb/
+```
+
+The first must return the app over a valid certificate. Once the repository custom domain is active,
+GitHub should redirect the old project URL to the custom hostname; keep the second check in the
+cutover so bookmarks are not silently abandoned.
+
+`VITE_BASE_PATH` is `/` because the site is at a domain root, not a repository subpath. If you ever
+move it back under `<user>.github.io/<repo>/`, that has to change with it or every asset 404s.
+
+**Moving off GitHub Pages** does not require a public URL change — that is the reason for owning the
+hostname. Point the `updown` record at the new host and set the same domain on that host; then remove
+the GitHub Pages custom-domain binding only after the new host is live. The public URL stays stable,
+but host-specific control-plane settings and TLS still have to move with it. Do not skip re-checking
+that the deployed bundle names the right contract addresses. The asset filename carries a content
+hash, so read it out of the page rather than guessing at it:
+
+```bash
+BASE=https://updown.bluffking.ai
+ASSET=$(curl -sL "$BASE/" | grep -oE '/assets/[A-Za-z0-9_.-]+\.js' | head -1)
+curl -sL "$BASE$ASSET" | grep -oiE '0x[0-9a-f]{40}' | sort -u
+```
+
+Every address that prints should appear in `contracts/deployments/<chainId>.json`. An empty result
+means the asset path was not found, not that the bundle is clean — check `$ASSET` is non-empty.
+
 ---
 
 ## 2 · Keeper operations
@@ -364,7 +428,9 @@ curl -fsS localhost:9464/metrics            # Prometheus text format
 | Market state | Healthy | Meaning | Action |
 |---|---|---|---|
 | `ok` | yes | Executed within `HEALTH_INTERVALS × interval` | none |
-| `inactive` | yes | Market is paused or `genesisStart()` has not been called — nothing for the keeper to do | none, unless you expected it to be live |
+| `paused` | yes | Market is paused. Either nothing is owed, or a round locked *before* the pause is still inside its settlement window and the keeper is still calling `executeRound` for it — pause stops new risk, never risk already taken | none, unless you did not expect it to be paused |
+| `inactive` | yes | `genesisStart()` has not been called — nothing for the keeper to do. **Paused is a separate state**, not this one | none, unless you expected it to be live |
+| `degraded` | **no** | The keeper is calling on time but what it settles is worthless. Three causes: a keeper-side fault (a relay feed this key may not write); too many fault-voids in the recent settlement window; or **a paused market whose already-locked round ran out its settlement window**, which has just turned a decided outcome into refunds | **Page.** For the third cause, unpausing is *not* the fix — settling is, and it works while paused. See §3.4 and residual risk 2 in §4 |
 | `stale` | **no** | No successful `executeRound` inside the budget | **Page.** Rounds are heading for void/refund — see §3.1 |
 | `unknown` | **no** | The keeper has never successfully read this market's state | **Page.** Almost always the RPC or a wrong address: re-run the §1.4 sanity-check calls against the addresses in `DEPLOYMENTS_PATH` |
 
@@ -404,13 +470,16 @@ Users lose nothing; they lose the round.
    via the normal claim flow.
 
 **Do not** try to "catch up" by pausing, or by changing `bufferSeconds` — a widened buffer cannot
-un-expire a round that has already expired (each round uses its own snapshot), and pausing only adds
-an extra void.
+un-expire a round that has already expired (each round uses its own snapshot), and pausing does not
+help: `executeRound` is not pausable, so a pause neither stops the crank nor rescues a round that
+has already run out of time. All it adds is a refund for the round that had not locked yet.
 
 ### 3.2 Oracle stale or dead
 
-**Symptom.** `RoundVoided` with reason `1` (no usable print at the boundary) repeating; rounds
-voiding despite a healthy keeper.
+**Symptom.** `executeRound` reverting `InvalidBoundaryProof` however the boundary round id is
+resolved, followed by `RoundVoided` with reason `5` (settlement window elapsed) once each round runs
+out of time; rounds voiding despite a healthy keeper. Note the shape: an unusable print does **not**
+void a round directly, it makes the round unprovable, and the void arrives later on the timer.
 
 **Diagnose.**
 
@@ -424,16 +493,43 @@ A print is usable only if it is at or before the boundary, no older than the rou
 which is the correct behaviour: `oracleMaxAge < interval` is enforced precisely so that a frozen
 feed voids the round instead of manufacturing a fake tie.
 
+Also check whether the feed has changed **aggregator phase**. A market is bound for life to the
+phase it was deployed against; a print from any other phase is not a valid proof, so a phase change
+looks exactly like a dead feed:
+
+```bash
+cast call <MARKET> 'oraclePhase()(uint256)' --rpc-url "$RPC"
+# the feed's current phase — proxy round ids are phaseId << 64 | aggregatorRoundId
+cast call <FEED> 'latestRoundData()(uint80,int256,uint256,uint256,uint80)' --rpc-url "$RPC" \
+  | head -1 | awk '{print $1}' | xargs -I{} python3 -c "print(int('{}') >> 64)"
+```
+
+If `oraclePhase()` *reverts* rather than returning a number, you are looking at a market deployed
+before the phase pin — nothing this repository deploys today, but worth recognising. Such a market is
+not bound to a phase at all, so a phase change does not look like a dead feed on it; it silently
+changes which print qualifies, which is worse. Replace it rather than operate it.
+
 **Response.**
 
-- *Transient staleness* (feed resumes): do nothing. The voided rounds refund; the next round is fine.
-- *Feed permanently dead or migrated*: `pause()` → `setOracle(newFeed)` (only callable while paused)
-  → `unpause()` → `genesisStart()`. Prefer widening `oracleMaxAge` **only** if the feed's real
-  cadence is genuinely slower than assumed, and remember the contract enforces
-  `oracleMaxAge < interval`; a 5-minute market cannot tolerate a feed slower than ~5 minutes, so the
-  honest fix is a longer `interval`, not a looser age.
-- If the round cadence no longer matches the feed cadence, retire the market
-  (`registry.setEnabled(id, false)` hides it from the UI) rather than running it degraded.
+- *Transient staleness* (feed resumes): do nothing. The rounds that ran out of time refund; the next
+  round is fine.
+- *Feed permanently dead, or moved to a new aggregator phase*: **the market cannot be repointed.**
+  `oracle` is immutable and `setOracle` does not exist — deliberately, because a settable price
+  source is a path from the admin key to the settlement price of a round that has already locked.
+  `oracleMaxAge` is immutable too, so widening it is not available either. Retire the market instead:
+
+  1. `pause()` — stops new bets and stops further rounds opening. Rounds already locked still settle
+     if a valid proof exists; if none does, they time out like everything else.
+  2. Let every open round run out its own window. `refundable(epoch, user)` flips to true with no
+     admin action, and users claim through the normal flow. `claim` is not pausable, so this needs no
+     further admin involvement — ever, including after the market is delisted.
+  3. `registry.setEnabled(id, false)` to take it out of the UI list.
+  4. Deploy a fresh market against the new feed and `register` it. On mainnet the feed address is a
+     Chainlink *proxy*, whose address is stable by design, so this is the rare case, not the routine one.
+
+- If the round cadence no longer matches the feed cadence, the same applies: a 5-minute market cannot
+  tolerate a feed slower than ~5 minutes and there is no parameter left to loosen, so the honest fix
+  is a new market with a longer `interval`, not a degraded one.
 
 ### 3.3 Wrong price relayed on testnet
 
@@ -463,31 +559,62 @@ cast send <MARKET> 'unpause()' --private-key $OWNER_KEY --rpc-url "$RPC"
 
 Pause is per market. Enumerate them with `registry.allMarkets()`.
 
+A pause stops the market taking **new** risk. It does not cancel risk already taken.
+
 While paused:
 
 - `betUp` / `betDown` revert — no new money enters;
-- `executeRound` reverts, so the live round runs out its buffer and becomes **refundable in full**;
-- `pause()` also clears `genesisStarted`, so the grid stops advancing;
+- **`executeRound` still runs**, and is not `whenNotPaused`. It settles the round that is already
+  locked, at its true price, then returns without locking `currentEpoch` or opening the next one. So
+  the market stops advancing, but an outcome that is already fixed by a print the whole world can
+  read still lands;
+- a round that had **not** locked when the pause arrived never received a strike. It runs out its
+  own window and becomes **refundable in full, zero fee** — nobody could have known its outcome;
+- `genesisStarted` is **not** cleared. The grid anchor is left alone deliberately (see §3.5);
 - **`claim()` and `claimTo()` keep working.** Claiming is deliberately not pausable — an admin
-  cannot freeze user withdrawals.
+  cannot freeze user withdrawals, and a winner can collect while the market is paused.
 
-Pause when: an oracle is compromised or being migrated, a parameter was set wrongly, or you need to
-stop new exposure while you investigate. Pausing is safe: its worst outcome is refunds.
+That asymmetry is the point. If a pause cancelled a locked round, an owner who was also a bettor
+could watch the settlement print land, see they had lost, and pause: the round would time out and
+hand every stake back, theirs included, worth up to `maxSideAmount`. A multisig does not fix that,
+because a multisig is not a delay. This does.
+
+Pause when: a parameter was set wrongly, the feed is misbehaving, or you need to stop new exposure
+while you investigate. What a pause is **not** is an undo button — it cannot reach a round whose
+outcome is already visible, and it is not the response to a bad settlement that has already
+happened.
 
 ### 3.5 Restarting after a pause
 
 ```bash
-cast send <MARKET> 'unpause()'      --private-key $OWNER_KEY --rpc-url "$RPC"
-cast send <MARKET> 'genesisStart()' --private-key $OWNER_KEY --rpc-url "$RPC"
+cast send <MARKET> 'unpause()' --private-key $OWNER_KEY --rpc-url "$RPC"
 ```
 
-`genesisStart()` is required after every pause — `pause()` cleared the flag. It re-anchors the grid
-to the next interval boundary from now and continues the epoch counter from `currentEpoch + 1`, so
-**old epochs are never overwritten** and any refunds still owed from before the pause remain
-claimable forever.
+That is the whole procedure. **Do not call `genesisStart()`** — it can only ever be called once per
+market and now reverts `AlreadyStarted`, at the exact moment you least want a failing transaction.
+`pause()` no longer clears `genesisStarted`, so there is nothing to restart.
 
-Order matters: `genesisStart()` requires the contract to be unpaused, and reverts with
-`AlreadyStarted` if the market is already running.
+The grid anchor was never touched, so recovery is automatic: the next `executeRound` fast-forwards
+`currentEpoch` to whichever epoch the wall clock is actually in, in one transaction, and opens it for
+betting. Anyone can send that call; the keeper does it on its own next tick.
+
+```bash
+# optional — turn the crank yourself instead of waiting for the keeper
+TS=$(cast call <MARKET> 'boundaryTimestamp()(uint256)' --rpc-url "$RPC" | awk '{print $1}')
+cast call <MARKET> 'findRoundIdAt(uint256,uint80,uint256)(uint80,bool)' "$TS" 0 64 --rpc-url "$RPC"
+cast send <MARKET> 'executeRound(uint80)' <ROUND_ID> --private-key "$KEY" --rpc-url "$RPC"
+```
+
+> **`found = false` here is not a blocker, unlike in §3.1.** After a pause longer than the bettable
+> round's own `lockTs + bufferSeconds`, `boundaryTimestamp()` still points at that stale boundary, and
+> walking 64 ids back from the feed's latest print will not reach it. Send the call anyway with any
+> round id — `0` is fine. `_lockRound` checks the window *before* it checks the proof, so a round
+> that can no longer lock is voided into refunds without a proof being demanded, and `executeRound`
+> cannot revert `InvalidBoundaryProof`. A valid id is required only while the round is still inside
+> its window, which is the short-pause case — there, `findRoundIdAt` finds one.
+
+Old epochs are never overwritten, and any refunds still owed from before the pause stay claimable
+forever.
 
 ### 3.6 "A user says they cannot claim"
 
@@ -502,6 +629,12 @@ cast call <MARKET> 'pendingPayout(uint256,address)(uint256)' <EPOCH> <USER> --rp
 `claim(epochs[])` reverts if **any** epoch in the array is not collectable, so a batch containing one
 unresolved epoch fails entirely. Pass only epochs where `claimable || refundable` is true. A contract
 account that cannot receive the settlement asset should use `claimTo(epochs[], to)`.
+
+If the user simply has no gas, `claimFor(user, epochs[])` lets anyone — you included — pay for the
+call and have the contract pay *them*, at their own address. It requires the user to have called
+`setAutoClaimOptIn(true)` themselves first; the contract will not push money at an account that has
+not asked for it, because there is no opcode that can tell a wallet apart from a contract that
+cannot spend from its own address. Check with `cast call <MARKET> 'autoClaimOptIn(address)(bool)' <USER>`.
 
 ### 3.7 Treasury
 
@@ -521,11 +654,10 @@ reach user principal or unclaimed payouts, by construction.
 
 | Power | Bound |
 |---|---|
-| `genesisStart()` | Opens the first round; required again after a pause. Cannot rewind or overwrite existing epochs |
+| `genesisStart()` | Opens the first round, **once, for the life of the market**. A second call reverts `AlreadyStarted` — including after a pause. Cannot rewind or overwrite existing epochs |
 | `setParams(feeBps, bufferSeconds)` | `feeBps ≤ 1000` (10%, a hard-coded constant) and `0 < bufferSeconds < interval`. **Applies only to rounds started after the call** — every live round keeps its own snapshot. `oracleMaxAge` is **immutable** and deliberately absent: two rounds share a boundary, so if they disagreed about what counts as a valid oracle proof one would demand a proof the other rejects and the market would stall |
 | `setLimits(min, max, side)` | Bet sizing only; cannot affect an existing position |
-| `setOracle(feed)` | **Only while paused.** The sharpest edge the admin has — see below |
-| `pause()` / `unpause()` | Halts betting and round progression. Cannot halt claiming |
+| `pause()` / `unpause()` | Halts betting and stops further rounds locking or opening. Cannot halt claiming, and cannot stop a round that has **already locked** from settling — `executeRound` is not pausable |
 | `claimTreasury(to)` | Only fees already accrued |
 | `recoverToken(token, to, amount)` | Reverts for the settlement asset (`CannotRecoverAsset`), so user funds can never leave this way |
 | `transferOwnership` | Two-step (`Ownable2Step`); the new owner must call `acceptOwnership()` |
@@ -538,17 +670,27 @@ reach user principal or unclaimed payouts, by construction.
 - **Block a withdrawal.** `claim` / `claimTo` are not pausable and have no owner check.
 - **Choose, supply or override a settlement price.** The price comes from the feed, is defined by
   the boundary timestamp, and is proven on-chain.
+- **Replace the price feed.** `oracle` is `immutable` and there is no `setOracle`. This is the
+  single most load-bearing "cannot" in the list: a settable price source is a path from the admin key
+  to the settlement price of a round that has *already locked* — pause, point the market at a feed
+  you control, settle at a price of your choosing, point it back, unpause, one atomic transaction
+  from a multisig. A locked position has no exit, so no timelock mitigates it. The market is also
+  pinned to one aggregator phase (`oraclePhase`, immutable), so a proxy confirming a replacement
+  aggregator cannot retroactively change what "the last print at or before the boundary" means.
+- **Cancel a round that has already locked.** `executeRound` is not `whenNotPaused`; a locked round
+  settles through a pause at its true price and the winner can claim while the market is paused.
+- **Widen `oracleMaxAge`.** It is `immutable`, so the staleness budget a round is judged against
+  cannot be tuned after the fact.
 - **Settle, un-void or un-expire a round.** A widened `bufferSeconds` or `oracleMaxAge` cannot
   revive a round that already expired — each round is judged against its own snapshot.
 - **Change the fee on a round that is already open**, or raise the fee above the 10% constant.
 - **Withdraw the rounding residue.** Per-winner floor division leaves at most 1 wei per winner in the
   contract; it is unreachable by everyone, including the owner.
 - **Grant anyone a settlement privilege.** There is no operator role to grant.
-- **Renounce ownership.** `renounceOwnership()` reverts on both market types and the registry.
-  Inherited from OpenZeppelin and live in the ABI, one call would have stranded `treasuryAmount`
-  forever, made `pause()` and `setOracle()` permanently unreachable, and — because `pause()` clears
-  `genesisStarted` while `genesisStart()` is `onlyOwner` — could have left a paused market unable to
-  ever trade again.
+- **Renounce ownership.** `renounceOwnership()` reverts on both market types, the registry and the
+  testnet relay feed. Inherited from OpenZeppelin and live in the ABI, one call would have stranded
+  `treasuryAmount` forever and made `pause()` permanently unreachable — and on the relay feed it
+  would have made a compromised `updater` impossible to rotate.
 
 > **`pause()` used to be worth money to an owner who is also a bettor. It no longer is.**
 > A pause now stops the market taking *new* risk without cancelling risk already taken: betting
@@ -559,32 +701,48 @@ reach user principal or unclaimed payouts, by construction.
 > paused. Pinned by `test_pauseCannotCancelARoundWhoseOutcomeIsAlreadyVisible`.
 >
 > The residual, stated plainly: a round that had **not** locked when the pause landed refunds. That
-> is correct — it never had a strike, so nobody could have known its outcome. And one already-locked
-> round can still settle on a compromised feed, because pausing no longer stops settlement; that is
-> a bounded, one-round exposure traded against a standing per-round option, which is the right way
-> round.
+> is correct — it never had a strike, so nobody could have known its outcome, so the refund cannot be
+> selective. Pinned by `test_pauseStopsNewRiskWithoutCancellingOld`.
 >
-> The historical note, for anyone reading an older commit:
-> The mechanism is disclosed in the PRD as a void reason, but the economics are worth stating
-> plainly: once the settlement print for a live round is visible on the feed, the owner can see who
-> won and, instead of letting it settle, call `pause()`. The round then runs out its window and
-> **every stake comes back, including the losing side's, with no fee**. It is a one-transaction
-> version of a censorship attack that would otherwise need hundreds of consecutive blocks, and it is
-> worth up to `maxSideAmount` per round — 100,000 USDT on the USDT markets, 500 BNB on the native
-> one. It cannot take user funds; it can only cancel a round the owner was losing. This is the main
-> reason the mainnet owner must be a multisig behind a Timelock rather than one key: the delay makes
-> the option worthless, because the round has long since settled or expired by the time a pause
-> could land.
+> **Decoupling settlement from the pause cost something, and that cost has since been paid off.**
+> Once a locked round settles through a pause, whatever feed the market reads at that moment decides
+> it — so while `setOracle` existed, `pause` → `setOracle(hostile feed)` → `executeRound(fabricated
+> id)` → `setOracle(back)` → `unpause` wrote the settlement price of an already-locked round to
+> order, in one atomic multisig transaction, and took the whole opposing pool. That is strictly worse
+> than the option it replaced: an unbounded theft in place of a bounded cancel. It was found by an
+> independent review, reproduced at 244,000 USDT of profit on a 50,000 stake, and it is why `oracle`
+> is now `immutable` and `setOracle` is gone (see "What the admin cannot do" above).
 
 ### The residual risks, stated plainly
 
-1. **`setOracle` on a paused market.** A malicious or compromised owner could point a market at a
-   hostile feed and then unpause. Mitigations: the pause itself voids the live rounds into refunds,
-   so no in-flight position is stolen; users must place *new* bets to be exposed; and a Timelock
-   gives the public advance notice of the change. This is the main reason for the Timelock.
-2. **Testnet relay feeds.** `RelayAggregator`'s owner and `updater` can write any price. Testnet
+1. **A pause refunds the round that had not locked yet.** Both sides get their stake back, so
+   nobody is robbed, but an owner who is also a bettor can cancel a bet no strike has been committed
+   to. It is bounded and symmetric, and it is the price of the guarantee in the box above.
+2. **A locked round still has to be settled by somebody, and a long pause can outlast its window.**
+   The pause cannot cancel it — but `executeRound` does not run itself. If nobody supplies a valid
+   proof before that round's own `closeTs + bufferSeconds`, it times out into refunds like any other
+   missed settlement, and a decided outcome becomes a refund after all. This is a liveness failure,
+   not an owner option: the call is permissionless, the winning side has every reason to make it, and
+   the keeper keeps calling straight through a pause. Watch for it rather than assume it away — the
+   keeper reports exactly this case as `degraded` on `/healthz` (§2), which is unhealthy and pages.
+   **Do not treat unpausing as the fix; settling is the fix**, and it works while still paused.
+3. **The feed itself.** `oracle` is immutable, so the admin cannot swap it — but the market is only
+   as good as the feed it was deployed against. A feed reporting a *wrong* price settles a wrong
+   outcome, and nothing on chain can distinguish that from a right one. The mitigations are
+   deploying against Chainlink's aggregated mainnet proxies and capping `maxSideAmount`.
+4. **A phase change retires the market.** Bound to one aggregator phase for life, a market whose
+   feed genuinely moves on can no longer prove any price: every round times out into a full refund
+   and the market has to be replaced (see §3.2). Nobody loses money; the market stops existing.
+5. **Testnet relay feeds.** `RelayAggregator`'s owner and `updater` can write any price. Testnet
    only, by design, and never deployed to mainnet.
-3. **Keeper punctuality.** A slow keeper costs product quality (rounds refund), never solvency.
+6. **Keeper punctuality.** A slow keeper costs product quality (rounds refund), never solvency.
+
+> **The live BSC-testnet stack is the current source.** Chain 97 was redeployed on 2026-08-26 with
+> six markets — BTC, ETH and BNB over 5-minute and 1-hour rounds, all settled in USDT. Confirmed on
+> chain rather than assumed: `oraclePhase()` answers, `setOracle(address)` reverts because it no
+> longer exists, and `autoClaimOptIn(address)` answers. `./scripts/verify-sourcify.sh 97` reports
+> `match` for all eleven contracts. The addresses are in the README and in
+> `contracts/deployments/97.json`, and a test fails the build if those two disagree.
 
 ### Mainnet plan
 
@@ -595,8 +753,9 @@ reach user principal or unclaimed payouts, by construction.
 ```
 It will not broadcast until a preflight passes: `OWNER` must be a **contract** (a Safe or Timelock —
 an EOA is refused unless you set `ALLOW_EOA_OWNER=1` and mean it), the deployer must hold gas, the
-RPC must really be chain 56, the settlement asset must be BSC-USDT with 18 decimals, **both
-Chainlink feeds must be live inside the 150 s budget the 5-minute markets ship with**, and the full
+RPC must really be chain 56, the settlement asset must be BSC-USDT with 18 decimals, **all three
+Chainlink feeds — BTC, ETH and BNB — must be live inside the 150 s budget the 5-minute markets ship
+with**, and the full
 Foundry suite must be green. It then simulates against real chain state, prints the gas estimate,
 and asks you to type `DEPLOY MAINNET`. As of 2026-08-26 the whole stack costs **0.00073 BNB**.
 
@@ -652,10 +811,22 @@ cast call <MARKET> 'treasuryAmount()(uint256)'          --rpc-url "$RPC"
 
 | Code | Meaning |
 |---|---|
-| `1` | No usable oracle print at the boundary |
+| `1` | Defensive: the round's `closeTs` did not equal the boundary being priced. The grid guarantees `closeTs(e) == lockTs(e+1)`, so this should never fire — if it ever does, the schedule is wrong and the round refunds rather than guessing |
 | `2` | Tie — `closePrice == lockPrice` |
 | `3` | One-sided book — no counterparty |
-| `4` | Round never received a strike |
+| `4` | Defensive: `_endRound` reached a round that had never locked. **Unreachable** — every epoch transition runs `_lockRound` first, which either locks the round or voids it, and the epochs a fast-forward skips are never started at all. A round that genuinely never took a strike — a pause that landed before it locked, or a lock window that elapsed — voids as **`5`**, not `4`. Pinned by `test_aRoundThatNeverLockedVoidsWithReasonWindow` and `test_theVoidReasonCodesAnOperatorCanSee` |
 | `5` | Settlement window elapsed |
 
 Every one of them means the same thing for users: **full refund, zero fee.**
+
+**The only codes an incident can actually produce are `2`, `3` and `5`** — `1` and `4` are defensive
+branches the grid and the epoch machinery make unreachable, and
+`test_theVoidReasonCodesAnOperatorCanSee` fails if either ever becomes reachable. So when you are
+decoding `RoundVoided` during an incident, `5` is the interesting one and it means only "this round
+ran out of time", never "the feed was bad" — the cause has to come from the reverts that preceded it.
+
+Note in particular which code a dead or phase-changed feed produces: **`5`, not `1`.** An unusable or
+unprovable boundary print does not void a round — `executeRound` reverts `InvalidBoundaryProof`,
+which is what stops a losing bettor front-running an honest call with a bogus round id to force a
+refund. The round only voids later, on the timer, when its own window runs out. A pause that lands
+before a round locks reaches the same code by the same route.

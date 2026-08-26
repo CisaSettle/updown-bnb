@@ -137,7 +137,7 @@ describe('evaluateMarketHealth', () => {
     expect(health.reason).toMatch(/no execution within 600s of supervision starting/);
   });
 
-  it('does not blame the keeper for a market that is paused or not genesis-started', () => {
+  it('does not blame the keeper for a market that is not genesis-started', () => {
     const health = evaluateMarketHealth(market({ active: false, lastExecutionMs: NOW - 10_000_000 }), NOW);
     expect(health.state).toBe('inactive');
     expect(health.healthy).toBe(true);
@@ -319,5 +319,89 @@ describe('degraded markets', () => {
   it('null and undefined both mean "not degraded"', () => {
     expect(evaluateMarketHealth(market({ degraded: null }), NOW).state).toBe('ok');
     expect(evaluateMarketHealth(market({ degraded: undefined }), NOW).state).toBe('ok');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A paused market is not an idle market.
+//
+// `pause()` stops the market taking NEW risk; `executeRound` is deliberately not pausable, so a
+// round that was already locked settles at its true price through the pause. That is the whole
+// defence against an owner who is also a bettor watching the settlement print land, seeing they
+// lost, and pausing so the round runs out its window and every stake — theirs included — comes
+// back. Reporting such a market as "inactive; nothing for the keeper to do" is how an operator
+// learns to ignore the exact window in which that defence is being exercised.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('a paused market', () => {
+  it('is its own state, never "inactive"', () => {
+    const health = evaluateMarketHealth(market({ active: false, paused: true }), NOW);
+    expect(health.state).toBe('paused');
+    expect(health.paused).toBe(true);
+    expect(health.pausedSettlement).toBe('none');
+    expect(health.healthy).toBe(true);
+    expect(health.reason).toMatch(/no locked round is waiting to settle/);
+  });
+
+  it('says it is still being settled when a round locked before the pause is outstanding', () => {
+    const health = evaluateMarketHealth(
+      market({ active: false, paused: true, pausedSettlement: 'pending', lastExecutionMs: NOW - 10_000_000 }),
+      NOW,
+    );
+    expect(health.state).toBe('paused');
+    expect(health.pausedSettlement).toBe('pending');
+    // Healthy: the keeper is doing the one thing that matters here, and the staleness budget is the
+    // wrong measure for a market that executes at most once per pause.
+    expect(health.healthy).toBe(true);
+    expect(health.reason).toMatch(/paused AND still being settled/);
+    expect(health.reason).toMatch(/Pause stops new risk, never risk already taken/);
+  });
+
+  it('is UNHEALTHY once that locked round has run out its settlement window', () => {
+    const health = evaluateMarketHealth(
+      market({ active: false, paused: true, pausedSettlement: 'missed' }),
+      NOW,
+    );
+    expect(health.healthy).toBe(false);
+    expect(health.state).toBe('degraded');
+    expect(health.pausedSettlement).toBe('missed');
+    expect(health.reason).toMatch(/ran out its settlement window/);
+  });
+
+  it('fails the whole report, so /healthz answers 503 while a locked round is being refunded away', () => {
+    const report = evaluateHealth(
+      [market({ active: false, paused: true, pausedSettlement: 'missed' })],
+      NOW,
+      NOW - 60_000,
+    );
+    expect(report.healthy).toBe(false);
+  });
+
+  it('keeps /healthz green while the settlement is merely pending', () => {
+    const report = evaluateHealth(
+      [market({ active: false, paused: true, pausedSettlement: 'pending' })],
+      NOW,
+      NOW - 60_000,
+    );
+    expect(report.healthy).toBe(true);
+  });
+
+  it('reports "none" for a market that is not paused, whatever it is asked', () => {
+    // `pausedSettlement` is meaningless unless the market is paused, and a stale value leaking into
+    // the report would have an operator chasing a settlement that is being driven normally.
+    const health = evaluateMarketHealth(market({ pausedSettlement: 'pending' }), NOW);
+    expect(health.paused).toBe(false);
+    expect(health.pausedSettlement).toBe('none');
+    expect(health.state).toBe('ok');
+  });
+
+  it('still reports a degraded keeper condition ahead of the pause', () => {
+    // A relay feed this key cannot write means every round voids whatever the pause is doing.
+    const health = evaluateMarketHealth(
+      market({ active: false, paused: true, pausedSettlement: 'pending', degraded: 'cannot write the relay feed' }),
+      NOW,
+    );
+    expect(health.state).toBe('degraded');
+    expect(health.healthy).toBe(false);
   });
 });
