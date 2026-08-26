@@ -78,9 +78,12 @@ contract ChainlinkForkTest is Test {
     }
 
     /// @dev BNB Chain produces ~0.45s blocks; step forward until the wall clock passes `targetTs`.
+    /// @dev Strictly past, never merely at: `executeRound` refuses the boundary second itself, so a
+    ///      roll that lands exactly on it would revert `TooEarly` and the test would be measuring
+    ///      the harness rather than the integration.
     function _rollUntil(uint256 targetTs) internal {
         uint256 guard;
-        while (block.timestamp < targetTs) {
+        while (block.timestamp <= targetTs) {
             require(guard++ < 40, "could not roll fork to target timestamp");
             uint256 deficit = targetTs - block.timestamp;
             uint256 blocks = (deficit * 100) / 45;

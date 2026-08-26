@@ -306,7 +306,8 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         assertEq(market.settlementAsset(), address(erc20.asset()), "the two spellings must agree");
 
         // `epochAnchor` is the epoch `anchorTs` refers to. An ordinary crank turn must never move
-        // it; a pause/restart re-anchors both together, which is what keeps the grid derivable.
+        // it. The anchor is set once at genesis and never moves, which is what keeps the grid
+        // derivable from two numbers for the life of the market.
         assertEq(market.epochAnchor(), 1);
         assertEq(market.anchorTs(), _round(1).startTs, "anchorTs must be epoch `epochAnchor`'s start");
         _advance(P0);
@@ -316,12 +317,9 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         vm.startPrank(owner);
         market.pause();
         market.unpause();
-        market.genesisStart();
         vm.stopPrank();
-        assertEq(market.epochAnchor(), market.currentEpoch(), "a restart re-anchors onto the new epoch");
-        assertEq(
-            market.anchorTs(), _round(market.currentEpoch()).startTs, "anchorTs must follow the re-anchor"
-        );
+        assertEq(market.epochAnchor(), 1, "a pause must not move the anchor either");
+        assertEq(market.anchorTs(), _round(1).startTs, "anchorTs stays on epoch 1 for the life of the market");
 
         // `maxSideAmount` is the cap `SideCapExceeded` is measured against
         assertEq(market.maxSideAmount(), MAX_SIDE);
@@ -373,25 +371,41 @@ contract UpDownSurfaceTest is UpDownBaseTest {
 
     /// @notice `pause()` clears `genesisStarted` on purpose, so an unpaused-but-not-restarted market
     ///         is closed for business until the owner re-anchors the grid.
+    /// @notice A market that has never been started takes no bets and cannot be cranked, and the
+    ///         owner can start it exactly once.
+    /// @dev It has to be a freshly deployed market: a pause deliberately does NOT un-start a live
+    ///      one, because rounds already locked must keep settling through it.
     function test_anUnstartedMarketRejectsBetsAndCrankTurns() public {
-        vm.startPrank(owner);
-        market.pause();
-        market.unpause();
-        vm.stopPrank();
-        assertFalse(market.genesisStarted());
+        UpDownMarketERC20 fresh = new UpDownMarketERC20(
+            owner,
+            address(feed),
+            address(usdt),
+            INTERVAL,
+            FEE_BPS,
+            BUFFER,
+            MAX_AGE,
+            MIN_BET,
+            MAX_BET,
+            MAX_SIDE
+        );
+        assertFalse(fresh.genesisStarted());
 
         vm.prank(alice);
         vm.expectRevert(UpDownMarketBase.NotStarted.selector);
-        erc20.betUp(1, MIN_BET);
+        fresh.betUp(1, MIN_BET);
 
         vm.prank(keeper);
         vm.expectRevert(UpDownMarketBase.NotStarted.selector);
-        market.executeRound(1);
+        fresh.executeRound(1);
 
-        // and the owner can bring it back
         vm.prank(owner);
-        market.genesisStart();
-        assertTrue(market.genesisStarted());
+        fresh.genesisStart();
+        assertTrue(fresh.genesisStarted());
+
+        // and only once — the grid is anchored for the life of the market
+        vm.prank(owner);
+        vm.expectRevert(UpDownMarketBase.AlreadyStarted.selector);
+        fresh.genesisStart();
     }
 
     function test_claimingAnEmptyEpochListReverts() public {

@@ -550,7 +550,21 @@ reach user principal or unclaimed payouts, by construction.
   `genesisStarted` while `genesisStart()` is `onlyOwner` — could have left a paused market unable to
   ever trade again.
 
-> **`pause()` is worth money to an owner who is also a bettor, and you should know that.**
+> **`pause()` used to be worth money to an owner who is also a bettor. It no longer is.**
+> A pause now stops the market taking *new* risk without cancelling risk already taken: betting
+> stops and no further round locks or opens, but a round that has **already locked** settles
+> normally through the pause, at the price the feed actually printed. An owner who watches the
+> settlement print land and finds they have lost can pause all they like — the round still settles
+> against them, anyone can still turn the crank, and the winner can still claim while the market is
+> paused. Pinned by `test_pauseCannotCancelARoundWhoseOutcomeIsAlreadyVisible`.
+>
+> The residual, stated plainly: a round that had **not** locked when the pause landed refunds. That
+> is correct — it never had a strike, so nobody could have known its outcome. And one already-locked
+> round can still settle on a compromised feed, because pausing no longer stops settlement; that is
+> a bounded, one-round exposure traded against a standing per-round option, which is the right way
+> round.
+>
+> The historical note, for anyone reading an older commit:
 > The mechanism is disclosed in the PRD as a void reason, but the economics are worth stating
 > plainly: once the settlement print for a live round is visible on the feed, the owner can see who
 > won and, instead of letting it settle, call `pause()`. The round then runs out its window and

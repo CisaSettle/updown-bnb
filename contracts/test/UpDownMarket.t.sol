@@ -654,13 +654,6 @@ contract UpDownMarketTest is UpDownBaseTest {
         vm.prank(keeper);
         market.executeRound(rid);
 
-        // a pause/restart re-anchors the grid onto a fresh run of epochs
-        vm.startPrank(owner);
-        market.pause();
-        market.unpause();
-        market.genesisStart();
-        vm.stopPrank();
-        vm.warp(market.anchorTs());
         _advance(P0 + 9e8);
 
         uint256 opened;
@@ -768,7 +761,7 @@ contract UpDownMarketTest is UpDownBaseTest {
 
         vm.prank(owner);
         market.pause();
-        assertFalse(market.genesisStarted());
+        assertTrue(market.genesisStarted(), "the grid anchor survives a pause; only new risk stops");
 
         vm.prank(alice);
         vm.expectRevert(Pausable.EnforcedPause.selector);
@@ -779,16 +772,122 @@ contract UpDownMarketTest is UpDownBaseTest {
         assertEq(usdt.balanceOf(alice), a0);
     }
 
+    /// @notice Regression for the review's high finding: `pause()` must not be a cancel button for
+    ///         an outcome the owner can already see.
+    ///
+    ///         An owner who is also a bettor could otherwise watch the settlement print land, find
+    ///         they had lost, and pause — the round would run out its window and hand every stake
+    ///         back, theirs included, worth up to `maxSideAmount` a round. A multisig does not fix
+    ///         that, because a multisig is not a delay. Settlement surviving the pause does.
+    function test_pauseCannotCancelARoundWhoseOutcomeIsAlreadyVisible() public {
+        _betUp(alice, 1_000e18);
+        _betDown(bob, 3_000e18);
+        _advance(P0); // epoch 1 is locked at the strike
+
+        // the settlement print lands and everyone can see DOWN has lost
+        UpDownMarketBase.Round memory r2 = _round(2);
+        vm.warp(r2.lockTs);
+        uint80 boundary = feed.setAnswer(P0 + 5_000e8); // UP wins by a mile
+        vm.warp(uint256(r2.lockTs) + 1);
+
+        // the owner, holding the losing side, pauses before anyone settles
+        vm.prank(owner);
+        market.pause();
+        assertTrue(market.paused());
+
+        // it changes nothing: anyone can still settle the locked round at its true price
+        vm.prank(carol);
+        market.executeRound(boundary);
+
+        UpDownMarketBase.Round memory settled = _round(1);
+        assertTrue(settled.settled, "a locked round must settle through a pause");
+        assertFalse(settled.voided, "pausing must not turn a decided round into a refund");
+        assertEq(settled.closePrice, P0 + 5_000e8);
+        assertTrue(market.claimable(1, alice), "the winner is still owed");
+        assertFalse(market.refundable(1, bob), "the loser does not get their stake back");
+        assertEq(market.treasuryAmount(), (uint256(3_000e18) * FEE_BPS) / 10_000, "the fee is still taken");
+
+        // and the winner can collect while the market is paused
+        uint256 before = usdt.balanceOf(alice);
+        _claim(alice, 1);
+        assertEq(usdt.balanceOf(alice) - before, 3_910e18);
+        _assertSolvent();
+    }
+
+    /// @notice The other half: a round that had NOT locked has no strike, so nobody could know its
+    ///         outcome — it refunds, and pausing never opens another.
+    function test_pauseStopsNewRiskWithoutCancellingOld() public {
+        _advance(P0); // open a clean grid
+        _betUp(alice, 1_000e18);
+        _betDown(bob, 1_000e18);
+        uint256 open = market.currentEpoch();
+
+        vm.prank(owner);
+        market.pause();
+
+        vm.prank(carol);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        erc20.betUp(open, 100e18);
+
+        // publish at the boundary and settle a moment later, exactly as an honest caller would:
+        // the round locked BEFORE the pause still settles, which is the point of the fix.
+        UpDownMarketBase.Round memory r = _round(open);
+        vm.warp(r.lockTs);
+        uint80 rid = feed.setAnswer(P0 + 1e8);
+        vm.warp(uint256(r.lockTs) + 1);
+        vm.prank(carol);
+        market.executeRound(rid);
+        assertTrue(_round(open - 1).settled, "the round locked before the pause still settles");
+        assertFalse(_round(open).locked, "a paused market must not lock a new round");
+        assertEq(market.currentEpoch(), open, "and must not open the next one");
+
+        vm.warp(uint256(r.lockTs) + BUFFER + 1);
+        assertTrue(market.refundable(open, alice), "an unlocked round refunds");
+        _claim(alice, open);
+        _claim(bob, open);
+        _assertSolvent();
+    }
+
+    /// @notice A round whose two boundaries fall in different aggregator phases refunds rather than
+    ///         settling on a pair whose "last print before the boundary" depends on when a proxy
+    ///         upgrade was confirmed.
+    function test_roundSpanningAnAggregatorPhaseChangeRefunds() public {
+        _betUp(alice, 1_000e18);
+        _betDown(bob, 1_000e18);
+        _advance(P0); // locked in the current phase
+
+        UpDownMarketBase.Round memory r2 = _round(2);
+        feed.startNewPhase();
+        vm.warp(r2.lockTs);
+        uint80 newPhase = feed.setAnswer(P0 + 5_000e8);
+        vm.warp(uint256(r2.lockTs) + 1);
+        vm.prank(keeper);
+        market.executeRound(newPhase);
+
+        UpDownMarketBase.Round memory g = _round(1);
+        assertTrue(g.voided, "a round may not settle across a phase change");
+        assertEq(g.closePrice, 0);
+        assertEq(market.treasuryAmount(), 0, "and no fee is taken");
+        _claim(alice, 1);
+        _claim(bob, 1);
+        _assertSolvent();
+    }
+
     function test_restartAfterPauseKeepsOldEpochsIntact() public {
         _betUp(alice, 1_000e18);
         vm.prank(owner);
         market.pause();
-        vm.startPrank(owner);
+        vm.prank(owner);
         market.unpause();
-        market.genesisStart();
-        vm.stopPrank();
 
-        assertEq(market.currentEpoch(), 2, "epoch numbering must never rewind");
+        // No re-anchor: the next crank turn fast-forwards to the live epoch in one transaction.
+        UpDownMarketBase.Round memory r1 = _round(1);
+        vm.warp(uint256(r1.lockTs) + BUFFER + 1);
+        uint80 rid = feed.setAnswer(P0 + 1e8);
+        vm.prank(keeper);
+        market.executeRound(rid);
+
+        assertGt(market.currentEpoch(), 1, "epoch numbering must never rewind");
         assertEq(_round(1).upAmount, 1_000e18, "old round must be untouched");
         vm.warp(_round(1).lockTs + BUFFER + 1);
         assertTrue(market.refundable(1, alice));

@@ -157,6 +157,7 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     uint8 internal constant VOID_ONE_SIDED = 3; // no counterparty on the other side
     uint8 internal constant VOID_NOT_LOCKED = 4; // round never received a strike
     uint8 internal constant VOID_WINDOW = 5; // settlement window elapsed
+    uint8 internal constant VOID_PHASE_CHANGE = 6; // the feed changed aggregator mid-round
 
     // ─────────────────────────────────────────────────────────────────────────
     // Errors
@@ -346,7 +347,7 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
      *      round into refunds once its snapshotted buffer has elapsed. Winners are therefore the
      *      ones with the incentive to call, which is what keeps the market live.
      */
-    function executeRound(uint80 boundaryRoundId) external whenNotPaused nonReentrant {
+    function executeRound(uint80 boundaryRoundId) external nonReentrant {
         if (!genesisStarted) revert NotStarted();
 
         uint256 cur = currentEpoch;
@@ -364,6 +365,21 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
 
         bool endNeedsProof =
             cur > epochAnchor ? _endRound(cur - 1, boundaryTs, priceOk, price, boundaryRoundId) : false;
+
+        // A pause stops the market taking NEW risk; it does not cancel risk already taken. The
+        // round above is already locked — its outcome is fixed by a print the whole world can read
+        // — so it settles at its true price whether or not the market is paused. Only locking a new
+        // round and opening the next one stop.
+        //
+        // That is what removes the owner's option. Without it, an owner who is also a bettor could
+        // watch the settlement print land, see they had lost, and pause: the round would run out
+        // its window and hand every stake back, theirs included. A multisig does not fix that,
+        // because a multisig is not a delay. This does.
+        if (paused()) {
+            if (endNeedsProof) revert InvalidBoundaryProof();
+            return;
+        }
+
         bool lockNeedsProof = _lockRound(cur, priceOk, price, boundaryRoundId);
         // A round still inside its own settlement window may only be resolved by a VALID boundary
         // proof. Reverting rather than voiding is what stops a losing bettor from front-running an
@@ -446,6 +462,16 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
             return false;
         }
         if (!priceOk) return true;
+        // A Chainlink proxy can confirm a replacement aggregator that already carries history with
+        // earlier timestamps, so "the last print at or before the boundary" is not stable across an
+        // upgrade: the answer would depend on whether settlement ran before or after confirmation.
+        // A round whose two boundaries fall in different phases therefore refunds rather than
+        // settling on an ambiguous pair. Phase changes are rare and announced; a refund is cheap.
+        if (uint256(roundId) >> PHASE_SHIFT != uint256(r.lockOracleId) >> PHASE_SHIFT) {
+            r.voided = true;
+            emit RoundVoided(epoch, VOID_PHASE_CHANGE);
+            return false;
+        }
 
         r.closePrice = price;
         r.closeOracleId = roundId;
@@ -718,10 +744,18 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
         if (minBet == 0 || maxBet < minBet || maxSide < maxBet) revert InvalidLimits();
     }
 
-    /// @dev Pausing also clears the genesis flag: live rounds run out their buffer and become
-    ///      refundable on their own, and a fresh `genesisStart()` re-anchors the grid on resume.
+    /**
+     * @notice Stop the market taking new risk. Rounds already locked still settle.
+     * @dev Betting stops immediately and no further round is locked or opened. A round that had not
+     *      locked yet never had a strike, so it runs out its window and every stake in it is
+     *      refunded — nobody could have known its outcome. A round that HAD locked settles normally,
+     *      which is what stops `pause` from being a cancel button for an outcome the owner can
+     *      already see.
+     *
+     *      The grid anchor is deliberately left alone: on `unpause` the next `executeRound`
+     *      fast-forwards to the live epoch in one transaction, so there is nothing to re-anchor.
+     */
     function pause() external onlyOwner {
-        genesisStarted = false;
         _pause();
     }
 

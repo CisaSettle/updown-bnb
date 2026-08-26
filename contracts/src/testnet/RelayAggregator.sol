@@ -33,6 +33,7 @@ contract RelayAggregator is IAggregatorV3, Ownable {
     error NotUpdater();
     error BadAnswer();
     error NoData();
+    error OwnershipCannotBeRenounced();
 
     constructor(
         address initialOwner,
@@ -46,6 +47,12 @@ contract RelayAggregator is IAggregatorV3, Ownable {
         updater = updater_;
         latestId = 1;
         _history[1] = RoundData(initial, block.timestamp);
+    }
+
+    /// @notice Disabled: an ownerless relay could never rotate an unavailable or compromised
+    ///         updater, which would strand the feed every testnet round settles on.
+    function renounceOwnership() public pure override {
+        revert OwnershipCannotBeRenounced();
     }
 
     function setUpdater(address updater_) external onlyOwner {

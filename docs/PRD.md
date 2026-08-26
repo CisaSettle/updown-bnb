@@ -130,7 +130,12 @@ Note what is **not** on that list: a caller supplying an unusable or non-final b
 **not** void the round — `executeRound` reverts `InvalidBoundaryProof` and nothing changes. That is
 what stops a losing bettor from front-running an honest call to force everyone into a refund. A dead
 feed therefore reaches a refund only the slow way, by the settlement window running out.
-- admin `pause()` while the round was live
+- the two boundaries fell in different Chainlink aggregator phases — a proxy can confirm a
+  replacement aggregator that already carries earlier history, so "the last print at or before the
+  boundary" is not stable across an upgrade and the round refunds rather than settling on an
+  ambiguous pair
+- admin `pause()` **before the round locked**. A round that had already locked settles normally
+  through a pause — see §6.
 
 Every one of those conditions is judged against **that round's own snapshots** of `feeBps`,
 `bufferSeconds` and `oracleMaxAge`, taken when the round started. An admin parameter change can
@@ -218,6 +223,7 @@ keeper `updater`, fed from a real spot price. It is never deployed on mainnet.
 | `pause()` | admin | halt betting; live rounds become refundable |
 | Treasury withdrawal | only `treasuryAmount` accrued | admin can never touch user principal |
 | Settlement privilege | none | `executeRound` is permissionless and price-deterministic, so no address holds a settlement option |
+| `pause()` scope | new risk only | Betting stops and no further round locks or opens, but **a round that has already locked still settles**, through the pause, at its true price. Without that, an owner who was also a bettor could watch the settlement print land, see they had lost, and pause — the round would time out and hand every stake back, theirs included, worth up to `maxSideAmount` a round. A multisig does not fix that, because a multisig is not a delay. This does. |
 | Non-conforming assets | rejected | an ERC20 that does not deliver exactly `amount` reverts at bet time rather than under-collateralising a round |
 
 **Non-custodial invariant (must hold at all times, enforced by an invariant test):**
