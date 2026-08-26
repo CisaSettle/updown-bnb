@@ -118,6 +118,8 @@ contract UpDownFuzzTest is UpDownBaseTest {
 
         for (uint256 i; i < rounds; ++i) {
             uint256 jitter = uint256(keccak256(abi.encode(jitterSeed, i))) % BUFFER;
+            // safe: i is bounded by `rounds` (max 12), so the int256 widen cannot truncate
+            // forge-lint: disable-next-line(unsafe-typecast)
             _advanceLate(P0 + int256(i + 1) * 1e8, jitter);
         }
         assertEq(_round(rounds + 1).startTs, anchor + rounds * INTERVAL, "grid drifted");

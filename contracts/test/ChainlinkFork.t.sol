@@ -104,6 +104,8 @@ contract ChainlinkForkTest is Test {
         console2.log("feed:", feed.description());
         console2.log("  phaseId       ", uint256(rid0) >> 64);
         console2.log("  aggRoundId    ", uint256(rid0) & type(uint64).max);
+        // safe: a live Chainlink BTC price is positive and nowhere near int256 range
+        // forge-lint: disable-next-line(unsafe-typecast)
         console2.log("  price (8dp)   ", uint256(p0));
         console2.log("  age at fork(s)", block.timestamp - upd0);
 

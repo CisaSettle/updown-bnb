@@ -28,6 +28,8 @@ contract UpDownMarketTest is UpDownBaseTest {
         uint256 anchor = market.anchorTs();
         for (uint256 i = 1; i <= 5; ++i) {
             // settle late, but still inside the buffer
+            // safe: i is bounded by the loop (max 5)
+            // forge-lint: disable-next-line(unsafe-typecast)
             _advanceLate(P0 + int256(i) * 1e8, 30);
         }
         // epoch 6 must sit exactly on the grid despite five late executions
@@ -747,6 +749,8 @@ contract UpDownMarketTest is UpDownBaseTest {
     function test_constructorRejectsBadConfig() public {
         vm.expectRevert(UpDownMarketBase.InvalidBuffer.selector);
         new UpDownMarketERC20(
+            // safe: deliberately passing an out-of-range buffer to prove the constructor rejects it
+            // forge-lint: disable-next-line(unsafe-typecast)
             owner, address(feed), address(usdt), INTERVAL, FEE_BPS, uint16(INTERVAL), MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
         );
         vm.expectRevert(UpDownMarketBase.InvalidFee.selector);
@@ -755,6 +759,8 @@ contract UpDownMarketTest is UpDownBaseTest {
         );
         vm.expectRevert(UpDownMarketBase.InvalidOracleMaxAge.selector);
         new UpDownMarketERC20(
+            // safe: deliberately passing an out-of-range max age to prove the constructor rejects it
+            // forge-lint: disable-next-line(unsafe-typecast)
             owner, address(feed), address(usdt), INTERVAL, FEE_BPS, BUFFER, uint32(INTERVAL), MIN_BET, MAX_BET, MAX_SIDE
         );
         vm.expectRevert(UpDownMarketBase.InvalidLimits.selector);

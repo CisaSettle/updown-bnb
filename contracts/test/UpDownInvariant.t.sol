@@ -235,6 +235,8 @@ contract UpDownInvariantTest is Test {
 
         address[] memory actors = new address[](4);
         for (uint256 i; i < 4; ++i) {
+            // safe: a small literal offset; the address fits uint160 by construction
+            // forge-lint: disable-next-line(unsafe-typecast)
             actors[i] = address(uint160(0xA11CE00 + i));
             usdt.mint(actors[i], 10_000_000e18);
             vm.prank(actors[i]);
@@ -293,6 +295,8 @@ contract UpDownInvariantTest is Test {
         uint256 from = cur > 40 ? cur - 40 : 1;
         for (uint256 e = from; e <= cur; ++e) {
             for (uint256 i; i < 4; ++i) {
+                // safe: same fixed actor addresses as setUp
+                // forge-lint: disable-next-line(unsafe-typecast)
                 address a = address(uint160(0xA11CE00 + i));
                 assertFalse(market.claimable(e, a) && market.refundable(e, a), "double-collectable round");
             }

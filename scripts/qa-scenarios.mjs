@@ -103,7 +103,23 @@ async function until(ts, label, scenario) {
 }
 
 const read = (market, fn, args = []) => pub.readContract({ address: market, abi: MARKET, functionName: fn, args })
-const relay = (feed, price) => send(RUNNER, feed, FEED, 'relay', [price])
+/** Seconds of headroom for a relay to mine before the boundary. `oracleMaxAge` bounds it above. */
+const RELAY_LEAD = 20
+
+/**
+ * Publish a boundary print and prove where it actually landed. A print timestamped after the
+ * boundary can never settle it — the same failure the keeper's `relayCanStillLand` guard exists to
+ * prevent — so this asserts rather than assumes.
+ */
+async function relayAtBoundary(feed, price, boundaryTs, scenario) {
+  await send(RUNNER, feed, FEED, 'relay', [price])
+  const [, , , updatedAt] = await pub.readContract({ address: feed, abi: FEED, functionName: 'latestRoundData' })
+  const landed = Number(updatedAt)
+  const age = boundaryTs - landed
+  if (landed > boundaryTs) throw new Error(`relay landed ${landed - boundaryTs}s AFTER the boundary; it can never settle it`)
+  if (age > MAX_AGE) throw new Error(`relay landed ${age}s before the boundary, past the ${MAX_AGE}s staleness budget`)
+  say(scenario, `relay landed ${age}s before the boundary (budget ${MAX_AGE}s)`)
+}
 async function latestRoundId(feed) {
   const r = await pub.readContract({ address: feed, abi: FEED, functionName: 'latestRoundData' })
   return r[0]
@@ -113,13 +129,33 @@ async function boundaryId(market, ts) {
   if (!found) throw new Error('no boundary print')
   return id
 }
-/** Start a market and return its epoch-1 round. */
-async function start(market, scenario) {
+/**
+ * Bring a market to a round we can actually bet on, and return it.
+ *
+ * A market left over from an earlier run sits on a round whose betting window closed long ago and
+ * which nobody cranked. Turning the crank there voids it on the timeout and fast-forwards the grid
+ * to the currently-bettable epoch in one transaction — so recovering is itself a live exercise of
+ * the outage-recovery path.
+ */
+async function start(market, feed, scenario) {
   if (!(await read(market, 'genesisStarted'))) await send(RUNNER, market, MARKET, 'genesisStart', [])
-  const epoch = await read(market, 'currentEpoch')
-  const r = await read(market, 'getRound', [epoch])
-  say(scenario, `epoch ${epoch}: start ${r.startTs} lock ${r.lockTs} close ${r.closeTs}`)
-  return { epoch, r }
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const epoch = await read(market, 'currentEpoch')
+    const r = await read(market, 'getRound', [epoch])
+    const t = await now()
+    if (t < Number(r.startTs)) {
+      await until(Number(r.startTs), 'betting to open', scenario)
+      continue
+    }
+    if (Number(r.lockTs) - t > RELAY_LEAD + 8) {
+      say(scenario, `epoch ${epoch}: start ${r.startTs} lock ${r.lockTs} close ${r.closeTs}`)
+      return { epoch, r }
+    }
+    await until(Number(r.lockTs) + Number(r.bufferSeconds) + 2, 'the stale round to become crankable', scenario)
+    await send(RUNNER, market, MARKET, 'executeRound', [await latestRoundId(feed)])
+    say(scenario, `fast-forwarded past a stale round to epoch ${await read(market, 'currentEpoch')}`)
+  }
+  throw new Error('could not reach a bettable round')
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -127,31 +163,33 @@ async function start(market, scenario) {
 // ═══════════════════════════════════════════════════════════════════════════
 async function scenarioTie() {
   const S = 'TIE', m = getAddress(qa.marketA), feed = getAddress(qa.feedA)
-  const { epoch, r } = await start(m, S)
+  const { epoch, r } = await start(m, feed, S)
   await until(Number(r.startTs), 'betting to open', S)
   const a0 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [RUNNER.address] })
   const b0 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [BOB.address] })
+  const outstandingBefore = (await read(m, 'outstanding')) + 40n * 10n ** 18n
+  const treasuryBefore = await read(m, 'treasuryAmount')
   await Promise.all([
     send(RUNNER, m, MARKET, 'betUp', [epoch, 10n * 10n ** 18n]),
     send(BOB, m, MARKET, 'betDown', [epoch, 30n * 10n ** 18n]),
   ])
 
   const PRICE = 80_000n * 10n ** 8n
-  await until(Number(r.lockTs) - 3, 'the lock boundary', S)
-  await relay(feed, PRICE)
+  await until(Number(r.lockTs) - RELAY_LEAD, 'the relay window', S)
+  await relayAtBoundary(feed, PRICE, Number(r.lockTs), S)
   await until(Number(r.lockTs), 'lock', S)
   await send(RUNNER, m, MARKET, 'executeRound', [await boundaryId(m, Number(r.lockTs))])
 
   // the same price again at the next boundary: closePrice == lockPrice
-  await until(Number(r.closeTs) - 3, 'the close boundary', S)
-  await relay(feed, PRICE)
+  await until(Number(r.closeTs) - RELAY_LEAD, 'the relay window', S)
+  await relayAtBoundary(feed, PRICE, Number(r.closeTs), S)
   await until(Number(r.closeTs), 'close', S)
   await send(RUNNER, m, MARKET, 'executeRound', [await boundaryId(m, Number(r.closeTs))])
 
   const g = await read(m, 'getRound', [epoch])
   record(S, 'settled at exactly the strike', g.closePrice === g.lockPrice, `${g.lockPrice} == ${g.closePrice}`)
   record(S, 'round is voided, not settled to a winner', g.voided === true)
-  record(S, 'no fee was taken on the tie', (await read(m, 'treasuryAmount')) === 0n)
+  record(S, 'no fee was taken on the tie', (await read(m, 'treasuryAmount')) === treasuryBefore, 'treasury unchanged')
   record(S, 'both sides refundable', (await read(m, 'refundable', [epoch, RUNNER.address])) && (await read(m, 'refundable', [epoch, BOB.address])))
   record(S, 'neither side is claimable as a winner', !(await read(m, 'claimable', [epoch, RUNNER.address])) && !(await read(m, 'claimable', [epoch, BOB.address])))
   await Promise.all([send(RUNNER, m, MARKET, 'claim', [[epoch]]), send(BOB, m, MARKET, 'claim', [[epoch]])])
@@ -159,7 +197,7 @@ async function scenarioTie() {
   const b1 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [BOB.address] })
   record(S, 'up side made exactly whole', a1 === a0, `${formatUnits(a0, 18)} -> ${formatUnits(a1, 18)}`)
   record(S, 'down side made exactly whole', b1 === b0, `${formatUnits(b0, 18)} -> ${formatUnits(b1, 18)}`)
-  record(S, 'outstanding back to zero', (await read(m, 'outstanding')) === 0n)
+  record(S, 'the round no longer contributes to outstanding', (await read(m, 'outstanding')) === outstandingBefore - 40n * 10n ** 18n)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -168,7 +206,7 @@ async function scenarioTie() {
 // ═══════════════════════════════════════════════════════════════════════════
 async function scenarioStarvedAndGriefed() {
   const S = 'STARVE', m = getAddress(qa.marketB), feed = getAddress(qa.feedB)
-  const { epoch, r } = await start(m, S)
+  const { epoch, r } = await start(m, feed, S)
   await until(Number(r.startTs), 'betting to open', S)
   const a0 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [RUNNER.address] })
   const b0 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [BOB.address] })
@@ -177,8 +215,8 @@ async function scenarioStarvedAndGriefed() {
     send(BOB, m, MARKET, 'betDown', [epoch, 30n * 10n ** 18n]),
   ])
 
-  await until(Number(r.lockTs) - 3, 'the lock boundary', S)
-  await relay(feed, 80_000n * 10n ** 8n)
+  await until(Number(r.lockTs) - RELAY_LEAD, 'the relay window', S)
+  await relayAtBoundary(feed, 80_000n * 10n ** 8n, Number(r.lockTs), S)
   await until(Number(r.lockTs), 'lock', S)
   await send(RUNNER, m, MARKET, 'executeRound', [await boundaryId(m, Number(r.lockTs))])
   record(S, 'round locked normally', (await read(m, 'getRound', [epoch])).locked === true)
@@ -205,7 +243,7 @@ async function scenarioStarvedAndGriefed() {
   await send(RUNNER, m, MARKET, 'executeRound', [await latestRoundId(feed)])
   const g = await read(m, 'getRound', [epoch])
   record(S, 'timed-out round is voided', g.voided === true)
-  record(S, 'no fee taken on a timeout', (await read(m, 'treasuryAmount')) === 0n)
+  record(S, 'no fee taken on a timeout', (await read(m, 'treasuryAmount')) === 0n, 'treasury still zero')
   await Promise.all([send(RUNNER, m, MARKET, 'claim', [[epoch]]), send(BOB, m, MARKET, 'claim', [[epoch]])])
   const a1 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [RUNNER.address] })
   const b1 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [BOB.address] })
@@ -218,19 +256,19 @@ async function scenarioStarvedAndGriefed() {
 // ═══════════════════════════════════════════════════════════════════════════
 async function scenarioOneSidedAndClaimTo() {
   const S = 'ONESIDED', m = getAddress(qa.marketC), feed = getAddress(qa.feedC), bettor = getAddress(qa.qaBettor)
-  const { epoch, r } = await start(m, S)
+  const { epoch, r } = await start(m, feed, S)
   await until(Number(r.startTs), 'betting to open', S)
 
   const STAKE = 10n ** 16n // 0.01 BNB
   await send(RUNNER, bettor, BETTOR, 'call', [m, encodeFunctionData({ abi: MARKET, functionName: 'betUp', args: [epoch] })], STAKE)
   record(S, 'a contract account can take a position', (await read(m, 'getRound', [epoch])).upAmount === STAKE)
 
-  await until(Number(r.lockTs) - 3, 'the lock boundary', S)
-  await relay(feed, 700n * 10n ** 8n)
+  await until(Number(r.lockTs) - RELAY_LEAD, 'the relay window', S)
+  await relayAtBoundary(feed, 700n * 10n ** 8n, Number(r.lockTs), S)
   await until(Number(r.lockTs), 'lock', S)
   await send(RUNNER, m, MARKET, 'executeRound', [await boundaryId(m, Number(r.lockTs))])
-  await until(Number(r.closeTs) - 3, 'the close boundary', S)
-  await relay(feed, 710n * 10n ** 8n) // UP "wins" — but there was nobody to win from
+  await until(Number(r.closeTs) - RELAY_LEAD, 'the relay window', S)
+  await relayAtBoundary(feed, 710n * 10n ** 8n, Number(r.closeTs), S) // UP "wins" — but nobody to win from
   await until(Number(r.closeTs), 'close', S)
   await send(RUNNER, m, MARKET, 'executeRound', [await boundaryId(m, Number(r.closeTs))])
 
@@ -256,7 +294,7 @@ async function scenarioOneSidedAndClaimTo() {
 // ═══════════════════════════════════════════════════════════════════════════
 async function scenarioPermissionlessAndPause() {
   const S = 'ADMIN', m = getAddress(qa.marketD), feed = getAddress(qa.feedD)
-  const { epoch, r } = await start(m, S)
+  const { epoch, r } = await start(m, feed, S)
   await until(Number(r.startTs), 'betting to open', S)
   const a0 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [RUNNER.address] })
   const b0 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [BOB.address] })
@@ -266,8 +304,8 @@ async function scenarioPermissionlessAndPause() {
   ])
 
   // BOB holds no role on this market at all
-  await until(Number(r.lockTs) - 3, 'the lock boundary', S)
-  await relay(feed, 80_000n * 10n ** 8n)
+  await until(Number(r.lockTs) - RELAY_LEAD, 'the relay window', S)
+  await relayAtBoundary(feed, 80_000n * 10n ** 8n, Number(r.lockTs), S)
   await until(Number(r.lockTs), 'lock', S)
   await send(BOB, m, MARKET, 'executeRound', [await boundaryId(m, Number(r.lockTs))])
   record(S, 'an account with no role can drive the round engine', (await read(m, 'getRound', [epoch])).locked === true)

@@ -102,8 +102,12 @@ contract Deploy is Script {
             new UpDownMarketNative(owner, bnbFeed, I5M, FEE_BPS, BUF5M, AGE5M, BNB_MIN, BNB_MAX, BNB_SIDE)
         );
 
+        // interval constants are compile-time and far below uint64
+        // forge-lint: disable-next-line(unsafe-typecast)
         registry.register(btc5m, usdt, btcFeed, uint64(I5M), "BTC/USD 5m");
+        // forge-lint: disable-next-line(unsafe-typecast)
         registry.register(btc1h, usdt, btcFeed, uint64(I1H), "BTC/USD 1h");
+        // forge-lint: disable-next-line(unsafe-typecast)
         registry.register(bnb5m, address(0), bnbFeed, uint64(I5M), "BNB/USD 5m");
         registry.transferOwnership(owner); // Ownable2Step: `owner` must call acceptOwnership()
 
