@@ -11,6 +11,9 @@ contract MockERC20 {
 
     /// @notice basis points burned on every transfer, to exercise fee-on-transfer handling
     uint256 public transferFeeBps;
+    /// @notice extra basis points taken from the SENDER only: the recipient still receives the full
+    ///         `amount` while the sender is debited more. Exercises the surcharge-token case.
+    uint256 public senderSurchargeBps;
 
     event Transfer(address indexed from, address indexed to, uint256 value);
     event Approval(address indexed owner, address indexed spender, uint256 value);
@@ -23,6 +26,10 @@ contract MockERC20 {
 
     function setTransferFeeBps(uint256 bps) external {
         transferFeeBps = bps;
+    }
+
+    function setSenderSurchargeBps(uint256 bps) external {
+        senderSurchargeBps = bps;
     }
 
     function mint(address to, uint256 amount) external {
@@ -53,12 +60,15 @@ contract MockERC20 {
     }
 
     function _transfer(address from, address to, uint256 amount) internal {
-        require(balanceOf[from] >= amount, "balance");
-        balanceOf[from] -= amount;
+        uint256 surcharge = (amount * senderSurchargeBps) / 10_000;
+        uint256 debit = amount + surcharge;
+        require(balanceOf[from] >= debit, "balance");
+        balanceOf[from] -= debit;
         uint256 fee = (amount * transferFeeBps) / 10_000;
         uint256 net = amount - fee;
         balanceOf[to] += net;
-        if (fee > 0) totalSupply -= fee;
+        uint256 burned = fee + surcharge;
+        if (burned > 0) totalSupply -= burned;
         emit Transfer(from, to, net);
     }
 }

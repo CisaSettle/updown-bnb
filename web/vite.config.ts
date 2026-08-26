@@ -25,7 +25,12 @@ export default defineConfig(({ mode }) => {
     )
   }
 
+  // GitHub Pages serves a project site from /<repo>/, so assets need that prefix. Anything else
+  // (Cloudflare Pages, Vercel, IPFS gateway, a plain file server) wants the default '/'.
+  const base = env.VITE_BASE_PATH && env.VITE_BASE_PATH.trim() !== '' ? env.VITE_BASE_PATH : '/'
+
   return {
+    base,
     plugins: [react()],
     define: {
       __DEPLOYMENT__: JSON.stringify(resolution.deployment),

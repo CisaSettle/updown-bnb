@@ -857,11 +857,6 @@ export const upDownMarketNativeAbi = [
         "name": "bufferSeconds_",
         "type": "uint16",
         "internalType": "uint16"
-      },
-      {
-        "name": "oracleMaxAge_",
-        "type": "uint32",
-        "internalType": "uint32"
       }
     ],
     "outputs": [],
@@ -1125,12 +1120,6 @@ export const upDownMarketNativeAbi = [
         "type": "uint16",
         "indexed": false,
         "internalType": "uint16"
-      },
-      {
-        "name": "oracleMaxAge",
-        "type": "uint32",
-        "indexed": false,
-        "internalType": "uint32"
       }
     ],
     "anonymous": false
@@ -1367,6 +1356,11 @@ export const upDownMarketNativeAbi = [
   {
     "type": "error",
     "name": "ExpectedPause",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidBoundaryProof",
     "inputs": []
   },
   {

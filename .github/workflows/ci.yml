@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push: {branches: [main]}
+  pull_request:
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+      - name: Build
+        run: forge build --deny-warnings
+        working-directory: contracts
+      - name: Test (fuzz + invariants)
+        run: forge test
+        working-directory: contracts
+        env: {FOUNDRY_PROFILE: ci}
+      - name: Live-fork integration against the real Chainlink feed
+        run: forge test --match-contract ChainlinkForkTest -vv
+        working-directory: contracts
+        env:
+          FOUNDRY_PROFILE: default
+          FORK_RPC_URL: https://bsc-mainnet.public.blastapi.io
+
+  keeper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22', cache: npm, cache-dependency-path: keeper/package-lock.json}
+      - run: npm ci
+        working-directory: keeper
+      - run: npm run build
+        working-directory: keeper
+      - run: npm test
+        working-directory: keeper
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22', cache: npm, cache-dependency-path: web/package-lock.json}
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+        env: {VITE_CHAIN_ID: '97'}

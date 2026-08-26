@@ -19,6 +19,17 @@ Two facts follow from the contract design and shape everything here:
 
 ---
 
+
+> **Owner is a multisig or Timelock?** `Genesis.s.sol` signs with a single key and is only suitable
+> for an EOA owner. With a Safe or Timelock as owner, submit `registry.acceptOwnership()` and
+> `market.genesisStart()` for each market as governance transactions instead. Everything else in
+> this runbook is unchanged; `executeRound` is permissionless and needs no owner involvement at all.
+
+> **Source verification without an Etherscan key.** `forge verify-contract <addr> <path>:<name>
+> --chain-id <97|56> --verifier sourcify --constructor-args $(cast abi-encode ...)` verifies against
+> Sourcify and requires no API key. All BSC testnet deployments of this project are verified there.
+> BscScan additionally needs `ETHERSCAN_API_KEY` (an Etherscan V2 multichain key).
+
 ## 0 · Prerequisites
 
 ```bash
@@ -475,7 +486,7 @@ reach user principal or unclaimed payouts, by construction.
 | Power | Bound |
 |---|---|
 | `genesisStart()` | Opens the first round; required again after a pause. Cannot rewind or overwrite existing epochs |
-| `setParams(feeBps, bufferSeconds, oracleMaxAge)` | `feeBps ≤ 1000` (10%, a hard-coded constant), `0 < bufferSeconds < interval`, `0 < oracleMaxAge < interval`. **Applies only to rounds started after the call** — every live round keeps its own snapshot |
+| `setParams(feeBps, bufferSeconds)` | `feeBps ≤ 1000` (10%, a hard-coded constant) and `0 < bufferSeconds < interval`. **Applies only to rounds started after the call** — every live round keeps its own snapshot. `oracleMaxAge` is **immutable** and deliberately absent: two rounds share a boundary, so if they disagreed about what counts as a valid oracle proof one would demand a proof the other rejects and the market would stall |
 | `setLimits(min, max, side)` | Bet sizing only; cannot affect an existing position |
 | `setOracle(feed)` | **Only while paused.** The sharpest edge the admin has — see below |
 | `pause()` / `unpause()` | Halts betting and round progression. Cannot halt claiming |

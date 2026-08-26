@@ -574,6 +574,25 @@ contract UpDownMarketTest is UpDownBaseTest {
         assertEq(market.treasuryAmount(), 0);
     }
 
+    /// @notice A token that debits the market MORE than it credits the recipient must also be
+    ///         rejected. The recipient sees the right number, so checking only their side would let
+    ///         the claim finalise while quietly under-collateralising everyone behind them.
+    function test_senderSurchargeAssetIsRejectedOnPayout() public {
+        _betUp(alice, 1_000e18);
+        _betDown(bob, 1_000e18);
+        _advance(P0);
+        _advance(81_000e8);
+
+        usdt.mint(address(market), 10e18); // headroom, so the surcharge is affordable and silent
+        usdt.setSenderSurchargeBps(100); // recipient gets `amount`; the market is debited more
+
+        uint256[] memory e = new uint256[](1);
+        e[0] = 1;
+        vm.prank(alice);
+        vm.expectRevert(UpDownMarketBase.UnsupportedAsset.selector);
+        market.claim(e);
+    }
+
     /// @notice A token that charges a fee only on the way out must break loudly on the first payout
     ///         rather than quietly paying every user less than the contract recorded.
     function test_outboundFeeAssetIsRejectedOnPayout() public {

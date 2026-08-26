@@ -331,3 +331,17 @@ through real blocks so the feed genuinely updates underneath the market. It veri
 settlement are the feed's own answers, that the boundaries resolve to distinct rounds, and that the
 payout maths and solvency hold on real data. It reports SKIPPED (never PASSED) when `FORK_RPC_URL`
 is unset.
+
+### Round 3 — Codex (`gpt-5.6-sol`), 2026-08-26 → CHANGES-REQUIRED (1 finding), fixed
+
+Round 3 confirmed the invalid-proof griefing fix, the phase-transition handling, the script signer
+fix and the immutable `oracleMaxAge` reasoning as closed, and found the outbound ERC20 check was
+still only half a check.
+
+| Sev | Finding | Resolution |
+|---|---|---|
+| medium | `_pushFunds` validated only the **recipient's** gain. A surcharge token can credit the recipient exactly `amount` while debiting the market `amount + fee` — the claim finalises, looks correct to the claimant, and quietly under-collateralises everyone behind them. | `_pushFunds` now checks **both** sides: the recipient must gain exactly `amount` *and* the market must lose exactly `amount`. Regression: `test_senderSurchargeAssetIsRejectedOnPayout`, with a `senderSurchargeBps` mode added to `MockERC20`. |
+
+Operational note carried into the runbook: `Genesis.s.sol` assumes an EOA owner. When the owner is a
+multisig or Timelock, `acceptOwnership()` and `genesisStart()` must be executed through governance
+rather than the script.

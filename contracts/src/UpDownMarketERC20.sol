@@ -66,15 +66,19 @@ contract UpDownMarketERC20 is UpDownMarketBase {
         if (asset.balanceOf(address(this)) - balanceBefore != amount) revert UnsupportedAsset();
     }
 
-    /// @dev Also checks the *outbound* delta. A token that charges a fee only when this contract
-    ///      sends would otherwise let the market mark a claim paid in full while the recipient got
-    ///      less. Such a market is broken by construction, so it fails on its very first payout
-    ///      rather than silently shortchanging every user; the settlement asset is immutable and the
-    ///      deploy script pins it to a known-conforming token.
+    /// @dev Checks BOTH sides of the outbound transfer: the recipient must gain exactly `amount`
+    ///      AND this contract must lose exactly `amount`. Checking only the recipient would let a
+    ///      surcharge token credit `amount` while debiting `amount + fee` here — the claim would
+    ///      finalise, look correct to the claimant, and quietly under-collateralise everyone behind
+    ///      them. Such a market is broken by construction, so it fails on its very first payout
+    ///      rather than draining slowly; the settlement asset is immutable and the deploy script
+    ///      pins mainnet to a known-conforming token.
     function _pushFunds(address to, uint256 amount) internal override {
-        uint256 balanceBefore = asset.balanceOf(to);
+        uint256 marketBefore = asset.balanceOf(address(this));
+        uint256 toBefore = asset.balanceOf(to);
         asset.safeTransfer(to, amount);
-        if (asset.balanceOf(to) - balanceBefore != amount) revert UnsupportedAsset();
+        if (asset.balanceOf(to) - toBefore != amount) revert UnsupportedAsset();
+        if (marketBefore - asset.balanceOf(address(this)) != amount) revert UnsupportedAsset();
     }
 
     /// @inheritdoc UpDownMarketBase
