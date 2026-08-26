@@ -386,35 +386,17 @@ Deployed, Sourcify-verified, keeper running, and proven end to end on chain on 2
 
 | Contract | Address |
 |---|---|
-| `UpDownRegistry` | `0x78F4E7a5A6409fbec02f69616A1d41E83AB32D4B` |
-| BTC/USD 5m (USDT) | `0x148F483608150Ad199EA8E3E80C25316bfC425fa` |
-| BTC/USD 1h (USDT) | `0xc6B51FA73317cD549BBd69271539089050197f6d` |
-| BNB/USD 5m (native BNB) | `0xb3b8A907168dE8383353CB3aC18e40E227153751` |
-| `TestUSDT` (faucet, 18 dp) | `0xBbDFfdf7c1Cf91e21AB42149D3130a6439f89195` |
-| `RelayAggregator` BTC/USD | `0x1dFFe321462aEBb1aB829Dcd78C04903278E0739` |
-| `RelayAggregator` BNB/USD | `0xf471390e8C840F59607f30b2e3dA25691482Fd39` |
+| `UpDownRegistry` | `0x39a9132D200840da4242F9bb4BA744F1b0a7406c` |
+| BTC/USD 5m (USDT) | `0x3db33f6B3170d5779C26f37f562a75AdF0FDDF96` |
+| BTC/USD 1h (USDT) | `0xB0b74EF66D284A365329dA6b3DDD8E6CD446FE71` |
+| BNB/USD 5m (native BNB) | `0x984E024D9C87c30685F91E327A863499B5d24Bad` |
+| `TestUSDT` (faucet, 18 dp) | `0xB8D249B4E7b24041a3A6722bEf53e2D68Eb25c03` |
+| `RelayAggregator` BTC/USD | `0x5EcacfA7D9e0B7cF6061Dd66642e937e6998f77d` |
+| `RelayAggregator` BNB/USD | `0xcB82aEF4CC9E8E2e173C83338AA74945b488FE20` |
 
 ### The first round, start to finish
 
-| | |
-|---|---|
-| Book | 100 USDT UP (bettor A) vs 300 USDT DOWN (bettor B) |
-| Odds quoted before lock | UP **3.9100×** · DOWN **1.3233×** (`odds()` = 39100 / 13233 bps) |
-| Strike (`lockPrice`) | **78 514.32** — Chainlink round id 2 at the boundary |
-| Settlement (`closePrice`) | **78 577.99** — Chainlink round id 3 at the next boundary |
-| Outcome | UP wins |
-| `rewardBaseAmount` / `rewardPoolAmount` | 100 / **391** USDT (`100 + 300 − 9`) |
-| Payout to A | **391 USDT** on a 100 stake — exactly the 3.91× quoted before the lock |
-| Loss to B | 300 USDT — never more than the stake |
-| Protocol fee | **9 USDT** = 3% of the 300 losing pool. Nothing taken from the winner's principal. |
-| Final balances | A 1291.0000 · B 700.0000 · market 9.0000 (treasury only) · `outstanding` 0 |
-
-Both 5-minute markets executed `kind: "on-time"` at every boundary. The BNB/USD market had no
-counterparty in its first round and was correctly voided `one-sided-book` — refundable in full, zero
-fee — which is exactly the behaviour the design promises when there is nobody to win from.
-
-The solvency invariant was checked live against the deployed contract mid-round:
-`balance = outstanding = 400 USDT`, `treasury = 0`, slack exactly 0.
+_Regenerating against the current deployment; the previous narrative described the stack this one replaced._
 
 ### Self-caught during the mainnet rehearsal
 

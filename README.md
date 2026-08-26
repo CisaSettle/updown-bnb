@@ -60,13 +60,13 @@ Three properties are worth knowing before reading any code:
 
 | Contract | Address |
 |---|---|
-| `UpDownRegistry` | [`0x78F4E7a5A6409fbec02f69616A1d41E83AB32D4B`](https://testnet.bscscan.com/address/0x78F4E7a5A6409fbec02f69616A1d41E83AB32D4B) |
-| BTC/USD 5m (USDT) | [`0x148F483608150Ad199EA8E3E80C25316bfC425fa`](https://testnet.bscscan.com/address/0x148F483608150Ad199EA8E3E80C25316bfC425fa) |
-| BTC/USD 1h (USDT) | [`0xc6B51FA73317cD549BBd69271539089050197f6d`](https://testnet.bscscan.com/address/0xc6B51FA73317cD549BBd69271539089050197f6d) |
-| BNB/USD 5m (native) | [`0xb3b8A907168dE8383353CB3aC18e40E227153751`](https://testnet.bscscan.com/address/0xb3b8A907168dE8383353CB3aC18e40E227153751) |
-| `TestUSDT` (faucet, 18 dec) | [`0xBbDFfdf7c1Cf91e21AB42149D3130a6439f89195`](https://testnet.bscscan.com/address/0xBbDFfdf7c1Cf91e21AB42149D3130a6439f89195) |
-| `RelayAggregator` BTC/USD | [`0x1dFFe321462aEBb1aB829Dcd78C04903278E0739`](https://testnet.bscscan.com/address/0x1dFFe321462aEBb1aB829Dcd78C04903278E0739) |
-| `RelayAggregator` BNB/USD | [`0xf471390e8C840F59607f30b2e3dA25691482Fd39`](https://testnet.bscscan.com/address/0xf471390e8C840F59607f30b2e3dA25691482Fd39) |
+| `UpDownRegistry` | [`0x39a9132D200840da4242F9bb4BA744F1b0a7406c`](https://testnet.bscscan.com/address/0x39a9132D200840da4242F9bb4BA744F1b0a7406c) |
+| BTC/USD 5m (USDT) | [`0x3db33f6B3170d5779C26f37f562a75AdF0FDDF96`](https://testnet.bscscan.com/address/0x3db33f6B3170d5779C26f37f562a75AdF0FDDF96) |
+| BTC/USD 1h (USDT) | [`0xB0b74EF66D284A365329dA6b3DDD8E6CD446FE71`](https://testnet.bscscan.com/address/0xB0b74EF66D284A365329dA6b3DDD8E6CD446FE71) |
+| BNB/USD 5m (native) | [`0x984E024D9C87c30685F91E327A863499B5d24Bad`](https://testnet.bscscan.com/address/0x984E024D9C87c30685F91E327A863499B5d24Bad) |
+| `TestUSDT` (faucet, 18 dec) | [`0xB8D249B4E7b24041a3A6722bEf53e2D68Eb25c03`](https://testnet.bscscan.com/address/0xB8D249B4E7b24041a3A6722bEf53e2D68Eb25c03) |
+| `RelayAggregator` BTC/USD | [`0x5EcacfA7D9e0B7cF6061Dd66642e937e6998f77d`](https://testnet.bscscan.com/address/0x5EcacfA7D9e0B7cF6061Dd66642e937e6998f77d) |
+| `RelayAggregator` BNB/USD | [`0xcB82aEF4CC9E8E2e173C83338AA74945b488FE20`](https://testnet.bscscan.com/address/0xcB82aEF4CC9E8E2e173C83338AA74945b488FE20) |
 
 All seven are source-verified on [Sourcify](https://sourcify.dev) (`--verifier sourcify`, no API key
 needed). Testnet substitutes keeper-fed `RelayAggregator` feeds for Chainlink because BSC testnet's
