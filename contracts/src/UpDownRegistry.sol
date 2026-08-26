@@ -27,6 +27,7 @@ contract UpDownRegistry is Ownable2Step {
     error AlreadyRegistered();
     error UnknownMarket();
     error ZeroAddress();
+    error OwnershipCannotBeRenounced();
 
     constructor(address initialOwner) Ownable(initialOwner) {
         if (initialOwner == address(0)) revert ZeroAddress();
@@ -51,6 +52,11 @@ contract UpDownRegistry is Ownable2Step {
         if (id >= _markets.length) revert UnknownMarket();
         _markets[id].enabled = enabled;
         emit MarketEnabled(id, enabled);
+    }
+
+    /// @notice Disabled: a registry with no owner can never list a new market or retire a bad one.
+    function renounceOwnership() public pure override {
+        revert OwnershipCannotBeRenounced();
     }
 
     function marketCount() external view returns (uint256) {

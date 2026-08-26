@@ -198,6 +198,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         UpDownMarketBase.Round memory r2 = _round(2);
         vm.warp(r2.lockTs);
         uint80 honest = feed.setAnswer(81_000e8); // UP wins; bob is about to lose
+        vm.warp(uint256(r2.lockTs) + 1);
 
         // bob tries every shape of bad proof
         vm.startPrank(bob);
@@ -229,7 +230,8 @@ contract UpDownMarketTest is UpDownBaseTest {
 
         UpDownMarketBase.Round memory r2 = _round(2);
         vm.warp(r2.lockTs);
-        uint80 rid = feed.setAnswerAt(81_000e8, block.timestamp - MAX_AGE - 1); // too old at the boundary
+        uint80 rid = feed.setAnswerAt(81_000e8, uint256(r2.lockTs) - MAX_AGE - 1); // too old at the boundary
+        vm.warp(uint256(r2.lockTs) + 1);
 
         vm.prank(keeper);
         vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
@@ -253,7 +255,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         _advance(P0);
 
         UpDownMarketBase.Round memory r2 = _round(2);
-        vm.warp(r2.lockTs);
+        vm.warp(uint256(r2.lockTs) + 1);
         uint80 rid = feed.setAnswer(81_000e8);
         feed.setShouldRevert(true);
 
@@ -280,6 +282,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         uint80 early = feed.setAnswer(70_000e8); // an earlier print, still before the boundary
         vm.warp(r2.lockTs);
         uint80 real = feed.setAnswer(90_000e8); // the real boundary print
+        vm.warp(uint256(r2.lockTs) + 1);
         vm.prank(keeper);
         vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
         market.executeRound(early);
@@ -327,11 +330,46 @@ contract UpDownMarketTest is UpDownBaseTest {
         feed.startNewPhase();
         vm.warp(uint256(r2.lockTs) - 5);
         feed.setAnswer(88_000e8); // newer, and still at or before the boundary
-        vm.warp(r2.lockTs);
+        vm.warp(uint256(r2.lockTs) + 1);
 
         vm.prank(keeper);
         vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
         market.executeRound(oldPhaseId);
+    }
+
+    /// @notice Regression: the boundary second itself must be closed.
+    ///
+    ///         `executeRound` used to admit `block.timestamp == boundaryTs`, but the set of prints
+    ///         at or before a boundary is only frozen once the clock is strictly past it. Inside
+    ///         that one second a fresh print with `updatedAt == boundaryTs` still qualifies, so
+    ///         which price settled the round came down to transaction ordering within the block —
+    ///         precisely the discretion the whole design exists to remove.
+    function test_boundarySecondItselfIsClosed() public {
+        _betUp(alice, 1_000e18);
+        _betDown(bob, 1_000e18);
+
+        UpDownMarketBase.Round memory r = _round(1);
+        vm.warp(uint256(r.lockTs) - 30);
+        uint80 early = feed.setAnswer(79_000e8);
+
+        // the boundary second itself: a competing print can still land here with updatedAt == lockTs
+        vm.warp(r.lockTs);
+        vm.prank(keeper);
+        vm.expectRevert(UpDownMarketBase.TooEarly.selector);
+        market.executeRound(early);
+
+        // and it does land, becoming the last print at or before the boundary
+        uint80 onBoundary = feed.setAnswer(78_000e8);
+
+        // one second later the set is frozen, and only the true last print can settle
+        vm.warp(uint256(r.lockTs) + 1);
+        vm.prank(keeper);
+        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        market.executeRound(early);
+
+        vm.prank(keeper);
+        market.executeRound(onBoundary);
+        assertEq(_round(1).lockPrice, 78_000e8, "must settle on the last print at or before the boundary");
     }
 
     /// @notice The settlement price is a pure function of the boundary, so *when* the crank is
@@ -363,8 +401,10 @@ contract UpDownMarketTest is UpDownBaseTest {
         _betDown(bob, 100e18);
         _advance(P0);
 
-        vm.warp(_round(2).lockTs);
-        uint80 rid = feed.setAnswerAt(-1, block.timestamp);
+        UpDownMarketBase.Round memory r2 = _round(2);
+        vm.warp(r2.lockTs);
+        uint80 rid = feed.setAnswerAt(-1, r2.lockTs);
+        vm.warp(uint256(r2.lockTs) + 1);
         vm.prank(keeper);
         vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
         market.executeRound(rid);
@@ -402,7 +442,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         vm.expectRevert(UpDownMarketBase.TooEarly.selector);
         market.executeRound(rid);
 
-        vm.warp(r.lockTs);
+        vm.warp(uint256(r.lockTs) + 1);
         vm.prank(carol); // no role of any kind
         market.executeRound(rid);
         assertTrue(_round(1).locked, "anyone may lock a round at its boundary");
@@ -569,7 +609,8 @@ contract UpDownMarketTest is UpDownBaseTest {
 
         UpDownMarketBase.Round memory r2 = _round(2);
         vm.warp(r2.lockTs);
-        uint80 rid = feed.setAnswerAt(99_000e8, block.timestamp - uint256(MAX_AGE) - 1);
+        uint80 rid = feed.setAnswerAt(99_000e8, uint256(r2.lockTs) - uint256(MAX_AGE) - 1);
+        vm.warp(uint256(r2.lockTs) + 1);
         vm.prank(keeper);
         vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
         market.executeRound(rid);

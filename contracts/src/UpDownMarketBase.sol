@@ -23,9 +23,11 @@ import {IAggregatorV3} from "./IAggregatorV3.sol";
  * ── Deterministic settlement ────────────────────────────────────────────────────────────────
  * The price of a boundary is the **last Chainlink print at or before that boundary timestamp**,
  * not `latestRoundData()` at call time. The caller supplies the round id and the contract proves it
- * is the last qualifying one. Once a boundary has passed, that set of prints is frozen, so the
- * settlement price is a pure function of the boundary — nobody can influence it by choosing *when*
- * to call. That is what lets `executeRound` be fully permissionless: no address, including the
+ * is the last qualifying one. Settlement is only admitted once `block.timestamp` is *strictly past*
+ * the boundary, at which point no further print can qualify and that set is frozen — so the
+ * settlement price is a pure function of the boundary, and nobody can influence it by choosing when
+ * to call. Admitting the boundary second itself would leave the answer decided by transaction
+ * ordering inside that one block. That is what lets `executeRound` be fully permissionless: no address, including the
  * project's own keeper, holds a settlement option.
  *
  * ── Payout ──────────────────────────────────────────────────────────────────────────────────
@@ -60,7 +62,11 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
         // ── slot ──
         uint80 lockOracleId;
         uint80 closeOracleId;
-        uint32 oracleMaxAge; // snapshot: how stale the boundary print may be
+        // The `oracleMaxAge` in force when this round started. `oracleMaxAge` is immutable, so this
+        // always equals it — recorded for historical transparency, and asserted by
+        // `test_everyRoundRecordsTheImmutableOracleMaxAge` so that anyone who later makes the
+        // parameter mutable is forced to decide, deliberately, what settlement should read.
+        uint32 oracleMaxAge;
         // ── slot ──
         uint256 upAmount;
         uint256 downAmount;
@@ -180,6 +186,7 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     error TimestampOverflow();
     error UnsupportedAsset();
     error InvalidBoundaryProof();
+    error OwnershipCannotBeRenounced();
 
     // ─────────────────────────────────────────────────────────────────────────
     // Construction
@@ -345,7 +352,13 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
         uint256 cur = currentEpoch;
         Round storage lockR = _rounds[cur];
         uint256 boundaryTs = lockR.lockTs;
-        if (block.timestamp < boundaryTs) revert TooEarly();
+        // Strictly past the boundary, not merely at it. The set of prints at or before a boundary
+        // is only frozen once the clock has moved beyond that second: inside it, a fresh print
+        // timestamped exactly `boundaryTs` still qualifies, so which price settles the round would
+        // come down to transaction ordering within the block — the very discretion this design
+        // exists to remove. Costs nothing in practice; the keeper already fires a couple of
+        // seconds late.
+        if (block.timestamp <= boundaryTs) revert TooEarly();
 
         (bool priceOk, int256 price) = _priceAt(boundaryTs, boundaryRoundId);
 
@@ -712,6 +725,17 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
 
     function unpause() external onlyOwner {
         _unpause();
+    }
+
+    /**
+     * @notice Disabled. Ownership cannot be renounced.
+     * @dev Renouncing would strand `treasuryAmount` forever, make `pause()` and `setOracle()`
+     *      permanently unreachable, and — because `pause()` clears `genesisStarted` while
+     *      `genesisStart()` is `onlyOwner` — could leave a paused market unable to ever trade
+     *      again. Transfer ownership to a multisig or a Timelock instead.
+     */
+    function renounceOwnership() public pure override {
+        revert OwnershipCannotBeRenounced();
     }
 
     function claimTreasury(address to) external onlyOwner nonReentrant {

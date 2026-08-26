@@ -61,7 +61,10 @@ abstract contract UpDownBaseTest is Test {
         UpDownMarketBase.Round memory r = _round(market.currentEpoch());
         vm.warp(r.lockTs);
         roundId = feed.setAnswer(price);
-        if (delay != 0) vm.warp(uint256(r.lockTs) + delay);
+        // Never execute *at* the boundary: the contract only admits a strictly later block, because
+        // inside the boundary second a fresh print can still qualify. A real keeper fires a couple
+        // of seconds late for the same reason.
+        vm.warp(uint256(r.lockTs) + (delay == 0 ? 1 : delay));
         vm.prank(keeper);
         market.executeRound(roundId);
     }

@@ -65,6 +65,7 @@ contract UpDownMarketNativeTest is Test {
         UpDownMarketBase.Round memory r = market.getRound(market.currentEpoch());
         vm.warp(r.lockTs);
         uint80 rid = feed.setAnswer(price);
+        vm.warp(uint256(r.lockTs) + 1); // strictly past the boundary; see UpDownBase._advanceLate
         vm.prank(operator); // no privilege required; any account works
         market.executeRound(rid);
     }
