@@ -31,13 +31,19 @@ export const DEFAULT_RELAY_LEAD_MS = 20_000;
 
 /**
  * Least time a relay needs between dequeuing and the boundary for its print to have any chance of
- * landing at or before it: one BSC block. A print's `updatedAt` is the timestamp of the block it
- * lands in, so with less headroom than a block there is no block left for it to land in at or
- * before the boundary — the send is a wasted queue slot that only delays the relays behind it, and
- * is dropped loudly instead. Deliberately the *least* aggressive value that still drops the
- * hopeless: a relay that might yet make it is always sent.
+ * landing at or before it. A print's `updatedAt` is the timestamp of the block it lands in, so
+ * below this headroom there is no block left for it to land in at or before the boundary — the send
+ * is a wasted queue slot that only delays the relays behind it, and is dropped loudly instead.
+ *
+ * One BSC block (3s) was the theoretical floor and it was below anything this deployment has ever
+ * achieved: measured relay confirm latency, broadcast to receipt, was 5.35s at the very fastest
+ * (median ~7.1s, worst 17.2s) across both live runs. A relay reaching the front of the queue 3–5s
+ * before its boundary was therefore certain to mine after it — accepted by the deadline, broadcast,
+ * gas burnt, and the round voided with a 'relay published' line in the log. This is the fastest
+ * confirmation actually observed, rounded up: still the least aggressive value that drops only
+ * relays which cannot make it, but measured rather than theoretical.
  */
-export const RELAY_MIN_LANDING_MS = 3_000;
+export const RELAY_MIN_LANDING_MS = 6_000;
 
 export interface RoundTiming {
   /** Unix seconds. `0` means the round was never started. */
@@ -250,8 +256,12 @@ export function computeNextWake(nowMs: number, round: RoundTiming, options: Wake
 
 /**
  * Default margin kept between a backed-off relay retry and the boundary it must beat.
+ *
+ * Deliberately the same figure as `RELAY_MIN_LANDING_MS`: a retry scheduled inside the window where
+ * `relayCanStillLand` would refuse to broadcast is a retry that can only end in a dropped relay, so
+ * the two must not drift apart.
  */
-export const RELAY_DEADLINE_MARGIN_MS = 3_000;
+export const RELAY_DEADLINE_MARGIN_MS = RELAY_MIN_LANDING_MS;
 
 /**
  * Combine a wake's delay with the idle backoff, without ever letting the backoff push the wake past
@@ -279,11 +289,17 @@ export function applyCooldown(
 }
 
 /**
- * Given the chain's own clock, how long must we still wait before `block.timestamp >= lockTs`?
- * Returns 0 when the round is already lockable. Used as a hard guard right before sending.
+ * Given the chain's own clock, how long must we still wait before `executeRound` stops reverting
+ * `TooEarly`? Returns 0 when the round is already lockable. Used as a hard guard right before
+ * sending.
+ *
+ * The guard is `block.timestamp <= boundaryTs -> revert`, i.e. STRICTLY past the boundary, not
+ * merely at it: inside the boundary second a fresh print timestamped exactly `boundaryTs` still
+ * qualifies, so executing there would let transaction ordering decide which price settles the
+ * round. The earliest lockable second is therefore `lockTs + 1`.
  */
 export function secondsUntilLockable(chainNowSec: number, lockTs: number): number {
-  const delta = lockTs - chainNowSec;
+  const delta = lockTs + 1 - chainNowSec;
   return delta > 0 ? delta : 0;
 }
 

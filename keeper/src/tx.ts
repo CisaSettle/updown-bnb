@@ -90,6 +90,20 @@ export interface AttemptEvent {
   latencyMs: number;
 }
 
+/**
+ * Does this event mark the END of one send attempt?
+ *
+ * `sendWithRetry` fires `onAttempt` more than once per attempt: 'sent' when the transaction reaches
+ * the node, then 'mined'/'reverted'/'timeout'/'error'/'recovered' when that same attempt finishes,
+ * plus 'renonced' when the nonce is re-read inside the attempt that just failed. Counting every
+ * event therefore counts roughly twice the attempts — a metric named `..._attempts_total` that
+ * reads 2.0 per successful send makes any retry-pressure alert fire permanently. Exactly one event
+ * per attempt satisfies this predicate.
+ */
+export function completesAttempt(outcome: AttemptEvent['outcome']): boolean {
+  return outcome !== 'sent' && outcome !== 'renonced';
+}
+
 export interface SendResult<R extends MinimalReceipt> {
   receipt: R;
   hash: Hex;

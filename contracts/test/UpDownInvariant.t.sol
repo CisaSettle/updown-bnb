@@ -2,8 +2,9 @@
 pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
-import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
+import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
+import {UpDownMarketNative} from "../src/UpDownMarketNative.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 
@@ -12,10 +13,13 @@ import {MockERC20} from "./mocks/MockERC20.sol";
  *      cherry-picked and dead oracle rounds, claims, treasury withdrawals, pause cycles and — this
  *      is the part that matters — **admin parameter changes mid-flight**, which is exactly the
  *      shape of bug that a handler without them cannot reach.
+ *
+ *      The handler is asset-agnostic: only placing a bet and reading a balance differ between the
+ *      ERC20 and native markets, so those three operations are hooks and everything else — the
+ *      whole round engine, the claim logic, the admin churn — is driven identically for both.
  */
-contract UpDownHandler is Test {
-    UpDownMarketERC20 public market;
-    MockERC20 public usdt;
+abstract contract UpDownHandler is Test {
+    UpDownMarketBase public market;
     MockAggregator public feed;
     address public owner;
     address public treasury;
@@ -35,8 +39,7 @@ contract UpDownHandler is Test {
     int256 private _price;
 
     constructor(
-        UpDownMarketERC20 m,
-        MockERC20 t,
+        UpDownMarketBase m,
         MockAggregator f,
         address own,
         address tre,
@@ -44,12 +47,24 @@ contract UpDownHandler is Test {
         int256 p0
     ) {
         market = m;
-        usdt = t;
         feed = f;
         owner = own;
         treasury = tre;
         actors = acts;
         _price = p0;
+    }
+
+    // ── asset hooks ──────────────────────────────────────────────────────────
+
+    /// @dev Place the bet as `a` and report whether it landed. `vm.prank` moves the value from the
+    ///      pranked account, so a native bet debits the actor exactly as an ERC20 pull would.
+    function _tryBetUp(address a, uint256 epoch, uint256 amount) internal virtual returns (bool);
+    function _tryBetDown(address a, uint256 epoch, uint256 amount) internal virtual returns (bool);
+    function _balanceOf(address a) internal view virtual returns (uint256);
+
+    /// @notice Settlement-asset balance of the market, for the invariants.
+    function marketBalance() external view returns (uint256) {
+        return _balanceOf(address(market));
     }
 
     function _actor(uint256 seed) internal view returns (address) {
@@ -70,22 +85,20 @@ contract UpDownHandler is Test {
         address a = _actor(actorSeed);
         amount = bound(amount, market.minBetAmount(), market.maxBetAmount());
         uint256 e = market.currentEpoch();
-        vm.prank(a);
-        try market.betUp(e, amount) {
+        if (_tryBetUp(a, e, amount)) {
             ghostIn += amount;
             bets++;
-        } catch {}
+        }
     }
 
     function betDown(uint256 actorSeed, uint256 amount) external {
         address a = _actor(actorSeed);
         amount = bound(amount, market.minBetAmount(), market.maxBetAmount());
         uint256 e = market.currentEpoch();
-        vm.prank(a);
-        try market.betDown(e, amount) {
+        if (_tryBetDown(a, e, amount)) {
             ghostIn += amount;
             bets++;
-        } catch {}
+        }
     }
 
     // ── turning the crank ────────────────────────────────────────────────────
@@ -152,10 +165,10 @@ contract UpDownHandler is Test {
 
         uint256[] memory arr = new uint256[](1);
         arr[0] = e;
-        uint256 before = usdt.balanceOf(a);
+        uint256 before = _balanceOf(a);
         vm.prank(a);
         try market.claim(arr) {
-            uint256 got = usdt.balanceOf(a) - before;
+            uint256 got = _balanceOf(a) - before;
             ghostOut += got;
             claims++;
             if (promised && got != quoted) {
@@ -171,10 +184,10 @@ contract UpDownHandler is Test {
     }
 
     function claimTreasury() external {
-        uint256 before = usdt.balanceOf(treasury);
+        uint256 before = _balanceOf(treasury);
         vm.prank(owner);
         try market.claimTreasury(treasury) {
-            ghostOut += usdt.balanceOf(treasury) - before;
+            ghostOut += _balanceOf(treasury) - before;
         } catch {}
     }
 
@@ -210,59 +223,151 @@ contract UpDownHandler is Test {
     }
 }
 
-contract UpDownInvariantTest is Test {
+contract UpDownErc20Handler is UpDownHandler {
+    MockERC20 public usdt;
+    UpDownMarketERC20 private _erc20;
+
+    constructor(
+        UpDownMarketERC20 m,
+        MockERC20 t,
+        MockAggregator f,
+        address own,
+        address tre,
+        address[] memory acts,
+        int256 p0
+    ) UpDownHandler(m, f, own, tre, acts, p0) {
+        usdt = t;
+        _erc20 = m;
+    }
+
+    function _tryBetUp(address a, uint256 epoch, uint256 amount) internal override returns (bool) {
+        vm.prank(a);
+        try _erc20.betUp(epoch, amount) {
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function _tryBetDown(address a, uint256 epoch, uint256 amount) internal override returns (bool) {
+        vm.prank(a);
+        try _erc20.betDown(epoch, amount) {
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function _balanceOf(address a) internal view override returns (uint256) {
+        return usdt.balanceOf(a);
+    }
+}
+
+contract UpDownNativeHandler is UpDownHandler {
+    UpDownMarketNative private _native;
+
+    constructor(
+        UpDownMarketNative m,
+        MockAggregator f,
+        address own,
+        address tre,
+        address[] memory acts,
+        int256 p0
+    ) UpDownHandler(m, f, own, tre, acts, p0) {
+        _native = m;
+    }
+
+    function _tryBetUp(address a, uint256 epoch, uint256 amount) internal override returns (bool) {
+        vm.prank(a);
+        try _native.betUp{value: amount}(epoch) {
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function _tryBetDown(address a, uint256 epoch, uint256 amount) internal override returns (bool) {
+        vm.prank(a);
+        try _native.betDown{value: amount}(epoch) {
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function _balanceOf(address a) internal view override returns (uint256) {
+        return a.balance;
+    }
+}
+
+/**
+ * @dev The invariants themselves, written once and instantiated against both concrete markets at
+ *      the bottom of this file. `invariant_neverUnderCollateralised` is the property the README
+ *      calls the one that matters most; before this it had only ever been evaluated against the
+ *      ERC20 market, never against the raw `call{value:}` payout path the live BNB market uses.
+ */
+abstract contract UpDownInvariantTests is Test {
     uint256 constant INTERVAL = 300;
     uint16 constant FEE_BPS = 300;
     uint16 constant BUFFER = 240;
     uint32 constant MAX_AGE = 150;
     int256 constant P0 = 80_000e8;
+    uint256 constant ACTOR_BALANCE = 1_000_000_000e18;
 
     address owner = makeAddr("owner");
     address treasury = makeAddr("treasury");
 
     MockAggregator feed;
-    MockERC20 usdt;
-    UpDownMarketERC20 market;
+    UpDownMarketBase market;
     UpDownHandler handler;
+    address[] internal actors;
 
     function setUp() public {
         vm.warp(1_800_000_000);
         feed = new MockAggregator(8, "BTC / USD", P0);
-        usdt = new MockERC20("Tether USD", "USDT", 18);
-        market = new UpDownMarketERC20(
-            owner, address(feed), address(usdt), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, 1e18, 5_000e18, 100_000e18
-        );
+        market = _deployMarket();
 
-        address[] memory actors = new address[](4);
         for (uint256 i; i < 4; ++i) {
             // safe: a small literal offset; the address fits uint160 by construction
             // forge-lint: disable-next-line(unsafe-typecast)
-            actors[i] = address(uint160(0xA11CE00 + i));
-            usdt.mint(actors[i], 10_000_000e18);
-            vm.prank(actors[i]);
-            usdt.approve(address(market), type(uint256).max);
+            address a = address(uint160(0xA11CE00 + i));
+            actors.push(a);
+            _fund(a);
         }
 
         vm.prank(owner);
         market.genesisStart();
         vm.warp(market.anchorTs());
 
-        handler = new UpDownHandler(market, usdt, feed, owner, treasury, actors, P0);
+        handler = _newHandler(actors);
         feed.setOwner(address(handler));
         targetContract(address(handler));
+    }
+
+    function _deployMarket() internal virtual returns (UpDownMarketBase);
+    function _fund(address actor) internal virtual;
+    function _newHandler(address[] memory acts) internal virtual returns (UpDownHandler);
+    function _assetLabel() internal pure virtual returns (string memory);
+
+    function _marketBalance() internal view returns (uint256) {
+        return handler.marketBalance();
     }
 
     /// @notice The market always holds at least what it owes. This is the whole safety story.
     function invariant_neverUnderCollateralised() public view {
         assertGe(
-            usdt.balanceOf(address(market)), market.outstanding() + market.treasuryAmount(), "under-collateralised"
+            _marketBalance(),
+            market.outstanding() + market.treasuryAmount(),
+            string.concat("under-collateralised (", _assetLabel(), ")")
         );
     }
 
     /// @notice No value is created or destroyed inside the market.
     function invariant_noLeakage() public view {
         assertEq(
-            usdt.balanceOf(address(market)), handler.ghostIn() - handler.ghostOut(), "balance diverged from flows"
+            _marketBalance(),
+            handler.ghostIn() - handler.ghostOut(),
+            string.concat("balance diverged from flows (", _assetLabel(), ")")
         );
     }
 
@@ -294,12 +399,24 @@ contract UpDownInvariantTest is Test {
         uint256 cur = market.currentEpoch();
         uint256 from = cur > 40 ? cur - 40 : 1;
         for (uint256 e = from; e <= cur; ++e) {
-            for (uint256 i; i < 4; ++i) {
-                // safe: same fixed actor addresses as setUp
-                // forge-lint: disable-next-line(unsafe-typecast)
-                address a = address(uint160(0xA11CE00 + i));
-                assertFalse(market.claimable(e, a) && market.refundable(e, a), "double-collectable round");
+            for (uint256 i; i < actors.length; ++i) {
+                assertFalse(
+                    market.claimable(e, actors[i]) && market.refundable(e, actors[i]),
+                    "double-collectable round"
+                );
             }
+        }
+    }
+
+    /// @notice Every round's `oracleMaxAge` snapshot equals the immutable it was taken from, for
+    ///         every round the campaign ever opened.
+    function invariant_roundsSnapshotTheImmutableOracleMaxAge() public view {
+        uint256 cur = market.currentEpoch();
+        uint256 from = cur > 40 ? cur - 40 : 1;
+        for (uint256 e = from; e <= cur; ++e) {
+            UpDownMarketBase.Round memory r = market.getRound(e);
+            if (r.startTs == 0) continue;
+            assertEq(r.oracleMaxAge, market.oracleMaxAge(), "round snapshot drifted from the immutable");
         }
     }
 
@@ -314,6 +431,7 @@ contract UpDownInvariantTest is Test {
         handler.betUp(0, 1_000e18);
         handler.betDown(1, 3_000e18);
         assertEq(handler.bets(), 2, "bets did not land");
+        assertGt(_marketBalance(), 0, "the market never actually took custody of anything");
 
         handler.execute(0, 1_500e8, 5); // lock
         handler.execute(1, 1_900e8, 5); // settle the locked round
@@ -329,5 +447,66 @@ contract UpDownInvariantTest is Test {
         handler.claimTreasury();
         handler.pauseCycle(1);
         assertFalse(handler.brokenPromise());
+        invariant_neverUnderCollateralised();
+        invariant_noLeakage();
+    }
+}
+
+contract UpDownInvariantErc20Test is UpDownInvariantTests {
+    MockERC20 usdt;
+    UpDownMarketERC20 erc20;
+
+    function _deployMarket() internal override returns (UpDownMarketBase) {
+        usdt = new MockERC20("Tether USD", "USDT", 18);
+        erc20 = new UpDownMarketERC20(
+            owner,
+            address(feed),
+            address(usdt),
+            INTERVAL,
+            FEE_BPS,
+            BUFFER,
+            MAX_AGE,
+            1e18,
+            5_000e18,
+            100_000e18
+        );
+        return erc20;
+    }
+
+    function _fund(address actor) internal override {
+        usdt.mint(actor, ACTOR_BALANCE);
+        vm.prank(actor);
+        usdt.approve(address(erc20), type(uint256).max);
+    }
+
+    function _newHandler(address[] memory acts) internal override returns (UpDownHandler) {
+        return new UpDownErc20Handler(erc20, usdt, feed, owner, treasury, acts, P0);
+    }
+
+    function _assetLabel() internal pure override returns (string memory) {
+        return "ERC20";
+    }
+}
+
+contract UpDownInvariantNativeTest is UpDownInvariantTests {
+    UpDownMarketNative nativeMarket;
+
+    function _deployMarket() internal override returns (UpDownMarketBase) {
+        nativeMarket = new UpDownMarketNative(
+            owner, address(feed), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, 1e18, 5_000e18, 100_000e18
+        );
+        return nativeMarket;
+    }
+
+    function _fund(address actor) internal override {
+        vm.deal(actor, ACTOR_BALANCE);
+    }
+
+    function _newHandler(address[] memory acts) internal override returns (UpDownHandler) {
+        return new UpDownNativeHandler(nativeMarket, feed, owner, treasury, acts, P0);
+    }
+
+    function _assetLabel() internal pure override returns (string memory) {
+        return "native";
     }
 }

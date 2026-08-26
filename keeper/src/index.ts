@@ -6,8 +6,8 @@
  * without abandoning an in-flight transaction.
  */
 
-import { loadConfig, redactedConfig, ConfigError } from './config.js';
-import { createLogger, registerSecret, scrubSecrets } from './logger.js';
+import { loadConfig, redactedConfig, configWarnings, ConfigError } from './config.js';
+import { createLogger, registerEnvSecrets, scrubSecrets } from './logger.js';
 import { Keeper, VERSION } from './keeper.js';
 import { startServer, type RunningServer } from './server.js';
 
@@ -16,9 +16,10 @@ async function main(): Promise<void> {
   // Register the credentials BEFORE anything can log. viem stamps the full RPC URL into
   // `error.message` on every transport failure and only strips basic-auth from it, so an API key
   // in the path or query would otherwise be printed verbatim on the first RPC hiccup.
-  registerSecret(process.env['RPC_URL']);
-  registerSecret(process.env['KEEPER_PRIVATE_KEY']);
-  registerSecret(process.env['PRICE_API']);
+  // The list lives in logger.ts (`SECRET_ENV_VARS`) so it can be tested: this file is the entrypoint
+  // and runs `main()` on import, so nothing here is reachable from a test. `PRICE_API_FALLBACKS` was
+  // missing from the registration for precisely that reason.
+  registerEnvSecrets();
 
   // A bootstrap logger, so configuration errors are still structured output.
   const bootLogger = createLogger({ level: 'info', base: { service: 'updown-keeper', version: VERSION } });
@@ -38,6 +39,9 @@ async function main(): Promise<void> {
     base: { service: 'updown-keeper', version: VERSION, chainId: config.chainId },
   });
   logger.info('starting', redactedConfig(config));
+  // Valid but incoherent settings — a balance floor the code can never warn at, say. Loud once, at
+  // boot, where an operator can still act on it.
+  for (const warning of configWarnings(config)) logger.warn('configuration warning', { detail: warning });
 
   const keeper = new Keeper({ config, logger });
 

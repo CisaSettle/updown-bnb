@@ -137,6 +137,7 @@ function MarketView({ market }: { market: Market }) {
         rows={history.rows}
         token={token}
         priceDecimals={oracle.decimals}
+        now={now}
         isLoading={history.isLoading}
       />
 

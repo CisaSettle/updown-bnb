@@ -6,8 +6,9 @@
 
 import type { Address } from 'viem';
 import { chainTimestamp, formatNative, weiToNative, type Clients } from './chain.js';
+import { ChainClock, CLOCK_DRIFT_WARN_SEC } from './clock.js';
 import { createClients } from './chain.js';
-import type { KeeperConfig } from './config.js';
+import { assumedTxCostWei, type KeeperConfig } from './config.js';
 import { balanceVerdict, evaluateHealth, type HealthReport, type MarketHealthInput } from './health.js';
 import type { MarketRef } from './deployments.js';
 import type { Logger } from './logger.js';
@@ -22,6 +23,15 @@ export const VERSION = '1.0.0';
 /** How often to check that every market still has a timer armed. */
 const WATCHDOG_INTERVAL_MS = 30_000;
 
+/**
+ * How often to re-measure the offset between the local and chain clocks.
+ *
+ * Measuring it once at boot missed the failure entirely: clocks step AFTER boot — NTP dies, a host
+ * suspends and resumes — and a local clock that has drifted past the relay lead makes every print
+ * late while the process looks busy and healthy.
+ */
+const CLOCK_SAMPLE_INTERVAL_MS = 30_000;
+
 /** How often the keeper looks at markets that have not bootstrapped yet. */
 const BOOTSTRAP_RETRY_TICK_MS = 5_000;
 
@@ -31,12 +41,6 @@ const BOOTSTRAP_RETRY_TICK_MS = 5_000;
  * nothing and means the market comes up on its own the moment it is deployed.
  */
 const BOOTSTRAP_RETRY_BACKOFF: BackoffOptions = { baseMs: 5_000, factor: 2, maxMs: 120_000, jitter: 0.2 };
-
-/**
- * Gas one keeper transaction is assumed to need when judging whether the account can still pay for
- * anything — the same fixed limit `market.ts` falls back to when estimation fails.
- */
-const ASSUMED_TX_GAS = 600_000n;
 
 /** Interval used for a market whose real interval has never been read. Only affects the report's
  *  stated budget; a market waiting on bootstrap is unhealthy regardless of it. */
@@ -66,12 +70,16 @@ export class Keeper {
   readonly #now: () => number;
   readonly #queue = new TxQueue();
   readonly #relays = new RelayCoordinator();
+  readonly #clock: ChainClock;
   readonly #priceSource: PriceSource;
   readonly #workers: MarketWorker[] = [];
   readonly #startedAtMs: number;
   #pending: PendingMarket[] = [];
 
   #gaugeTimer: NodeJS.Timeout | null = null;
+  #clockTimer: NodeJS.Timeout | null = null;
+  /** True while the drift is over the warning threshold, so recovery can be logged exactly once. */
+  #clockWarned = false;
   #balanceTimer: NodeJS.Timeout | null = null;
   #watchdogTimer: NodeJS.Timeout | null = null;
   #bootstrapTimer: NodeJS.Timeout | null = null;
@@ -88,6 +96,10 @@ export class Keeper {
     this.#now = deps.now ?? Date.now;
     this.#startedAtMs = this.#now();
     this.clients = deps.clients ?? createClients(deps.config);
+    this.#clock = new ChainClock({
+      readChainSeconds: () => chainTimestamp(this.clients.publicClient),
+      now: this.#now,
+    });
     this.#priceSource = new PriceSource({
       endpoint: deps.config.price.endpoint,
       fallbackEndpoints: deps.config.price.fallbackEndpoints,
@@ -100,6 +112,11 @@ export class Keeper {
 
   get workers(): readonly MarketWorker[] {
     return this.#workers;
+  }
+
+  /** The chain-vs-local clock offset the workers plan against. */
+  get clock(): ChainClock {
+    return this.#clock;
   }
 
   /**
@@ -145,6 +162,12 @@ export class Keeper {
     this.#watchdogTimer = setInterval(() => this.#kickStalledMarkets(), WATCHDOG_INTERVAL_MS);
     this.#watchdogTimer.unref?.();
 
+    // Keep measuring. A clock that steps after boot is exactly the case a boot-time check misses.
+    this.#clockTimer = setInterval(() => {
+      void this.#sampleClock();
+    }, CLOCK_SAMPLE_INTERVAL_MS);
+    this.#clockTimer.unref?.();
+
     this.#armBootstrapRetries();
 
     this.#refreshGauges();
@@ -162,6 +185,7 @@ export class Keeper {
     if (this.#gaugeTimer) clearInterval(this.#gaugeTimer);
     if (this.#balanceTimer) clearInterval(this.#balanceTimer);
     if (this.#watchdogTimer) clearInterval(this.#watchdogTimer);
+    if (this.#clockTimer) clearInterval(this.#clockTimer);
     if (this.#bootstrapTimer) clearInterval(this.#bootstrapTimer);
     this.metrics.setGauge(M.up, HELP[M.up] as string, 0);
     // Let any in-flight transaction finish so we never abandon a sent-but-unconfirmed tx.
@@ -182,6 +206,7 @@ export class Keeper {
     this.metrics.setGauge(M.balanceLow, HELP[M.balanceLow] as string, 0);
     this.metrics.setGauge(M.balanceUnfunded, HELP[M.balanceUnfunded] as string, 0);
     this.metrics.declare(M.uncaught, HELP[M.uncaught] as string, 'counter');
+    this.metrics.setGauge(M.clockDrift, HELP[M.clockDrift] as string, 0);
   }
 
   async #verifyChain(): Promise<void> {
@@ -192,16 +217,42 @@ export class Keeper {
           `The keeper refuses to run against the wrong network.`,
       );
     }
-    const chainNow = await chainTimestamp(this.clients.publicClient);
-    const drift = Math.abs(chainNow - Math.floor(this.#now() / 1000));
-    if (drift > 60) {
-      this.#logger.warn('local clock differs sharply from the chain clock; timers may fire late', {
-        chainNow,
-        localNow: Math.floor(this.#now() / 1000),
-        driftSec: drift,
+    await this.#sampleClock();
+    this.#logger.info('chain reachable', {
+      chainId: actual,
+      chainNow: this.#clock.nowSec(),
+      clockDriftSec: this.#clock.driftSec,
+    });
+  }
+
+  /**
+   * Re-measure the chain-vs-local clock offset and publish it.
+   *
+   * The workers plan every wake against this offset, so a drift that goes unmeasured is a drift
+   * that silently moves every relay and every execution relative to the boundary it has to beat.
+   * A failed sample keeps the previous offset: "we could not look" is never "the clocks agree".
+   */
+  async #sampleClock(): Promise<void> {
+    const drift = await this.#clock.sample();
+    if (drift === null) {
+      this.#logger.debug('clock sample failed; keeping the previous chain offset', {
+        driftSec: this.#clock.driftSec,
       });
+      return;
     }
-    this.#logger.info('chain reachable', { chainId: actual, chainNow, clockDriftSec: drift });
+    this.metrics.setGauge(M.clockDrift, HELP[M.clockDrift] as string, drift);
+    if (Math.abs(drift) > CLOCK_DRIFT_WARN_SEC) {
+      this.#clockWarned = true;
+      this.#logger.warn('local clock differs from the chain clock; wakes are being corrected for it', {
+        driftSec: drift,
+        chainNow: this.#clock.nowSec(),
+        localNow: Math.floor(this.#now() / 1000),
+        hint: 'fix NTP on this host; the correction keeps the keeper working but hides a real fault',
+      });
+    } else if (this.#clockWarned) {
+      this.#clockWarned = false;
+      this.#logger.info('local clock is back in step with the chain clock', { driftSec: drift });
+    }
   }
 
   #makeWorker(ref: MarketRef): MarketWorker {
@@ -214,6 +265,7 @@ export class Keeper {
       priceSource: this.#priceSource,
       relays: this.#relays,
       now: this.#now,
+      clock: this.#clock,
     });
   }
 
@@ -324,12 +376,11 @@ export class Keeper {
   // ───────────────────────────────────────────────────────────────────────────
 
   /**
-   * What one keeper transaction can cost: the assumed gas limit at the highest gas price the retry
-   * ladder is allowed to reach. Below this the keeper cannot settle a round on a busy chain, which
-   * is precisely when a round must not be missed.
+   * What one keeper transaction can cost. Defined in `config.ts`, beside the balance floor it has to
+   * stay coherent with, so the floor and the cost cannot drift apart unnoticed.
    */
   #txCostWei(): bigint {
-    return ASSUMED_TX_GAS * (this.config.tx.fixedGasPriceWei ?? this.config.tx.maxGasPriceWei);
+    return assumedTxCostWei(this.config);
   }
 
   async #pollBalance(): Promise<void> {
@@ -387,7 +438,7 @@ export class Keeper {
   // health
   // ───────────────────────────────────────────────────────────────────────────
 
-  healthInputs(): MarketHealthInput[] {
+  healthInputs(nowMs: number = this.#now()): MarketHealthInput[] {
     const inputs: MarketHealthInput[] = this.#workers.map((worker) => ({
       name: worker.name,
       intervalSec: worker.intervalSec,
@@ -396,6 +447,9 @@ export class Keeper {
       active: worker.active,
       observed: worker.observed,
       degraded: worker.degradedReason,
+      // Executing on time is not the same as settling anything. Without this, a market that voids
+      // 100% of its rounds reports ok.
+      settlement: worker.settlementStats(nowMs),
     }));
     // Markets that have not come up yet are part of the keeper's responsibility, so they are part
     // of its health. Leaving them out is what lets /healthz report 200 while a live market voids.
@@ -440,7 +494,7 @@ export class Keeper {
       );
     }
     return evaluateHealth(
-      this.healthInputs(),
+      this.healthInputs(nowMs),
       nowMs,
       this.#startedAtMs,
       warnings,

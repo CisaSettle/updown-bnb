@@ -100,6 +100,15 @@ export class MetricsRegistry {
   }
 }
 
+/**
+ * Value of `updown_keeper_seconds_since_last_execution` for a market this keeper has never executed.
+ *
+ * A negative sentinel rather than an age, because there is no age: exporting `now - bootTime` there
+ * makes a market that was bootstrapped a moment ago and one that has been stalled for hours read
+ * identically, and every `> 2 * interval` alert on the series is then measuring process uptime.
+ */
+export const NEVER_EXECUTED = -1;
+
 /** Metric names, in one place so the dashboard and the code cannot drift. */
 export const M = {
   up: 'updown_keeper_up',
@@ -110,6 +119,9 @@ export const M = {
   txAttempts: 'updown_keeper_tx_attempts_total',
   txGasUsed: 'updown_keeper_gas_used_total',
   voided: 'updown_keeper_rounds_voided_total',
+  recentRounds: 'updown_keeper_recent_rounds_completed',
+  recentVoidRatio: 'updown_keeper_recent_void_ratio',
+  recentFaultVoidRatio: 'updown_keeper_recent_fault_void_ratio',
   secondsSinceExecution: 'updown_keeper_seconds_since_last_execution',
   lastExecutionLatency: 'updown_keeper_last_execution_latency_ms',
   currentEpoch: 'updown_keeper_current_epoch',
@@ -121,6 +133,7 @@ export const M = {
   balanceUnfunded: 'updown_keeper_balance_unfunded',
   priceFetches: 'updown_keeper_price_fetches_total',
   uncaught: 'updown_keeper_uncaught_errors_total',
+  clockDrift: 'updown_keeper_clock_drift_seconds',
   healthy: 'updown_keeper_healthy',
 } as const;
 
@@ -130,10 +143,17 @@ export const HELP: Readonly<Record<string, string>> = Object.freeze({
   [M.executions]: 'Successful executeRound() transactions, by market.',
   [M.failures]: 'Failed keeper operations, by market and kind.',
   [M.relays]: 'Successful relay(price) transactions to a testnet RelayAggregator, by market.',
-  [M.txAttempts]: 'Transaction send attempts including retries, by market and operation.',
+  [M.txAttempts]: 'Transaction send attempts including gas-bumped retries, by market and operation. One per attempt.',
   [M.txGasUsed]: 'Total gas used by keeper transactions, by market and operation.',
   [M.voided]: 'Rounds observed as voided in a keeper-sent executeRound() receipt, by market and reason.',
-  [M.secondsSinceExecution]: 'Seconds since the last successful executeRound(), by market.',
+  [M.recentRounds]:
+    'Rounds this keeper saw complete in the recent-settlement window (12 rounds\' worth of time), by market. The sample size behind the void ratios; gate any ratio alert on it.',
+  [M.recentVoidRatio]:
+    'Share (0-1) of recently completed rounds that voided for ANY reason, by market. A one-sided book voids and that is correct behaviour, so this one is information, not an alert.',
+  [M.recentFaultVoidRatio]:
+    'Share (0-1) of recently completed rounds that voided for a reason the KEEPER is answerable for (no usable boundary print, never locked, settlement window elapsed), by market. Above 0.5 with a sample of 4+ fails /healthz.',
+  [M.secondsSinceExecution]:
+    'Seconds since the last successful executeRound(), by market. -1 when this keeper has not executed the market at all yet.',
   [M.lastExecutionLatency]: 'Wall-clock milliseconds of the most recent execution tick, by market.',
   [M.currentEpoch]: 'The epoch currently accepting bets, by market.',
   [M.marketActive]: '1 when the market is unpaused and genesis-started, else 0.',
@@ -144,5 +164,7 @@ export const HELP: Readonly<Record<string, string>> = Object.freeze({
   [M.balanceUnfunded]: '1 when the keeper cannot pay for a settlement transaction at all, else 0. Fails /healthz.',
   [M.priceFetches]: 'Spot price fetches, by symbol and outcome.',
   [M.uncaught]: 'Uncaught exceptions and unhandled rejections swallowed to keep the keeper alive.',
+  [M.clockDrift]:
+    'Chain clock minus local clock, in seconds, re-sampled every 30s. Positive means this host is behind the chain. Wakes are corrected for it; a persistent non-zero value is a broken host clock.',
   [M.healthy]: '1 when every supervised market is within its execution budget, else 0.',
 });

@@ -2,13 +2,23 @@
 pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
-import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
+import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
+import {UpDownMarketNative} from "../src/UpDownMarketNative.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 
-/// @dev Shared fixture: a 5-minute BTC/USD market settled in an 18-decimal mock USDT.
-abstract contract UpDownBaseTest is Test {
+/**
+ * @dev Shared fixture: a 5-minute BTC/USD market on an 8-decimal feed, **parameterised over the
+ *      settlement asset** so one suite body can be run against both concrete markets. The live BNB
+ *      market pays out through a raw `call{value:}` rather than an ERC20 transfer, so a property
+ *      only ever evaluated against `UpDownMarketERC20` has never been evaluated against the code
+ *      path that actually moves BNB.
+ *
+ *      Everything that is not asset plumbing lives here. The two fixtures below supply only the
+ *      handful of hooks that genuinely differ; deriving suites never mention an asset type.
+ */
+abstract contract UpDownFixture is Test {
     uint256 internal constant INTERVAL = 300;
     uint16 internal constant FEE_BPS = 300;
     uint16 internal constant BUFFER = 240;
@@ -16,6 +26,9 @@ abstract contract UpDownBaseTest is Test {
     uint256 internal constant MIN_BET = 1e18;
     uint256 internal constant MAX_BET = 5_000e18;
     uint256 internal constant MAX_SIDE = 100_000e18;
+    /// @dev Opening balance handed to every actor, in the settlement asset's own units. BSC USDT
+    ///      and BNB are both 18 decimals, so one figure serves both markets.
+    uint256 internal constant START_BALANCE = 1_000_000e18;
     int256 internal constant P0 = 80_000e8;
 
     address internal owner = makeAddr("owner");
@@ -28,26 +41,30 @@ abstract contract UpDownBaseTest is Test {
     address internal carol = makeAddr("carol");
 
     MockAggregator internal feed;
-    MockERC20 internal usdt;
-    UpDownMarketERC20 internal market;
+    UpDownMarketBase internal market;
 
     function setUp() public virtual {
         vm.warp(1_800_000_000);
         feed = new MockAggregator(8, "BTC / USD", P0);
-        usdt = new MockERC20("Tether USD", "USDT", 18);
-        market = new UpDownMarketERC20(
-            owner, address(feed), address(usdt), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
-        );
+        market = _deployMarket();
+        address[3] memory users = [alice, bob, carol];
         for (uint256 i; i < 3; ++i) {
-            address u = [alice, bob, carol][i];
-            usdt.mint(u, 1_000_000e18);
-            vm.prank(u);
-            usdt.approve(address(market), type(uint256).max);
+            _fund(users[i]);
         }
         vm.prank(owner);
         market.genesisStart();
         vm.warp(market.anchorTs()); // betting on epoch 1 is now open
     }
+
+    // ── asset plumbing: the only thing that differs between the two markets ──
+
+    function _deployMarket() internal virtual returns (UpDownMarketBase);
+    function _fund(address user) internal virtual;
+    function _betUp(address who, uint256 amount) internal virtual;
+    function _betDown(address who, uint256 amount) internal virtual;
+    function _balance(address who) internal view virtual returns (uint256);
+    /// @dev Names the settlement asset, so a shared assertion says which market failed.
+    function _assetLabel() internal pure virtual returns (string memory);
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
@@ -73,18 +90,6 @@ abstract contract UpDownBaseTest is Test {
         return _advanceLate(price, 0);
     }
 
-    function _betUp(address who, uint256 amount) internal {
-        uint256 e = market.currentEpoch(); // read before pranking: a staticcall consumes the prank
-        vm.prank(who);
-        market.betUp(e, amount);
-    }
-
-    function _betDown(address who, uint256 amount) internal {
-        uint256 e = market.currentEpoch();
-        vm.prank(who);
-        market.betDown(e, amount);
-    }
-
     function _claim(address who, uint256 epoch) internal {
         uint256[] memory e = new uint256[](1);
         e[0] = epoch;
@@ -95,9 +100,100 @@ abstract contract UpDownBaseTest is Test {
     /// @dev The core solvency guarantee: the contract always holds at least what it owes.
     function _assertSolvent() internal view {
         assertGe(
-            usdt.balanceOf(address(market)),
+            _balance(address(market)),
             market.outstanding() + market.treasuryAmount(),
-            "market is under-collateralised"
+            string.concat("market is under-collateralised (", _assetLabel(), ")")
         );
     }
 }
+
+/// @dev The ERC20 half of the fixture: an 18-decimal mock USDT, matching BSC-USDT.
+abstract contract UpDownErc20Fixture is UpDownFixture {
+    MockERC20 internal usdt;
+    /// @dev The same contract as `market`, typed so `betUp`/`betDown` are reachable.
+    UpDownMarketERC20 internal erc20;
+
+    function _deployMarket() internal override returns (UpDownMarketBase) {
+        usdt = new MockERC20("Tether USD", "USDT", 18);
+        erc20 = new UpDownMarketERC20(
+            owner,
+            address(feed),
+            address(usdt),
+            INTERVAL,
+            FEE_BPS,
+            BUFFER,
+            MAX_AGE,
+            MIN_BET,
+            MAX_BET,
+            MAX_SIDE
+        );
+        return erc20;
+    }
+
+    function _fund(address user) internal override {
+        usdt.mint(user, START_BALANCE);
+        vm.prank(user);
+        usdt.approve(address(erc20), type(uint256).max);
+    }
+
+    function _betUp(address who, uint256 amount) internal override {
+        uint256 e = market.currentEpoch(); // read before pranking: a staticcall consumes the prank
+        vm.prank(who);
+        erc20.betUp(e, amount);
+    }
+
+    function _betDown(address who, uint256 amount) internal override {
+        uint256 e = market.currentEpoch();
+        vm.prank(who);
+        erc20.betDown(e, amount);
+    }
+
+    function _balance(address who) internal view override returns (uint256) {
+        return usdt.balanceOf(who);
+    }
+
+    function _assetLabel() internal pure override returns (string memory) {
+        return "ERC20";
+    }
+}
+
+/// @dev The native half of the fixture. `vm.prank` moves the value from the pranked account, so
+///      per-actor BNB balances mean exactly what they mean in the ERC20 fixture.
+abstract contract UpDownNativeFixture is UpDownFixture {
+    /// @dev The same contract as `market`, typed so the payable `betUp`/`betDown` are reachable.
+    UpDownMarketNative internal nativeMarket;
+
+    function _deployMarket() internal override returns (UpDownMarketBase) {
+        nativeMarket = new UpDownMarketNative(
+            owner, address(feed), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
+        );
+        return nativeMarket;
+    }
+
+    function _fund(address user) internal override {
+        vm.deal(user, START_BALANCE);
+    }
+
+    function _betUp(address who, uint256 amount) internal override {
+        uint256 e = market.currentEpoch();
+        vm.prank(who);
+        nativeMarket.betUp{value: amount}(e);
+    }
+
+    function _betDown(address who, uint256 amount) internal override {
+        uint256 e = market.currentEpoch();
+        vm.prank(who);
+        nativeMarket.betDown{value: amount}(e);
+    }
+
+    function _balance(address who) internal view override returns (uint256) {
+        return who.balance;
+    }
+
+    function _assetLabel() internal pure override returns (string memory) {
+        return "native";
+    }
+}
+
+/// @dev The ERC20 fixture under its historical name, for the suites that are ERC20-specific.
+abstract contract UpDownBaseTest is UpDownErc20Fixture {}

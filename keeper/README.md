@@ -56,8 +56,23 @@ block time and clock skew — the whole budget, because that is what `_priceAt` 
 aged less than `oracleMaxAge` at the boundary is exactly as valid as a fresh one. That clamp is also
 the ceiling on how many feeds one key can serve: 150 s of budget at 20 s a relay is seven feeds, and
 the keeper says so in the log when a boundary is oversubscribed. A relay that reaches the front of
-the queue too late to land is dropped with an error rather than broadcast to arrive after the
-boundary and hold up the relays behind it.
+the queue with less than 6 s to the boundary is dropped with an error rather than broadcast to
+arrive after it and hold up the relays behind it — 6 s because the fastest relay confirmation ever
+measured on this deployment took 5.35 s, so anything tighter is certain to mine late. That deadline
+is taken **twice**, once at the front of the queue and once immediately before the transaction goes
+out (`checkedAt` in the log says which): everything in between costs chain time, and the price quote
+alone can cost `PRICE_TIMEOUT_MS` *per endpoint* — the primary hanging and a fallback answering burns
+4–8 s between "there is still time" and the send, which is more than the whole headroom. A relay that
+confirms anyway is checked against the boundary it was published for: its block timestamp is what
+`_priceAt` reads as `updatedAt`, and one that landed late is reported as the failure it is
+(`failures_total{kind="relay-late"}`) instead of logged as a success followed by an unexplained
+void.
+
+Every wake is planned against the **chain's** clock, not the host's. The offset between the two is
+re-sampled every 30 s and exported as `updown_keeper_clock_drift_seconds`: a container clock that
+steps after boot (NTP dies, a host suspends) would otherwise move every relay and every execution
+relative to the boundary it has to beat, and the boot-time check that used to be the only one
+cannot see that happen.
 
 At most one relay transaction is ever sent per (feed, boundary): markets sharing a feed **claim** the
 pair before queueing, not after, so two of them can never both spend a queue slot that only one relay
@@ -125,7 +140,7 @@ Only the first three are required.
 | `GAS_LIMIT_PADDING_PERCENT` | `25` | Padding on the estimated gas limit. |
 | `BACKOFF_BASE_MS` / `BACKOFF_FACTOR` / `BACKOFF_MAX_MS` / `BACKOFF_JITTER` | `750` / `2` / `15000` / `0.2` | Retry backoff ladder. |
 | `HEALTH_INTERVALS` | `2` | Intervals a market may miss before `/healthz` fails. |
-| `MIN_BALANCE_BNB` | `0.05` | Warn and flag below this balance. It can only ever make the keeper unhealthy **earlier**: a balance that cannot fund one transaction is unfunded however low this is set. |
+| `MIN_BALANCE_BNB` | `0.05` | Warn and flag below this balance. It can only ever make the keeper unhealthy **earlier**: a balance that cannot fund one transaction (600k gas at `MAX_GAS_PRICE_GWEI`, `0.03` BNB at the defaults) is unfunded however low this is set — so a floor *below* that cost can never warn at all, and the keeper says so at boot. |
 | `BALANCE_POLL_MS` | `60000` | Balance poll interval. |
 | `STRICT_RELAY_UPDATER` | `false` | `true` refuses to boot if a relay feed would reject this key. |
 | `EXIT_ON_TOTAL_BOOTSTRAP_FAILURE` | `false` | What to do when **every** market fails to bootstrap. `false` stays up, reports `/healthz` unhealthy and keeps retrying; `true` exits `1` for a supervisor to restart. |
@@ -179,7 +194,7 @@ journalctl -u updown-keeper -f -o cat | jq 'select(.market=="btcUsd5m")'
 | `ok` | yes | Executed within `HEALTH_INTERVALS × interval`. |
 | `inactive` | yes | Paused, or `genesisStart()` not called. The keeper is working; the market is closed. |
 | `stale` | no | Active, but no execution inside the budget. |
-| `degraded` | no | Executing on time and *structurally unable to settle correctly* — today, the keeper key is not the relay feed's `updater`, so every `relay()` reverts and every round voids into refunds. The execution budget alone reports this green, which is exactly why it is called out. |
+| `degraded` | no | Executing on time and *not actually settling anything*. Two cases: the keeper key is not the relay feed's `updater`, so every `relay()` reverts; or more than half of the rounds it has completed recently (minimum sample 4, window 12 rounds) voided for a reason it is answerable for — no usable boundary print, never locked, settlement window elapsed. The execution budget alone reports both green, which is exactly why they are called out. A `tie` or a `one-sided-book` void is the market working as designed and never counts. |
 | `unknown` | no | The market's state has never been read successfully, or it never bootstrapped at all. Silence about a market is a keeper failure, not a market state. |
 
 A market that fails to bootstrap is **not** dropped: it stays in this list as `unknown` with the
@@ -207,19 +222,37 @@ transaction the account is unfunded whatever it is set to.
 | `updown_keeper_tx_attempts_total` | counter | `market`, `op` |
 | `updown_keeper_gas_used_total` | counter | `market`, `op` |
 | `updown_keeper_rounds_voided_total` | counter | `market`, `reason` |
+| `updown_keeper_recent_rounds_completed` | gauge | `market` |
+| `updown_keeper_recent_void_ratio` | gauge | `market` |
+| `updown_keeper_recent_fault_void_ratio` | gauge | `market` |
 | `updown_keeper_seconds_since_last_execution` | gauge | `market` |
 | `updown_keeper_last_execution_latency_ms` | gauge | `market` |
 | `updown_keeper_current_epoch` | gauge | `market` |
 | `updown_keeper_market_active` / `_healthy` | gauge | `market` |
 | `updown_keeper_balance_wei` / `_native` / `_below_floor` / `_unfunded` | gauge | — |
 | `updown_keeper_price_fetches_total` | counter | `symbol`, `outcome` |
+| `updown_keeper_clock_drift_seconds` | gauge | — |
 | `updown_keeper_uncaught_errors_total` | counter | — |
+
+Three of these need a word about what they carry.
+
+- `updown_keeper_seconds_since_last_execution` is **`-1`** for a market this keeper has not executed
+  yet. It used to fall back to the supervision age, which reads as a real settlement age and made a
+  market bootstrapped a minute ago indistinguishable from one stalled for the same span.
+- `updown_keeper_tx_attempts_total` counts one per **attempt**. `sendWithRetry` reports an attempt
+  twice (sent, then mined), so counting events read exactly 2× the truth and pinned any
+  attempts-per-execution alert at a permanent 2.0.
+- `updown_keeper_failures_total` and `updown_keeper_rounds_voided_total` are declared at **zero** for
+  every kind and every reason when a market bootstraps. A Prometheus rule on a series that does not
+  exist yet is no data, and no data does not page — which is how the two counters that reveal a
+  keeper voiding everything stayed invisible until after the damage.
 
 Secrets never reach the log. viem stamps the full RPC URL into `error.message` on every transport
 failure and its own redaction strips only `user:pass@`, so an API key in the path or query would
-otherwise be printed verbatim on the first RPC hiccup. `RPC_URL`, `PRICE_API` and
+otherwise be printed verbatim on the first RPC hiccup. `RPC_URL`, `PRICE_API`, `PRICE_API_FALLBACKS` and
 `KEEPER_PRIVATE_KEY` are registered as secrets before anything can log, and every emitted line is
-scrubbed.
+scrubbed. A comma-separated setting is decomposed and each endpoint registered in its own right,
+because the error text that reaches the log names the one endpoint that failed, never the list.
 
 Alerts worth having:
 
@@ -228,10 +261,17 @@ updown_keeper_healthy == 0
 updown_keeper_balance_below_floor == 1
 rate(updown_keeper_rounds_voided_total[15m]) > 0
 increase(updown_keeper_failures_total[15m]) > 3
+updown_keeper_recent_fault_void_ratio > 0.5 and updown_keeper_recent_rounds_completed >= 4
+increase(updown_keeper_failures_total{kind="relay-late"}[30m]) > 0
+abs(updown_keeper_clock_drift_seconds) > 5
 ```
 
-`rounds_voided_total` is the one that matters most: a voided round refunds everyone and earns no fee,
-so a non-zero rate means the product is degraded even though nothing is erroring.
+`recent_fault_void_ratio` is the one that matters most: it is the share of recently completed rounds
+that voided because the boundary price never made it on chain — the failure in which `executeRound`
+keeps succeeding on schedule while every stake is handed back. Gate it on
+`recent_rounds_completed` so a single round cannot trip it. `relay-late` says a relay confirmed
+*after* the boundary it was published for, which is the usual cause; `clock_drift_seconds` says this
+host's clock has moved away from the chain's, which is the usual cause of that.
 
 ---
 
@@ -244,6 +284,8 @@ so a non-zero rate means the product is degraded even though nothing is erroring
 | Transaction reverts | Terminal for that tick, logged at `error`. No retry — the same call would revert again. |
 | Simulation fails | Skipped with the decoded reason logged. Nothing is broadcast. |
 | Price API down | All endpoints tried, then the relay is skipped and the round is flagged as heading for a void. `executeRound` still runs so the grid advances. |
+| Host clock drifts from the chain | Wakes are planned on the chain's clock, so they still land where they were meant to; the drift is warned about above 5 s and exported as `updown_keeper_clock_drift_seconds`. The correction keeps the keeper working, which is exactly why the metric matters — a silent correction hides a real host fault. |
+| Rounds keep voiding while executions succeed | Every completed round is classified from the keeper's own receipt. More than half of the last 12 rounds' worth voiding for a keeper-side reason (minimum sample 4) makes the market `degraded` and `/healthz` `503`. Ties and one-sided books are excluded: they void by design. |
 | Boundary print missing or unusable | Logged at `error` *before sending* with the exact reason. The call still goes out: voiding unsticks the grid, and a stuck market cannot even take bets. |
 | `findRoundIdAt` itself fails (RPC error) | The tick aborts and retries. "We could not look" is **not** treated as "the feed has no print": sending anyway would void a round that is still perfectly settleable. Past the settlement window the round can only void regardless, so the call is then still made. |
 | Someone else calls `executeRound` first | `executeRound` is permissionless, so the epoch can move while a tick is queued. The boundary and epoch are re-read from chain immediately before sending; if they moved, the keeper re-plans instead of pricing a stale boundary. A stale boundary's round id will not prove the live boundary, so the call reverts, burns gas and leaves the round to run down its buffer. |
@@ -251,7 +293,7 @@ so a non-zero rate means the product is degraded even though nothing is erroring
 | Market paused / no genesis | Polled every `IDLE_POLL_MS`, reported `inactive`, not counted as unhealthy. |
 | One market misbehaving | Contained to that market. A tick that achieves nothing backs off exponentially (2 s → 60 s) instead of spinning. The backoff is clamped for a **relay** wake so it can never grow past the boundary the print must beat — otherwise the backoff would void the very round it exists to protect. |
 | A market silently stops ticking | A 30 s watchdog re-arms any market that is running with no timer armed and no tick in flight, counting `failures_total{kind="watchdog-restart"}`. Every tick already re-arms on every exit path; this is the net under it, because a market that stops ticking is the one failure that looks healthy. |
-| Waiting for `block.timestamp >= lockTs` | Happens **outside** the shared transaction queue. That queue is the single-key nonce lock: holding it for the (bounded, 30 s) clock wait would starve another market's relay, whose deadline is not forgiving. |
+| Waiting for the boundary to pass on chain | `executeRound` reverts `TooEarly` while `block.timestamp <= boundaryTs` — the boundary second itself is still too early, because inside it a print timestamped exactly `boundaryTs` still qualifies and ordering would pick the settlement price. The keeper waits for `lockTs + 1`, and that wait happens **outside** the shared transaction queue. That queue is the single-key nonce lock: holding it for the (bounded, 30 s) clock wait would starve another market's relay, whose deadline is not forgiving. |
 | Unhandled rejection / uncaught exception | Logged, counted in `updown_keeper_uncaught_errors_total`, process **stays up**. A dead keeper is worse than a degraded one. |
 | `SIGTERM` / `SIGINT` | Timers stopped, in-flight transaction drained (≤ 20 s), server closed, exit `0`. |
 

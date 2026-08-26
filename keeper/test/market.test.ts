@@ -23,7 +23,9 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import type { Address } from 'viem';
+import { encodeAbiParameters, encodeEventTopics, type Address, type Hex } from 'viem';
+import { marketAbi } from '../src/abi.js';
+import { ChainClock } from '../src/clock.js';
 import { MarketWorker, RelayCoordinator, type MarketDeps } from '../src/market.js';
 import { MetricsRegistry } from '../src/metrics.js';
 import { TxQueue } from '../src/tx.js';
@@ -76,6 +78,46 @@ interface HarnessOptions extends Partial<ChainState> {
   nowOffsetMs?: number;
   /** Relay feeds belonging to OTHER markets, already registered on the shared coordinator. */
   otherRelayFeeds?: Address[];
+  /** false to actually broadcast through the stubbed wallet client and wait for a receipt. */
+  dryRun?: boolean;
+  /** Chain timestamp of the block a broadcast transaction lands in. Defaults to `chainNow`. */
+  minedBlockTs?: number;
+  /** Event logs the executeRound receipt carries back. */
+  receiptLogs?: unknown[];
+  /**
+   * True to plan against a `ChainClock` sampled from the fake chain, as the real keeper does.
+   * Omitted, the worker trusts the harness's local clock.
+   */
+  useChainClock?: boolean;
+}
+
+const TX_HASH = '0x'.padEnd(66, '1') as Hex;
+
+/** A real `RoundVoided` log, encoded the way the chain encodes it. */
+function voidedLog(epoch: bigint, reason: number): Record<string, unknown> {
+  return {
+    address: MARKET,
+    topics: encodeEventTopics({ abi: marketAbi, eventName: 'RoundVoided', args: { epoch } }),
+    data: encodeAbiParameters([{ type: 'uint8' }], [reason]),
+    blockNumber: 1n,
+    logIndex: 0,
+    transactionHash: TX_HASH,
+  };
+}
+
+/** A real `RoundSettled` log: a round that actually paid out. */
+function settledLog(epoch: bigint): Record<string, unknown> {
+  return {
+    address: MARKET,
+    topics: encodeEventTopics({ abi: marketAbi, eventName: 'RoundSettled', args: { epoch } }),
+    data: encodeAbiParameters(
+      [{ type: 'int256' }, { type: 'uint80' }, { type: 'uint256' }, { type: 'uint256' }, { type: 'uint256' }],
+      [8_412_345_000_000n, 77n, 10n ** 18n, 19n * 10n ** 17n, 3n * 10n ** 16n],
+    ),
+    blockNumber: 1n,
+    logIndex: 1,
+    transactionHash: TX_HASH,
+  };
 }
 
 type ReadArgs = { functionName: string; args?: readonly unknown[] };
@@ -132,7 +174,15 @@ function makeConfig(): KeeperConfig {
 }
 
 function makeHarness(over: HarnessOptions = {}) {
-  const { nowOffsetMs = 2_000, otherRelayFeeds = [], ...stateOver } = over;
+  const {
+    nowOffsetMs = 2_000,
+    otherRelayFeeds = [],
+    dryRun = true,
+    minedBlockTs,
+    receiptLogs = [],
+    useChainClock = false,
+    ...stateOver
+  } = over;
   const state: ChainState = {
     currentEpoch: 42n,
     lockTs: LOCK_TS,
@@ -234,13 +284,24 @@ function makeHarness(over: HarnessOptions = {}) {
     }
   });
 
+  const receipt = (): Record<string, unknown> => ({
+    status: 'success',
+    transactionHash: TX_HASH,
+    gasUsed: 210_000n,
+    blockNumber: 1n,
+    logs: receiptLogs,
+  });
+
   const publicClient = {
     readContract,
-    getBlock: vi.fn(async () => ({ timestamp: BigInt(state.chainNow) })),
+    // A block read by number is the block a transaction landed in; anything else is "now".
+    getBlock: vi.fn(async (args?: { blockNumber?: bigint }) => ({
+      timestamp: BigInt(args?.blockNumber === undefined ? state.chainNow : (minedBlockTs ?? state.chainNow)),
+    })),
     simulateContract: vi.fn(async () => ({})),
     estimateContractGas: vi.fn(async () => 300_000n),
-    waitForTransactionReceipt: vi.fn(),
-    getTransactionReceipt: vi.fn(),
+    waitForTransactionReceipt: vi.fn(async () => receipt()),
+    getTransactionReceipt: vi.fn(async () => receipt()),
     getGasPrice: vi.fn(async () => 1_000_000_000n),
     getTransactionCount: vi.fn(async () => 1),
     getBalance: vi.fn(async () => 10n ** 18n),
@@ -248,13 +309,19 @@ function makeHarness(over: HarnessOptions = {}) {
 
   const queue = new TxQueue();
   const config = makeConfig();
+  config.dryRun = dryRun;
   config.deployment.relayFeeds = state.relayFeeds;
   const realStart = Date.now();
   const relays = new RelayCoordinator();
   for (const feed of otherRelayFeeds) relays.register(feed);
+  const walletClient = { writeContract: vi.fn(async () => TX_HASH) };
+  // A wall clock parked near the boundary, advancing with real time. Without it every wake would
+  // be years away and `computeNextWake` would only ever return `refresh`.
+  const now = (): number => LOCK_TS * 1000 + nowOffsetMs + (Date.now() - realStart);
+  const clock = new ChainClock({ readChainSeconds: async () => state.chainNow, now });
   const deps: MarketDeps = {
     config,
-    clients: { chain: {}, publicClient, walletClient: { writeContract: vi.fn() } } as unknown as Clients,
+    clients: { chain: {}, publicClient, walletClient } as unknown as Clients,
     logger: createLogger({ level: 'error', write: () => {} }),
     metrics: new MetricsRegistry(),
     queue,
@@ -274,15 +341,19 @@ function makeHarness(over: HarnessOptions = {}) {
       })) as unknown as typeof fetch,
     }),
     relays,
-    // A wall clock parked near the boundary, advancing with real time. Without it every wake would
-    // be years away and `computeNextWake` would only ever return `refresh`.
-    now: () => LOCK_TS * 1000 + nowOffsetMs + (Date.now() - realStart),
+    now,
+    ...(useChainClock ? { clock } : {}),
   };
 
   const worker = new MarketWorker('btcUsd5m', MARKET, deps);
-  return { worker, state, calls, publicClient, queue, deps, relays };
+  return { worker, state, calls, publicClient, walletClient, queue, deps, relays, clock, now };
 }
 
+/**
+ * Every failure kind is pre-declared at zero when a market bootstraps, so "did not happen" is `0`
+ * and never `undefined` — an alert on a series that does not exist yet is an alert that never
+ * fires.
+ */
 const failures = (h: { deps: MarketDeps }, kind: string): number | undefined =>
   h.deps.metrics.get('updown_keeper_failures_total', { market: 'btcUsd5m', kind });
 
@@ -400,8 +471,8 @@ describe('MarketWorker boundary lookup across an aggregator phase change', () =>
     expect(h.publicClient.simulateContract).toHaveBeenCalledWith(
       expect.objectContaining({ functionName: 'executeRound', args: [round(1n, 5n)] }),
     );
-    expect(failures(h, 'boundary-not-found')).toBeUndefined();
-    expect(failures(h, 'boundary-unusable')).toBeUndefined();
+    expect(failures(h, 'boundary-not-found')).toBe(0);
+    expect(failures(h, 'boundary-unusable')).toBe(0);
   });
 
   it('steps back over a whole phase that is entirely after the boundary', async () => {
@@ -562,6 +633,144 @@ describe('MarketWorker relay deduplication across markets sharing a feed', () =>
     // And at most one relay transaction per (feed, boundary), ever.
     expect(relaySimulations(h)).toBe(1);
   });
+
+  it('holds the pair against a sibling market for the whole in-flight window, not just the queue wait', async () => {
+    // The window the queue-wait test does not reach: the first relay has been BROADCAST and is
+    // waiting for its receipt. `mark()` has not run yet — it runs after the receipt — so a gate that
+    // consults only the "already relayed" map reads false for the whole of it, and the sibling
+    // market queues a second transaction for a boundary one print can only serve once. The claim is
+    // what has to cover this stretch, from before the queue until the receipt is in.
+    let confirm!: (value: unknown) => void;
+    const receiptArrives = new Promise((resolve) => {
+      confirm = resolve;
+    });
+    const h = makeHarness({ relayFeeds: true, chainNow: LOCK_TS - 10, nowOffsetMs: -10_000, dryRun: false });
+    h.publicClient.waitForTransactionReceipt.mockImplementation(async () => {
+      await receiptArrives;
+      return { status: 'success', transactionHash: TX_HASH, gasUsed: 90_000n, blockNumber: 1n, logs: [] };
+    });
+    const workerA = h.worker;
+    const workerB = new MarketWorker('ethUsd5m', MARKET_B, h.deps);
+    await workerA.bootstrap();
+    await workerB.bootstrap();
+    expect(h.relays.feedCount).toBe(1);
+
+    workerA.start();
+    // Wait until A is genuinely on the wire and stuck waiting for its receipt.
+    await vi.waitFor(() => expect(h.walletClient.writeContract).toHaveBeenCalledTimes(1), {
+      timeout: 2_000,
+      interval: 5,
+    });
+    expect(h.relays.consumed(ORACLE, LOCK_TS)).toBe(false); // the receipt is not in: nothing marked
+
+    workerB.start();
+    await vi.waitFor(() => expect(h.calls.filter((c) => c === 'getRound').length).toBeGreaterThanOrEqual(2), {
+      timeout: 2_000,
+      interval: 5,
+    });
+    await new Promise((r) => setTimeout(r, 150));
+    // B is past the decision point. The queue still holds A's relay and nothing else: B did not
+    // spend the second slot, which is the harm the boundary's lead was never sized for.
+    const depthWhileInFlight = h.queue.depth;
+
+    confirm(undefined);
+    await vi.waitFor(() => expect(h.relays.consumed(ORACLE, LOCK_TS)).toBe(true), { timeout: 2_000, interval: 5 });
+    await new Promise((r) => setTimeout(r, 150));
+    workerA.stop();
+    workerB.stop();
+
+    // One transaction on the wire for this (feed, boundary). Ever.
+    expect(depthWhileInFlight).toBe(1);
+    expect(h.walletClient.writeContract).toHaveBeenCalledTimes(1);
+    expect(relaySimulations(h)).toBe(1);
+  });
+});
+
+describe('MarketWorker relay landing', () => {
+  const relayHarness = (minedBlockTs: number) =>
+    makeHarness({
+      relayFeeds: true,
+      chainNow: LOCK_TS - 10,
+      nowOffsetMs: -10_000,
+      dryRun: false,
+      minedBlockTs,
+    });
+
+  it('reports a relay that mined AFTER its boundary as the failure it is', async () => {
+    // `_priceAt` only looks at prints with `updatedAt <= boundaryTs`, and `updatedAt` is the
+    // timestamp of the block the relay landed in. A relay that confirms one block late is worth
+    // nothing to the boundary it was sent for — but the receipt is a success, so without comparing
+    // the two the log says "relay published" and the round then voids for no visible reason.
+    const h = relayHarness(LOCK_TS + 3);
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(failures(h, 'relay-late')).toBe(1), { timeout: 2_000, interval: 5 });
+    h.worker.stop();
+
+    expect(h.walletClient.writeContract).toHaveBeenCalledTimes(1);
+    // Still consumed: a later print cannot be at or before this boundary either, so re-relaying
+    // would only burn a second transaction.
+    expect(h.relays.consumed(ORACLE, LOCK_TS)).toBe(true);
+  });
+
+  it('re-checks the deadline after the price fetch, which is where the seconds actually go', async () => {
+    // The landing deadline is taken at the FRONT OF THE QUEUE, before the quote is fetched — and the
+    // quote is the slow part: `PRICE_TIMEOUT_MS` defaults to 4000ms *per endpoint*, and price.ts
+    // tries the primary and then every fallback, so a primary that hangs and a fallback that answers
+    // can burn 4-8s between "there is still time" and the broadcast. Six seconds of headroom checked
+    // 5s before the send is no headroom at all: the print mines after the boundary, `_priceAt`
+    // ignores it, and the round voids. The deadline has to be re-taken against the chain clock
+    // immediately before the transaction goes out.
+    const h = makeHarness({
+      relayFeeds: true,
+      dryRun: false,
+      chainNow: LOCK_TS - 6,
+      nowOffsetMs: -6_000,
+      minedBlockTs: LOCK_TS + 4,
+    });
+    const slowPrice = new PriceSource({
+      endpoint: 'https://example.invalid/p',
+      fallbackEndpoints: [],
+      timeoutMs: 100,
+      cacheTtlMs: 0,
+      maxDeviationBps: 2_000,
+      // Five seconds of chain time pass while the quote is being fetched.
+      fetchImpl: (async () => {
+        h.state.chainNow = LOCK_TS - 1;
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ symbol: 'BTCUSDT', price: '84123.45' }),
+        };
+      }) as unknown as typeof fetch,
+    });
+    const worker = new MarketWorker('btcUsd5m', MARKET, { ...h.deps, priceSource: slowPrice });
+    await worker.bootstrap();
+
+    worker.start();
+    await vi.waitFor(() => expect(failures(h, 'relay-deadline')).toBe(1), { timeout: 2_000, interval: 5 });
+    worker.stop();
+
+    // Nothing on the wire: a print that cannot land is a wasted transaction and a wasted queue slot
+    // in front of the relays that still have a chance.
+    expect(h.walletClient.writeContract).not.toHaveBeenCalled();
+    expect(failures(h, 'relay-late')).toBe(0);
+    // Consumed, so no market on this feed keeps re-queueing a boundary none of them can serve.
+    expect(h.relays.consumed(ORACLE, LOCK_TS)).toBe(true);
+  });
+
+  it('says nothing when the relay landed at or before the boundary', async () => {
+    const h = relayHarness(LOCK_TS - 4);
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(h.relays.consumed(ORACLE, LOCK_TS)).toBe(true), { timeout: 2_000, interval: 5 });
+    h.worker.stop();
+
+    expect(failures(h, 'relay-late')).toBe(0);
+  });
 });
 
 describe('MarketWorker boundary verification when latestRoundData cannot be read', () => {
@@ -587,8 +796,8 @@ describe('MarketWorker boundary verification when latestRoundData cannot be read
     // The id the contract's own helper named still goes to the chain, which judges it for itself...
     expect((executeSimulations(h)[0]?.[0] as { args: readonly bigint[] }).args[0]).toBe(77n);
     // ...and the keeper does not pretend a read that never happened was a verdict.
-    expect(failures(h, 'boundary-unusable')).toBeUndefined();
-    expect(failures(h, 'boundary-not-found')).toBeUndefined();
+    expect(failures(h, 'boundary-unusable')).toBe(0);
+    expect(failures(h, 'boundary-not-found')).toBe(0);
   });
 });
 
@@ -645,7 +854,7 @@ describe('MarketWorker previous-phase search when the feed cannot be read', () =
     h.worker.stop();
 
     // "Could not look" is not "nothing there": no void was predicted, and no id was sent.
-    expect(failures(h, 'boundary-not-found')).toBeUndefined();
+    expect(failures(h, 'boundary-not-found')).toBe(0);
     expect(h.publicClient.simulateContract).not.toHaveBeenCalled();
   });
 
@@ -665,7 +874,7 @@ describe('MarketWorker previous-phase search when the feed cannot be read', () =
     expect(h.publicClient.simulateContract).toHaveBeenCalledWith(
       expect.objectContaining({ functionName: 'executeRound', args: [round(1n, 5n)] }),
     );
-    expect(failures(h, 'boundary-lookup')).toBeUndefined();
+    expect(failures(h, 'boundary-lookup')).toBe(0);
   });
 });
 
@@ -743,6 +952,192 @@ describe('RelayCoordinator', () => {
     expect(coordinator.has(ORACLE, LOCK_TS)).toBe(false);
     coordinator.abandon(ORACLE, LOCK_TS, 1);
     expect(coordinator.has(ORACLE, LOCK_TS)).toBe(true);
+  });
+});
+
+describe('MarketWorker scheduling against a skewed local clock', () => {
+  it('still relays before the boundary when the host clock is a minute behind the chain', async () => {
+    // The failure this prevents: NTP dies and the container's clock ends up 50s behind the chain.
+    // Planned on the local clock, the relay wake for `lockTs - lead` fires 50s late in chain terms,
+    // the send-time guard correctly refuses to broadcast a print that can no longer land, and the
+    // boundary ends with no usable price — every round refunds while the process looks busy.
+    // Chain time is 10s before the boundary, local time is 60s before it.
+    const h = makeHarness({
+      relayFeeds: true,
+      chainNow: LOCK_TS - 10,
+      nowOffsetMs: -60_000,
+      useChainClock: true,
+    });
+    expect(await h.clock.sample()).toBe(50); // local is 50s BEHIND the chain
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(
+      () => expect(h.publicClient.simulateContract).toHaveBeenCalledWith(expect.objectContaining({ functionName: 'relay' })),
+      { timeout: 2_000, interval: 5 },
+    );
+    h.worker.stop();
+
+    // And it was not dropped for being too late: the boundary still has 10s of chain time left.
+    expect(failures(h, 'relay-deadline')).toBe(0);
+  });
+});
+
+describe('MarketWorker executeRound timing', () => {
+  it('does not call executeRound during the boundary second itself', async () => {
+    // `executeRound` reverts `TooEarly` while `block.timestamp <= boundaryTs`: inside that second a
+    // print timestamped exactly `boundaryTs` still qualifies, so transaction ordering would decide
+    // the settlement price. Sending there burns gas and settles nothing.
+    const h = makeHarness({ chainNow: LOCK_TS, nowOffsetMs: 2_000 });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(executeSimulations(h)).toHaveLength(0);
+
+    // One second later the round is genuinely lockable.
+    h.state.chainNow = LOCK_TS + 1;
+    await vi.waitFor(() => expect(executeSimulations(h).length).toBeGreaterThanOrEqual(1), {
+      timeout: 2_000,
+      interval: 5,
+    });
+    h.worker.stop();
+  });
+});
+
+describe('MarketWorker metrics', () => {
+  const gauge = (h: { deps: MarketDeps }, name: string): number | undefined =>
+    h.deps.metrics.get(name, { market: 'btcUsd5m' });
+
+  it('declares every failure kind and void reason at zero, before any of them can fire', async () => {
+    // A Prometheus rule on a series that does not exist yet is no data, and no data does not page —
+    // so the two counters that would reveal a keeper voiding everything were invisible until after
+    // it had already happened.
+    const h = makeHarness();
+    await h.worker.bootstrap();
+
+    for (const kind of ['boundary-unusable', 'relay-late', 'execute-revert', 'price']) {
+      expect(failures(h, kind)).toBe(0);
+    }
+    for (const reason of ['settlement-window-elapsed', 'one-sided-book', 'tie', 'never-locked']) {
+      expect(h.deps.metrics.get('updown_keeper_rounds_voided_total', { market: 'btcUsd5m', reason })).toBe(0);
+    }
+  });
+
+  it('reports -1 seconds since the last execution when there has never been one', async () => {
+    // The old fallback published `now - supervisedSince`, which reads as a real settlement age: a
+    // freshly booted 1h market and one that has been stalled for an hour looked identical, and
+    // /healthz said `secondsSinceExecution: null` for the very same market.
+    const h = makeHarness();
+    await h.worker.bootstrap();
+    expect(gauge(h, 'updown_keeper_seconds_since_last_execution')).toBe(-1);
+
+    h.worker.tickGauges(LOCK_TS * 1000 + 4_496_000, true);
+    expect(gauge(h, 'updown_keeper_seconds_since_last_execution')).toBe(-1);
+  });
+
+  it('counts one transaction attempt per attempt, not one per attempt event', async () => {
+    // `sendWithRetry` fires onAttempt twice for a single successful send ('sent', then 'mined'), so
+    // counting events made `updown_keeper_tx_attempts_total` read exactly 2x the truth — enough to
+    // make the obvious retry-pressure alert fire permanently at a steady 2.0.
+    const h = makeHarness({ dryRun: false, chainNow: LOCK_TS + 2 });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(gauge(h, 'updown_keeper_executions_total')).toBe(1), { timeout: 2_000, interval: 5 });
+    h.worker.stop();
+
+    expect(
+      h.deps.metrics.get('updown_keeper_tx_attempts_total', { market: 'btcUsd5m', op: 'executeRound' }),
+    ).toBe(1);
+  });
+});
+
+describe('MarketWorker settlement outcomes', () => {
+  const ratio = (h: { deps: MarketDeps }, name: string): number | undefined =>
+    h.deps.metrics.get(name, { market: 'btcUsd5m' });
+
+  const runOnce = async (h: ReturnType<typeof makeHarness>): Promise<void> => {
+    await h.worker.bootstrap();
+    h.worker.start();
+    await vi.waitFor(() => expect(h.worker.settlementStats()?.completed ?? 0).toBeGreaterThanOrEqual(1), {
+      timeout: 2_000,
+      interval: 5,
+    });
+    h.worker.stop();
+  };
+
+  it('counts a round that voided for want of a boundary print as the keeper\'s own failure', async () => {
+    const h = makeHarness({ dryRun: false, chainNow: LOCK_TS + 2, receiptLogs: [voidedLog(41n, 1)] });
+    await runOnce(h);
+
+    const stats = h.worker.settlementStats();
+    expect(stats).not.toBeNull();
+    expect(stats?.voided).toBe(stats?.completed);
+    expect(stats?.faultVoided).toBe(stats?.completed);
+    expect(stats?.dominantFaultReason).toBe('oracle-no-usable-print-at-boundary');
+
+    h.worker.tickGauges(h.now(), true);
+    expect(ratio(h, 'updown_keeper_recent_fault_void_ratio')).toBe(1);
+    expect(ratio(h, 'updown_keeper_recent_void_ratio')).toBe(1);
+    expect(ratio(h, 'updown_keeper_recent_rounds_completed')).toBe(stats?.completed);
+  });
+
+  it('does not blame the keeper for a one-sided book, which voids by design', async () => {
+    // Nobody took the other side. Every stake is refunded in full with zero fee and no operational
+    // change would alter it — counting it as a keeper failure would train an operator to ignore the
+    // signal that matters.
+    const h = makeHarness({ dryRun: false, chainNow: LOCK_TS + 2, receiptLogs: [voidedLog(41n, 3)] });
+    await runOnce(h);
+
+    const stats = h.worker.settlementStats();
+    expect(stats?.voided).toBe(stats?.completed);
+    expect(stats?.faultVoided).toBe(0);
+    expect(stats?.dominantFaultReason).toBeNull();
+
+    h.worker.tickGauges(h.now(), true);
+    expect(ratio(h, 'updown_keeper_recent_void_ratio')).toBe(1);
+    expect(ratio(h, 'updown_keeper_recent_fault_void_ratio')).toBe(0);
+  });
+
+  it('counts a round that actually settled as a settlement', async () => {
+    const h = makeHarness({ dryRun: false, chainNow: LOCK_TS + 2, receiptLogs: [settledLog(41n)] });
+    await runOnce(h);
+
+    const stats = h.worker.settlementStats();
+    expect(stats?.voided).toBe(0);
+    expect(stats?.faultVoided).toBe(0);
+
+    h.worker.tickGauges(h.now(), true);
+    expect(ratio(h, 'updown_keeper_recent_void_ratio')).toBe(0);
+  });
+
+  it('does not let one catch-up call swamp the window with the epochs it skipped', async () => {
+    // After an outage a single executeRound voids every epoch the keeper slept through. Those voids
+    // are real and each is counted in rounds_voided_total — but letting all of them into the health
+    // window would keep a keeper that has already recovered reported as broken for the rest of it.
+    // Staleness is what pages during the outage; this signal is about the rounds being settled now.
+    const h = makeHarness({
+      dryRun: false,
+      chainNow: LOCK_TS + 2,
+      receiptLogs: [37n, 38n, 39n, 40n, 41n].map((epoch) => voidedLog(epoch, 4)),
+    });
+    await h.worker.bootstrap();
+    h.worker.start();
+    await vi.waitFor(() => expect(h.worker.settlementStats()?.completed ?? 0).toBeGreaterThanOrEqual(2), {
+      timeout: 2_000,
+      interval: 5,
+    });
+    h.worker.stop();
+
+    const perExecution = (h.deps.metrics.get('updown_keeper_executions_total', { market: 'btcUsd5m' }) ?? 1) * 2;
+    expect(h.worker.settlementStats()?.completed).toBeLessThanOrEqual(perExecution);
+  });
+
+  it('has no settlement signal at all before the first execution', async () => {
+    const h = makeHarness();
+    await h.worker.bootstrap();
+    expect(h.worker.settlementStats()).toBeNull();
   });
 });
 

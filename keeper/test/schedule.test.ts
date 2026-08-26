@@ -16,6 +16,7 @@ import {
   type RoundTiming,
   type WakeOptions,
   applyCooldown,
+  RELAY_DEADLINE_MARGIN_MS,
   type WakePlan,
 } from '../src/schedule.js';
 
@@ -199,6 +200,16 @@ describe('relayCanStillLand', () => {
     expect(relayCanStillLand(LOCK_TS - Math.ceil(RELAY_MIN_LANDING_MS / 1000), LOCK_TS)).toBe(true);
   });
 
+  it('refuses the headroom no relay on this chain has ever confirmed in', () => {
+    // Measured confirm latency, broadcast to receipt, was 5.35s at the very fastest across both
+    // live runs (median ~7.1s). A relay reaching the front of the queue 5s before its boundary is
+    // therefore certain to mine after it: gas burnt, the print useless, and the round voided while
+    // the log reported a published relay.
+    expect(relayCanStillLand(LOCK_TS - 5, LOCK_TS)).toBe(false);
+    expect(relayCanStillLand(LOCK_TS - 3, LOCK_TS)).toBe(false);
+    expect(RELAY_MIN_LANDING_MS).toBeGreaterThanOrEqual(5_350);
+  });
+
   it('is false once the print could only land after the boundary', () => {
     // A relay dequeued this late cannot produce a print `_priceAt` will look at; sending it only
     // burns gas and holds the queue against the relays still waiting behind it.
@@ -249,11 +260,14 @@ describe('clampRelayLead', () => {
 
 describe('secondsUntilLockable', () => {
   it('reports the wait while the chain clock is behind the boundary', () => {
-    expect(secondsUntilLockable(LOCK_TS - 7, LOCK_TS)).toBe(7);
+    expect(secondsUntilLockable(LOCK_TS - 7, LOCK_TS)).toBe(8);
   });
 
-  it('reports zero once the boundary is reached', () => {
-    expect(secondsUntilLockable(LOCK_TS, LOCK_TS)).toBe(0);
+  it('reports zero only once the boundary is strictly past', () => {
+    // `executeRound` reverts while `block.timestamp <= boundaryTs`, so the boundary second itself
+    // is still too early: one more second to wait, not zero.
+    expect(secondsUntilLockable(LOCK_TS, LOCK_TS)).toBe(1);
+    expect(secondsUntilLockable(LOCK_TS + 1, LOCK_TS)).toBe(0);
     expect(secondsUntilLockable(LOCK_TS + 5, LOCK_TS)).toBe(0);
   });
 });
@@ -318,8 +332,10 @@ describe('applyCooldown', () => {
   });
 
   it('never pushes a relay past the boundary it must beat', () => {
-    // now = 1_290_000ms, boundary = 1_300_000ms: 10s of headroom, minus the 3s margin.
-    expect(applyCooldown(plan('relay', 0), 60_000, 1_290_000, round)).toBe(7_000);
+    // now = 1_290_000ms, boundary = 1_300_000ms: 10s of headroom, minus the landing margin — the
+    // same margin `relayCanStillLand` enforces, so the retry is never aimed at a window in which
+    // the send would be refused anyway.
+    expect(applyCooldown(plan('relay', 0), 60_000, 1_290_000, round)).toBe(10_000 - RELAY_DEADLINE_MARGIN_MS);
   });
 
   it('uses the full cooldown when the boundary is far enough away', () => {

@@ -16,8 +16,9 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Address } from 'viem';
+import { encodeAbiParameters, encodeEventTopics, type Address } from 'viem';
 import { Keeper } from '../src/keeper.js';
+import { marketAbi } from '../src/abi.js';
 import { handleRequest } from '../src/server.js';
 import { createLogger } from '../src/logger.js';
 import type { KeeperConfig } from '../src/config.js';
@@ -92,6 +93,8 @@ interface KeeperState {
   balanceWei: bigint;
   /** The operator's configured floor, `MIN_BALANCE_BNB`. */
   minBalanceWei: bigint;
+  /** Seconds the fake chain's clock runs ahead of this host's. */
+  chainSkewSec: number;
 }
 
 function makeKeeper(over: Partial<KeeperState> = {}) {
@@ -99,6 +102,7 @@ function makeKeeper(over: Partial<KeeperState> = {}) {
     failing: new Set(),
     balanceWei: ONE_BNB,
     minBalanceWei: 50_000_000_000_000_000n,
+    chainSkewSec: 0,
     ...over,
   };
 
@@ -133,7 +137,7 @@ function makeKeeper(over: Partial<KeeperState> = {}) {
   const publicClient = {
     readContract,
     getChainId: vi.fn(async () => 97),
-    getBlock: vi.fn(async () => ({ timestamp: BigInt(Math.floor(Date.now() / 1000)) })),
+    getBlock: vi.fn(async () => ({ timestamp: BigInt(Math.floor(Date.now() / 1000) + state.chainSkewSec) })),
     getBalance: vi.fn(async () => state.balanceWei),
     getGasPrice: vi.fn(async () => 1_000_000_000n),
     getTransactionCount: vi.fn(async () => 1),
@@ -372,6 +376,246 @@ describe('Keeper balance health', () => {
     expect(report.warnings.join(' ')).toMatch(/balance is unknown/);
     expect(report.blockers).toEqual([]);
     expect(report.healthy).toBe(true);
+
+    await h.keeper.stop();
+  });
+});
+
+describe('Keeper clock drift', () => {
+  it('keeps re-measuring the chain offset instead of checking it once at boot', async () => {
+    // Every wake is planned against chain time, and a host clock that steps AFTER boot moves every
+    // relay and every execution relative to the boundary it has to beat. Measured once and never
+    // again, a clock that drifts past the relay lead makes every print late while /healthz stays
+    // green and nothing in /metrics says why.
+    vi.useFakeTimers();
+    // Park the host clock on an exact second: a block timestamp is whole seconds, so anything else
+    // shows up as sub-second truncation noise in the offset.
+    vi.setSystemTime(1_800_000_000_000);
+    const h = makeKeeper();
+    await h.keeper.start();
+    expect(h.keeper.clock.driftSec).toBe(0);
+    expect(h.keeper.metrics.get('updown_keeper_clock_drift_seconds')).toBe(0);
+
+    // NTP dies and this host falls two minutes behind the chain.
+    h.state.chainSkewSec = 120;
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(h.keeper.clock.driftSec).toBe(120);
+    expect(h.keeper.metrics.get('updown_keeper_clock_drift_seconds')).toBe(120);
+    // And "now", for planning purposes, is the chain's now.
+    expect(h.keeper.clock.nowSec()).toBe(Math.floor(Date.now() / 1000) + 120);
+
+    await h.keeper.stop();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The seams between the supervisor and its markets
+//
+// Both fixes below live entirely inside `Keeper`, in one line each, and both were provably free to
+// delete: the market side and the health side were each tested on their own, and nothing checked
+// that the supervisor actually joins them. That is exactly how a fix "holds" and stops working.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SETTLING_MARKET = '0x00000000000000000000000000000000000000a1' as Address;
+const INTERVAL_SEC = 300;
+const BOUNDARY_ROUND = 77n;
+
+/**
+ * A keeper driving one live market against a fake chain that really does answer `executeRound`.
+ *
+ * The chain advances a round every time the keeper sends: a fresh epoch whose boundary is two
+ * seconds in the past, so the worker keeps settling as fast as it can re-plan and the receipts
+ * accumulate the way they do on a market whose rounds all void.
+ */
+function makeSettlingKeeper(receiptLogs: () => unknown[], opts: { chainSkewSec?: number } = {}) {
+  const chainSkewSec = opts.chainSkewSec ?? 0;
+  const nowSec = (): number => Math.floor(Date.now() / 1000);
+  const state = {
+    currentEpoch: 42n,
+    lockTs: nowSec() - 2,
+    printAt: nowSec() - 7,
+  };
+  const txHash = '0x'.padEnd(66, '2') as `0x${string}`;
+
+  const readContract = vi.fn(async (args: { functionName: string; args?: readonly unknown[] }): Promise<unknown> => {
+    switch (args.functionName) {
+      case 'interval':
+        return BigInt(INTERVAL_SEC);
+      case 'bufferSeconds':
+        return 240;
+      case 'oracleMaxAge':
+        return 150;
+      case 'oracle':
+        return ORACLE;
+      case 'settlementAsset':
+        return '0x0000000000000000000000000000000000000000' as Address;
+      case 'description':
+        return 'BTC / USD';
+      case 'updater':
+      case 'owner':
+        return KEEPER;
+      case 'genesisStarted':
+        return true;
+      case 'paused':
+        return false;
+      case 'currentEpoch':
+        return state.currentEpoch;
+      case 'boundaryTimestamp':
+        return BigInt(state.lockTs);
+      case 'getRound':
+        return {
+          startTs: BigInt(state.lockTs - INTERVAL_SEC),
+          lockTs: BigInt(state.lockTs),
+          closeTs: BigInt(state.lockTs + INTERVAL_SEC),
+          bufferSeconds: 240,
+          oracleMaxAge: 150,
+        };
+      case 'findRoundIdAt':
+        return [BOUNDARY_ROUND, true];
+      case 'getRoundData':
+      case 'latestRoundData':
+        return [BOUNDARY_ROUND, 8_412_345_000_000n, BigInt(state.printAt), BigInt(state.printAt), BOUNDARY_ROUND];
+      default:
+        throw new Error(`unexpected read ${args.functionName}`);
+    }
+  });
+
+  const receipt = (): Record<string, unknown> => ({
+    status: 'success',
+    transactionHash: txHash,
+    gasUsed: 210_000n,
+    blockNumber: 1n,
+    logs: receiptLogs(),
+  });
+
+  const publicClient = {
+    readContract,
+    getChainId: vi.fn(async () => 97),
+    getBlock: vi.fn(async () => ({ timestamp: BigInt(nowSec() + chainSkewSec) })),
+    getBalance: vi.fn(async () => ONE_BNB),
+    getGasPrice: vi.fn(async () => 1_000_000_000n),
+    getTransactionCount: vi.fn(async () => 1),
+    simulateContract: vi.fn(async (_args: { functionName: string }) => ({})),
+    estimateContractGas: vi.fn(async () => 300_000n),
+    waitForTransactionReceipt: vi.fn(async () => receipt()),
+    getTransactionReceipt: vi.fn(async () => receipt()),
+  };
+
+  const walletClient = {
+    writeContract: vi.fn(async () => {
+      // One round settled (or voided); the grid moves on, and the next boundary is already behind us.
+      state.currentEpoch += 1n;
+      state.lockTs = nowSec() - 2;
+      state.printAt = state.lockTs - 5;
+      return txHash;
+    }),
+  };
+
+  const config = makeConfig();
+  config.deployment.markets = [{ name: 'btcUsd5m', address: SETTLING_MARKET }];
+  config.dryRun = false;
+  const keeper = new Keeper({
+    config,
+    logger: createLogger({ level: 'error', write: () => {} }),
+    clients: { chain: {}, publicClient, walletClient } as unknown as Clients,
+  });
+  return { keeper, state, publicClient, walletClient };
+}
+
+/** A `RoundVoided` log the way the chain encodes it. */
+function voidedLog(epoch: bigint, reason: number): Record<string, unknown> {
+  return {
+    address: SETTLING_MARKET,
+    topics: encodeEventTopics({ abi: marketAbi, eventName: 'RoundVoided', args: { epoch } }),
+    data: encodeAbiParameters([{ type: 'uint8' }], [reason]),
+    blockNumber: 1n,
+    logIndex: 0,
+    transactionHash: '0x'.padEnd(66, '2') as `0x${string}`,
+  };
+}
+
+describe('Keeper settlement outcomes reaching /healthz', () => {
+  const healthz = (keeper: Keeper) =>
+    handleRequest('/healthz', { metrics: keeper.metrics, health: () => keeper.health(), version: 'test' });
+
+  it('fails /healthz for a market whose rounds all void for keeper-side reasons', async () => {
+    // The whole point of classifying settlement outcomes is that `/healthz` can see them. The worker
+    // computes the window and `evaluateMarketHealth` judges it, but the supervisor is what carries
+    // one to the other — and with that single line removed both halves still passed every test while
+    // a market voiding 100% of its rounds reported 200.
+    let epoch = 41n;
+    const h = makeSettlingKeeper(() => {
+      // The steady state of a boundary with no usable print: the round that could not be locked and
+      // the round whose window ran out, both in one receipt.
+      epoch += 1n;
+      return [voidedLog(epoch - 1n, 4), voidedLog(epoch, 5)];
+    });
+    await h.keeper.start();
+
+    const worker = h.keeper.workers[0] as NonNullable<(typeof h.keeper.workers)[0]>;
+    await vi.waitFor(() => expect(worker.settlementStats()?.completed ?? 0).toBeGreaterThanOrEqual(4), {
+      timeout: 4_000,
+      interval: 10,
+    });
+
+    const response = healthz(h.keeper);
+    expect(response.status).toBe(503);
+    expect(response.body).toMatch(/voided into refunds for a keeper-side reason/);
+    expect(h.keeper.health().markets[0]?.state).toBe('degraded');
+
+    await h.keeper.stop();
+  });
+
+  it('keeps /healthz green for a market whose rounds void for want of a counterparty', async () => {
+    // The other direction, which matters just as much: on the live deployment 21 of 22 completed
+    // rounds voided one-sided. If that read as a keeper failure the signal would be worthless.
+    let epoch = 41n;
+    const h = makeSettlingKeeper(() => {
+      epoch += 1n;
+      return [voidedLog(epoch, 3)];
+    });
+    await h.keeper.start();
+
+    const worker = h.keeper.workers[0] as NonNullable<(typeof h.keeper.workers)[0]>;
+    await vi.waitFor(() => expect(worker.settlementStats()?.completed ?? 0).toBeGreaterThanOrEqual(4), {
+      timeout: 4_000,
+      interval: 10,
+    });
+
+    const stats = worker.settlementStats();
+    expect(stats?.voided).toBe(stats?.completed);
+    expect(stats?.faultVoided).toBe(0);
+    expect(healthz(h.keeper).status).toBe(200);
+    expect(h.keeper.health().markets[0]?.state).toBe('ok');
+
+    await h.keeper.stop();
+  });
+});
+
+describe('Keeper clock reaching its markets', () => {
+  it('plans its markets wakes on the chain clock it samples, not the host clock', async () => {
+    // `Keeper` samples the chain offset and every worker is supposed to plan against it. Removing
+    // the one line that hands the clock over left the workers back on the host clock with all 367
+    // tests passing: ChainClock is tested alone, the worker is tested with an injected clock, and
+    // the keeper's own drift metric is tested — but nothing checked the handover.
+    //
+    // The chain here is 60s ahead of this host. The boundary is 30s in the host's FUTURE and 30s in
+    // the chain's PAST, so a worker planning on the host clock parks a timer for half a minute and
+    // executes nothing; one planning on the chain clock settles immediately.
+    const h = makeSettlingKeeper(() => [], { chainSkewSec: 60 });
+    h.state.lockTs = Math.floor(Date.now() / 1000) + 30;
+    h.state.printAt = h.state.lockTs - 5;
+    await h.keeper.start();
+
+    await vi.waitFor(
+      () =>
+        expect(
+          h.publicClient.simulateContract.mock.calls.filter((call) => call[0].functionName === 'executeRound')
+            .length,
+        ).toBeGreaterThanOrEqual(1),
+      { timeout: 3_000, interval: 10 },
+    );
 
     await h.keeper.stop();
   });

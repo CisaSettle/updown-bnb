@@ -242,8 +242,22 @@ export function PositionsPanel({
                         <span className={`chip ${chip.className}`}>{chip.text}</span>
                       </td>
                       <td className="num py-2.5 pr-3 text-right font-semibold">
-                        {p.status === 'lost' ? (
-                          <span className="text-slate-400 dark:text-slate-500">—</span>
+                        {/*
+                          A pending round has no payout yet — `pendingPayout` returns 0 until it
+                          resolves — so printing "0 USDT" here would state a payout of zero for a
+                          position that is still undecided. Only a resolved row shows a number.
+                        */}
+                        {p.status === 'lost' || p.status === 'pending' ? (
+                          <span
+                            className="text-slate-400 dark:text-slate-500"
+                            title={
+                              p.status === 'pending'
+                                ? 'Not decided yet — this round has not resolved.'
+                                : 'The other side won this round, so there is nothing to collect.'
+                            }
+                          >
+                            —
+                          </span>
                         ) : (
                           formatAmountWithSymbol(p.payout, token.decimals, token.symbol)
                         )}

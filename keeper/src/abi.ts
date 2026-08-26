@@ -326,3 +326,27 @@ export const VOID_REASONS: Readonly<Record<number, string>> = Object.freeze({
 export function voidReasonName(code: number): string {
   return VOID_REASONS[code] ?? `unknown-${code}`;
 }
+
+/**
+ * Void reasons the KEEPER is answerable for, as opposed to the ones that are the market working as
+ * designed.
+ *
+ * `tie` and `one-sided-book` are outcomes, not failures: nobody took the other side, or the price
+ * came back to exactly where it started. Every stake is refunded in full with zero fee and no
+ * operational change would prevent either. The other three all mean the same thing — the boundary
+ * price the round needed never made it on chain in time — and that is the keeper's job.
+ */
+export const KEEPER_FAULT_VOID_REASONS: readonly string[] = Object.freeze([
+  VOID_REASONS[1] as string, // oracle-no-usable-print-at-boundary
+  VOID_REASONS[4] as string, // never-locked
+  VOID_REASONS[5] as string, // settlement-window-elapsed
+]);
+
+/**
+ * Is this void the keeper's fault? An unrecognised reason counts as one: a code this build does not
+ * know about means the keeper no longer understands the contract it is driving, which is not a
+ * thing to stay quiet about.
+ */
+export function isKeeperFaultVoid(reason: string): boolean {
+  return KEEPER_FAULT_VOID_REASONS.includes(reason) || reason.startsWith('unknown-');
+}

@@ -7,7 +7,15 @@ const healthy: HealthReport = {
   healthy: true,
   uptimeSec: 42,
   markets: [
-    { name: 'btcUsd5m', state: 'ok', healthy: true, secondsSinceExecution: 12, budgetSec: 600, reason: 'ok' },
+    {
+      name: 'btcUsd5m',
+      state: 'ok',
+      healthy: true,
+      secondsSinceExecution: 12,
+      budgetSec: 600,
+      reason: 'ok',
+      settlement: null,
+    },
   ],
   warnings: [],
   blockers: [],
@@ -17,7 +25,15 @@ const unhealthy: HealthReport = {
   ...healthy,
   healthy: false,
   markets: [
-    { name: 'btcUsd5m', state: 'stale', healthy: false, secondsSinceExecution: 900, budgetSec: 600, reason: 'late' },
+    {
+      name: 'btcUsd5m',
+      state: 'stale',
+      healthy: false,
+      secondsSinceExecution: 900,
+      budgetSec: 600,
+      reason: 'late',
+      settlement: null,
+    },
   ],
   warnings: ['keeper balance is low'],
 };

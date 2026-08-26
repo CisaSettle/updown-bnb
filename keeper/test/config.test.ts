@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { bnbToWei, ConfigError, gweiToWei, loadConfig, normalisePrivateKey, redactUrl } from '../src/config.js';
+import {
+  assumedTxCostWei,
+  bnbToWei,
+  configWarnings,
+  ConfigError,
+  gweiToWei,
+  loadConfig,
+  normalisePrivateKey,
+  redactUrl,
+} from '../src/config.js';
 import { parseDeployment, type DeploymentFile } from '../src/deployments.js';
 
 // A well-known test key (Anvil account #0). Never used for anything real.
@@ -205,5 +214,41 @@ describe('redactUrl', () => {
 
   it('never throws on junk', () => {
     expect(redactUrl('not a url')).toBe('<unparseable-url>');
+  });
+});
+
+describe('balance floor coherence', () => {
+  it('ships a default floor above the cost of one transaction', () => {
+    // The shipped default and the assumed cost have to be read together: a floor BELOW one
+    // transaction's cost is a floor that can never warn, because the keeper is already reported
+    // unfunded above it. The live .env shipped 0.02 against a 0.03 cost, so the whole low-balance
+    // band was empty and the first signal an operator got was a 503.
+    const config = load(baseEnv);
+    expect(assumedTxCostWei(config)).toBe(30_000_000_000_000_000n); // 600k gas x 50 gwei
+    expect(config.health.minBalanceWei).toBeGreaterThan(assumedTxCostWei(config));
+    expect(configWarnings(config)).toEqual([]);
+  });
+
+  it('says so at boot when the configured floor can never warn', () => {
+    const config = load({ ...baseEnv, MIN_BALANCE_BNB: '0.02' });
+    const warnings = configWarnings(config);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/MIN_BALANCE_BNB \(0\.0200 BNB\) is below the cost of one transaction/);
+    expect(warnings[0]).toMatch(/0\.0300 BNB/);
+  });
+
+  it('accepts a floor that is coherent with a lower gas ceiling', () => {
+    // The other way of making it coherent: cap the gas price instead of raising the floor.
+    expect(configWarnings(load({ ...baseEnv, MIN_BALANCE_BNB: '0.02', MAX_GAS_PRICE_GWEI: '20' }))).toEqual([]);
+  });
+
+  it('warns when there is no floor at all', () => {
+    expect(configWarnings(load({ ...baseEnv, MIN_BALANCE_BNB: '0' }))[0]).toMatch(/MIN_BALANCE_BNB is 0/);
+  });
+
+  it('follows a fixed gas price rather than the ceiling when one is set', () => {
+    const config = load({ ...baseEnv, GAS_PRICE_GWEI: '3' });
+    expect(assumedTxCostWei(config)).toBe(1_800_000_000_000_000n); // 600k gas x 3 gwei
+    expect(configWarnings(config)).toEqual([]);
   });
 });

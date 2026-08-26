@@ -23,6 +23,64 @@ export const SUPPORTED_CHAINS: Readonly<Record<number, { name: string; defaultRp
 
 export type Env = Readonly<Record<string, string | undefined>>;
 
+/**
+ * Gas one keeper transaction is assumed to need when judging whether the account can still pay for
+ * anything — the same fixed limit `market.ts` falls back to when estimation fails.
+ *
+ * It lives here, next to the balance floor it has to stay coherent with, because the two are only
+ * meaningful together: `MIN_BALANCE_BNB` below the cost of one transaction is a floor that can
+ * never warn, since the keeper is already reported unfunded above it.
+ */
+export const ASSUMED_TX_GAS = 600_000n;
+
+/** Default balance floor, in BNB. Must stay above `assumedTxCostWei` for the shipped gas ceiling. */
+export const DEFAULT_MIN_BALANCE_BNB = '0.05';
+
+/**
+ * What one keeper transaction can cost: the assumed gas limit at the highest gas price the retry
+ * ladder is allowed to reach. Below this the keeper cannot settle a round on a busy chain, which is
+ * precisely when a round must not be missed — so it is the hard floor under every balance verdict.
+ */
+export function assumedTxCostWei(config: KeeperConfig): bigint {
+  return ASSUMED_TX_GAS * (config.tx.fixedGasPriceWei ?? config.tx.maxGasPriceWei);
+}
+
+/**
+ * Configuration that is valid but incoherent: it loads, and then behaves in a way no operator would
+ * have chosen. Reported at boot rather than rejected, because every one of these is a live keeper's
+ * legitimate choice to make — but silently is exactly how the shipped `.env` came to set a balance
+ * floor the code could never warn at.
+ */
+export function configWarnings(config: KeeperConfig): string[] {
+  const warnings: string[] = [];
+  const txCost = assumedTxCostWei(config);
+  const floor = config.health.minBalanceWei;
+  if (floor > 0n && floor < txCost) {
+    warnings.push(
+      `MIN_BALANCE_BNB (${formatBnb(floor)} BNB) is below the cost of one transaction at the ` +
+        `configured gas ceiling (${formatBnb(txCost)} BNB = ${ASSUMED_TX_GAS} gas x ` +
+        `${config.tx.fixedGasPriceWei ?? config.tx.maxGasPriceWei} wei), so the low-balance warning ` +
+        `can never fire: the keeper goes straight from ok to an unfunded /healthz failure with no ` +
+        `advance notice. Raise MIN_BALANCE_BNB above ${formatBnb(txCost)}, or lower ` +
+        `MAX_GAS_PRICE_GWEI.`,
+    );
+  }
+  if (floor === 0n) {
+    warnings.push(
+      'MIN_BALANCE_BNB is 0, so there is no low-balance warning at all; the first signal will be ' +
+        'the keeper reporting itself unfunded.',
+    );
+  }
+  return warnings;
+}
+
+/** Wei -> a short decimal BNB string, for operator-facing text only. */
+function formatBnb(wei: bigint, decimals = 4): string {
+  const whole = wei / 10n ** 18n;
+  const frac = (wei % 10n ** 18n).toString().padStart(18, '0').slice(0, decimals);
+  return `${whole}.${frac}`;
+}
+
 export interface KeeperConfig {
   chainId: number;
   chainName: string;
@@ -337,7 +395,7 @@ export function loadConfig(options: LoadConfigOptions = {}): KeeperConfig {
     issues.add(`GAS_PRICE_GWEI (${fixedGasGwei}) exceeds MAX_GAS_PRICE_GWEI (${maxGasGwei})`);
   }
 
-  const minBalanceRaw = readString(env, 'MIN_BALANCE_BNB', '0.05') as string;
+  const minBalanceRaw = readString(env, 'MIN_BALANCE_BNB', DEFAULT_MIN_BALANCE_BNB) as string;
   let minBalanceWei = 0n;
   try {
     minBalanceWei = bnbToWei(minBalanceRaw);

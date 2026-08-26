@@ -22,6 +22,45 @@
 
 export type MarketHealthState = 'ok' | 'stale' | 'inactive' | 'degraded' | 'unknown';
 
+/**
+ * How the rounds this keeper has actually settled recently turned out.
+ *
+ * Staleness answers "is the keeper calling `executeRound` on time"; this answers the question that
+ * matters, "are the rounds it settles worth anything". They are not the same question, and the gap
+ * between them is silent: once a boundary has no usable print, `executeRound` keeps SUCCEEDING —
+ * one call per interval, comfortably inside the staleness budget — while `_lockRound`/`_endRound`
+ * void every round and refund every stake. A keeper failing completely at its job looked perfectly
+ * healthy.
+ *
+ * Void reasons are not equal, which is why they are split here rather than counted together. A
+ * one-sided book or a tie is the market working exactly as designed — nobody took the other side,
+ * everyone is refunded, and no configuration change would alter it. A boundary with no usable
+ * print, a round that was never locked, or a settlement window run down to nothing are the
+ * keeper's own failures, and only those may make it unhealthy.
+ */
+export interface SettlementWindowStats {
+  /** Rounds seen completing in this keeper's own receipts inside the window. */
+  completed: number;
+  /** How many of those voided, for any reason at all — benign ones included. */
+  voided: number;
+  /** How many voided for a reason the keeper is answerable for. */
+  faultVoided: number;
+  /** The most frequent fault reason in the window; names the failure in the report text. */
+  dominantFaultReason: string | null;
+  /** How far back the window reaches, in seconds. */
+  windowSec: number;
+}
+
+/** Rounds that must have completed in the window before its void rate is judged at all. */
+export const DEFAULT_FAULT_VOID_MIN_SAMPLE = 4;
+
+/**
+ * Share of recently completed rounds that may void for keeper-side reasons before the market is
+ * unhealthy. Above half the rounds in the window is not a bad patch, it is a market whose stakes
+ * are mostly being handed back.
+ */
+export const DEFAULT_FAULT_VOID_RATIO = 0.5;
+
 export interface MarketHealthInput {
   name: string;
   /** Round length in seconds. */
@@ -46,6 +85,12 @@ export interface MarketHealthInput {
    * health is a market whose rounds void unobserved.
    */
   bootstrapError?: string | null;
+  /**
+   * How the rounds this keeper settled recently turned out, or null when it has settled none yet.
+   * Null is "no signal", never "no problem": a market with no completed rounds is judged by the
+   * staleness budget alone, exactly as before.
+   */
+  settlement?: SettlementWindowStats | null;
 }
 
 export interface MarketHealth {
@@ -57,6 +102,8 @@ export interface MarketHealth {
   /** The staleness budget in seconds (`2 * interval`). */
   budgetSec: number;
   reason: string;
+  /** The settlement outcomes behind the verdict, or null when none have been observed. */
+  settlement: SettlementWindowStats | null;
 }
 
 export interface HealthReport {
@@ -72,9 +119,46 @@ export interface HealthReport {
 export interface HealthOptions {
   /** Multiple of `interval` a market may go without an execution. Spec default: 2. */
   intervalsAllowed: number;
+  /** Share of recently completed rounds that may void for keeper-side reasons. */
+  faultVoidRatio?: number;
+  /** Rounds that must have completed before that share is judged at all. */
+  faultVoidMinSample?: number;
 }
 
-export const DEFAULT_HEALTH_OPTIONS: HealthOptions = { intervalsAllowed: 2 };
+export const DEFAULT_HEALTH_OPTIONS: HealthOptions = {
+  intervalsAllowed: 2,
+  faultVoidRatio: DEFAULT_FAULT_VOID_RATIO,
+  faultVoidMinSample: DEFAULT_FAULT_VOID_MIN_SAMPLE,
+};
+
+/**
+ * Is this market voiding so much of what it settles that the keeper is failing at its job?
+ * Returns the reason to report, or null when the void rate says nothing is wrong.
+ *
+ * Benign voids never count. A market with no counterparty voids every round it settles and that is
+ * correct behaviour — reporting it unhealthy would train an operator to ignore the signal that
+ * matters.
+ */
+export function faultVoidReason(
+  stats: SettlementWindowStats | null | undefined,
+  options: HealthOptions = DEFAULT_HEALTH_OPTIONS,
+): string | null {
+  if (!stats) return null;
+  const minSample = Math.max(1, Math.round(options.faultVoidMinSample ?? DEFAULT_FAULT_VOID_MIN_SAMPLE));
+  const ratioLimit = options.faultVoidRatio ?? DEFAULT_FAULT_VOID_RATIO;
+  if (stats.completed < minSample) return null;
+  const ratio = stats.faultVoided / stats.completed;
+  if (ratio <= ratioLimit) return null;
+  const benign = stats.voided - stats.faultVoided;
+  return (
+    `${stats.faultVoided} of the last ${stats.completed} completed rounds (${Math.round(ratio * 100)}%) ` +
+    `voided into refunds for a keeper-side reason` +
+    (stats.dominantFaultReason ? ` (mostly ${stats.dominantFaultReason})` : '') +
+    `, in the last ${stats.windowSec}s` +
+    (benign > 0 ? `; ${benign} further void(s) were benign (tie or one-sided book) and are not counted` : '') +
+    `. executeRound is landing on time and settling nothing.`
+  );
+}
 
 export function evaluateMarketHealth(
   input: MarketHealthInput,
@@ -84,6 +168,7 @@ export function evaluateMarketHealth(
   const budgetSec = Math.max(1, Math.round(input.intervalSec * options.intervalsAllowed));
   const secondsSinceExecution =
     input.lastExecutionMs === null ? null : Math.max(0, Math.floor((nowMs - input.lastExecutionMs) / 1000));
+  const settlement = input.settlement ?? null;
 
   if (input.bootstrapError) {
     return {
@@ -92,6 +177,7 @@ export function evaluateMarketHealth(
       healthy: false,
       secondsSinceExecution,
       budgetSec,
+      settlement,
       reason: `market failed to bootstrap and is not being supervised: ${input.bootstrapError}`,
     };
   }
@@ -102,6 +188,7 @@ export function evaluateMarketHealth(
       healthy: false,
       secondsSinceExecution,
       budgetSec,
+      settlement,
       reason: 'market state has never been read successfully',
     };
   }
@@ -112,6 +199,7 @@ export function evaluateMarketHealth(
       healthy: false,
       secondsSinceExecution,
       budgetSec,
+      settlement,
       reason: input.degraded,
     };
   }
@@ -122,6 +210,7 @@ export function evaluateMarketHealth(
       healthy: true,
       secondsSinceExecution,
       budgetSec,
+      settlement,
       reason: 'market is paused or genesisStart() has not been called; nothing for the keeper to do',
     };
   }
@@ -139,18 +228,37 @@ export function evaluateMarketHealth(
       healthy: false,
       secondsSinceExecution,
       budgetSec,
+      settlement,
       reason:
         input.lastExecutionMs === null
           ? `no execution within ${budgetSec}s of supervision starting`
           : `last execution was ${ageSec}s ago, budget is ${budgetSec}s`,
     };
   }
+
+  // Executing on time and settling nothing. Checked AFTER staleness (a keeper that is not executing
+  // at all is the more basic failure and its rounds are not "voiding", they are simply not being
+  // settled) and only against keeper-side void reasons.
+  const voidReason = faultVoidReason(settlement, options);
+  if (voidReason !== null) {
+    return {
+      name: input.name,
+      state: 'degraded',
+      healthy: false,
+      secondsSinceExecution,
+      budgetSec,
+      settlement,
+      reason: voidReason,
+    };
+  }
+
   return {
     name: input.name,
     state: 'ok',
     healthy: true,
     secondsSinceExecution,
     budgetSec,
+    settlement,
     reason: 'executed within budget',
   };
 }

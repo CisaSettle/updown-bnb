@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {UpDownBaseTest} from "./UpDownBase.t.sol";
+import {UpDownFixture, UpDownErc20Fixture, UpDownNativeFixture} from "./UpDownBase.t.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
 
-contract UpDownFuzzTest is UpDownBaseTest {
+/**
+ * @dev The fuzz properties, written once against the asset-agnostic fixture and instantiated at the
+ *      bottom of this file against BOTH concrete markets. The native market moves money with a raw
+ *      `call{value:}` instead of an ERC20 transfer, so running the same properties there is not a
+ *      formality: it is the only way these properties ever see that payout path.
+ */
+abstract contract UpDownFuzzTests is UpDownFixture {
     /// @notice A winner is never paid less than their own principal, for any book and any fee.
     function testFuzz_winnerNeverBelowPrincipal(uint256 upA, uint256 upB, uint256 down, uint16 fee) public {
         upA = bound(upA, MIN_BET, MAX_BET);
@@ -60,8 +66,8 @@ contract UpDownFuzzTest is UpDownBaseTest {
         down = bound(down, MIN_BET, MAX_BET);
         voidKind = uint8(bound(voidKind, 0, 2));
 
-        uint256 a0 = usdt.balanceOf(alice);
-        uint256 b0 = usdt.balanceOf(bob);
+        uint256 a0 = _balance(alice);
+        uint256 b0 = _balance(bob);
 
         _betUp(alice, up);
         if (voidKind != 2) _betDown(bob, down); // kind 2 = one-sided book
@@ -86,10 +92,10 @@ contract UpDownFuzzTest is UpDownBaseTest {
         assertEq(market.treasuryAmount(), 0, "a void must never take a fee");
 
         _claim(alice, epoch);
-        assertEq(usdt.balanceOf(alice), a0, "alice not made whole");
+        assertEq(_balance(alice), a0, "alice not made whole");
         if (voidKind != 2) {
             _claim(bob, epoch);
-            assertEq(usdt.balanceOf(bob), b0, "bob not made whole");
+            assertEq(_balance(bob), b0, "bob not made whole");
         }
         _assertSolvent();
     }
@@ -124,4 +130,41 @@ contract UpDownFuzzTest is UpDownBaseTest {
         }
         assertEq(_round(rounds + 1).startTs, anchor + rounds * INTERVAL, "grid drifted");
     }
+
+    /// @notice Whatever the book and however the round resolves, the market still holds at least
+    ///         what it owes — evaluated on the settlement asset this instance actually uses.
+    function testFuzz_solventThroughAnyResolution(uint256 up, uint256 down, uint8 outcome) public {
+        up = bound(up, MIN_BET, MAX_BET);
+        down = bound(down, MIN_BET, MAX_BET);
+        outcome = uint8(bound(outcome, 0, 2));
+
+        _betUp(alice, up);
+        _betDown(bob, down);
+        uint256 epoch = market.currentEpoch();
+        _assertSolvent();
+
+        _advance(P0);
+        _assertSolvent();
+        _advance(outcome == 0 ? P0 + 1e8 : (outcome == 1 ? P0 - 1e8 : P0));
+        _assertSolvent();
+
+        address winner = outcome == 0 ? alice : bob;
+        if (outcome == 2) {
+            _claim(alice, epoch);
+            _claim(bob, epoch);
+        } else {
+            _claim(winner, epoch);
+        }
+        _assertSolvent();
+
+        if (market.treasuryAmount() > 0) {
+            vm.prank(owner);
+            market.claimTreasury(treasury);
+        }
+        _assertSolvent();
+    }
 }
+
+contract UpDownFuzzErc20Test is UpDownFuzzTests, UpDownErc20Fixture {}
+
+contract UpDownFuzzNativeTest is UpDownFuzzTests, UpDownNativeFixture {}

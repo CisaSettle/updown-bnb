@@ -31,14 +31,40 @@ const MIN_SECRET_LENGTH = 8;
 /**
  * Register a value to redact. A URL is decomposed as well as registered whole, so a partially
  * rendered form (just the API-key path segment, just a query value) is still caught.
+ *
+ * A comma-separated LIST is decomposed too, and each entry registered in its own right: settings
+ * like `PRICE_API_FALLBACKS` hold several endpoints in one variable, and the error text that
+ * eventually reaches the log quotes the ONE endpoint that failed — never the list — so registering
+ * only the whole string scrubs nothing.
  */
 export function registerSecret(value: string | undefined | null): void {
   if (typeof value !== 'string') return;
   const trimmed = value.trim();
   if (trimmed.length >= MIN_SECRET_LENGTH) SECRETS.add(trimmed);
-  for (const part of secretPartsOf(trimmed)) {
-    if (part.length >= MIN_SECRET_LENGTH) SECRETS.add(part);
+  const entries = trimmed.includes(',')
+    ? trimmed.split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0)
+    : [trimmed];
+  for (const entry of entries) {
+    if (entry.length >= MIN_SECRET_LENGTH) SECRETS.add(entry);
+    for (const part of secretPartsOf(entry)) {
+      if (part.length >= MIN_SECRET_LENGTH) SECRETS.add(part);
+    }
   }
+}
+
+/**
+ * Every environment variable that can carry a credential, in one place.
+ *
+ * It has to be one place because the registration happens in `index.ts`, before the config is even
+ * loaded, and an entrypoint is the one file nothing tests: `PRICE_API_FALLBACKS` was missing from
+ * this set for exactly that reason, while `price.ts` embeds the failing endpoint verbatim into the
+ * error text the keeper then logs at error level.
+ */
+export const SECRET_ENV_VARS = ['RPC_URL', 'KEEPER_PRIVATE_KEY', 'PRICE_API', 'PRICE_API_FALLBACKS'] as const;
+
+/** Register every credential-bearing setting with the scrubber. Must run before anything can log. */
+export function registerEnvSecrets(env: NodeJS.ProcessEnv = process.env): void {
+  for (const name of SECRET_ENV_VARS) registerSecret(env[name]);
 }
 
 /** The credential-bearing pieces of a URL: basic-auth, opaque path segments, query values. */

@@ -7,7 +7,8 @@ import { useActiveChain } from '../hooks/useActiveChain'
 import type { MarketConfig } from '../hooks/useMarketConfig'
 import type { SettlementToken } from '../hooks/useSettlementToken'
 import { useTxRunner } from '../hooks/useTxRunner'
-import { formatAmount, formatAmountWithSymbol, formatMultiple, parseAmount, toInputValue } from '../lib/format'
+import { allowanceFor, validateBetInput, type AllowanceMode, type Side } from '../lib/bet'
+import { formatAmount, formatAmountWithSymbol, formatMultiple, toInputValue } from '../lib/format'
 import { quotePayout, roundPhase, type Round } from '../lib/market'
 import { pushToast } from '../lib/toast'
 
@@ -20,15 +21,6 @@ const NATIVE_GAS_BUFFER = parseEther('0.002')
  * wasted gas. Closing the form early is strictly more conservative than the contract's own rule.
  */
 const LOCK_GRACE_SECONDS = 3
-
-type Side = 'up' | 'down'
-
-interface Validation {
-  ok: boolean
-  reason?: string
-  /** Non-blocking advisory shown under the input. */
-  hint?: string
-}
 
 export function BetPanel({
   market,
@@ -50,13 +42,13 @@ export function BetPanel({
 
   const [side, setSide] = useState<Side>('up')
   const [input, setInput] = useState('')
+  // Approval size is the user's call, not ours — see `allowanceFor`.
+  const [allowanceMode, setAllowanceMode] = useState<AllowanceMode>('exact')
 
   const phase = roundPhase(round, now)
   const secondsToLock = round ? Number(round.lockTs) - now : 0
   const inLockGrace = phase === 'betting' && secondsToLock <= LOCK_GRACE_SECONDS
   const bettingOpen = phase === 'betting' && !inLockGrace && !config.paused && config.genesisStarted
-
-  const amount = useMemo(() => parseAmount(input, token.decimals), [input, token.decimals])
 
   const upAmount = round?.upAmount ?? 0n
   const downAmount = round?.downAmount ?? 0n
@@ -77,6 +69,55 @@ export function BetPanel({
   )
 
   const feeBps = round?.feeBps ?? config.feeBps
+
+  const validation = useMemo(
+    () =>
+      validateBetInput({
+        input,
+        side,
+        phase,
+        inLockGrace,
+        isConnected,
+        wrongChain,
+        chainName: activeChain.name,
+        tokenReady: token.ready,
+        isNative: token.isNative,
+        decimals: token.decimals,
+        symbol: token.symbol,
+        balance: token.balance,
+        spendable,
+        genesisStarted: config.genesisStarted,
+        paused: config.paused,
+        minBet: config.minBet,
+        maxBet: config.maxBet,
+        maxSide: config.maxSide,
+        sideRemaining,
+      }),
+    [
+      input,
+      side,
+      phase,
+      inLockGrace,
+      isConnected,
+      wrongChain,
+      token.ready,
+      token.isNative,
+      token.decimals,
+      token.symbol,
+      token.balance,
+      spendable,
+      config.genesisStarted,
+      config.paused,
+      config.minBet,
+      config.maxBet,
+      config.maxSide,
+      sideRemaining,
+    ],
+  )
+
+  // One parse, one number: the quote below and the transaction argument both read this.
+  const amount = validation.amount
+
   const quote = useMemo(
     () => (amount && amount > 0n ? quotePayout(amount, side, upAmount, downAmount, feeBps) : undefined),
     [amount, side, upAmount, downAmount, feeBps],
@@ -84,73 +125,16 @@ export function BetPanel({
 
   const needsApproval = !token.isNative && amount !== null && amount > 0n && token.allowance < amount
 
-  const validation = useMemo<Validation>(() => {
-    if (!isConnected) return { ok: false, reason: 'Connect your wallet to place a bet.' }
-    if (wrongChain) return { ok: false, reason: `Your wallet is on another network. Switch it to ${activeChain.name}.` }
-    if (!token.ready) return { ok: false, reason: 'Reading the settlement token…' }
-    if (!config.genesisStarted) return { ok: false, reason: 'This market has not opened its first round yet.' }
-    if (config.paused) return { ok: false, reason: 'This market is paused. Live rounds become fully refundable.' }
-    if (phase === 'upcoming') return { ok: false, reason: 'This round has not opened for betting yet.' }
-    if (phase !== 'betting') return { ok: false, reason: 'Betting is closed for this round. The next one opens shortly.' }
-    if (inLockGrace) {
-      return {
-        ok: false,
-        reason: 'This round locks in a moment — too late for a new bet to land. The next round opens straight after.',
-      }
-    }
-    if (input.trim() === '') return { ok: false, reason: 'Enter an amount.' }
-    if (amount === null) return { ok: false, reason: 'That is not a valid amount.' }
-    if (amount === 0n) return { ok: false, reason: 'Enter an amount above zero.' }
-    if (amount < config.minBet) {
-      return { ok: false, reason: `Minimum bet is ${formatAmountWithSymbol(config.minBet, token.decimals, token.symbol)}.` }
-    }
-    if (amount > config.maxBet) {
-      return { ok: false, reason: `Maximum bet is ${formatAmountWithSymbol(config.maxBet, token.decimals, token.symbol)}.` }
-    }
-    if (amount > sideRemaining) {
-      return {
-        ok: false,
-        reason:
-          sideRemaining === 0n
-            ? `The ${side} side has hit its ${formatAmountWithSymbol(config.maxSide, token.decimals, token.symbol)} cap for this round.`
-            : `Only ${formatAmountWithSymbol(sideRemaining, token.decimals, token.symbol)} of room left on the ${side} side this round.`,
-      }
-    }
-    if (amount > token.balance) {
-      return { ok: false, reason: `Not enough ${token.symbol}. You hold ${formatAmount(token.balance, token.decimals)}.` }
-    }
-    if (token.isNative && amount > spendable) {
-      return { ok: false, reason: `Leave a little ${token.symbol} behind for gas.` }
-    }
-    return { ok: true, hint: quote?.refundOnly ? 'You are first in this round — if nobody takes the other side, you are refunded in full.' : undefined }
-  }, [
-    isConnected,
-    wrongChain,
-    token.ready,
-    inLockGrace,
-    config.genesisStarted,
-    config.paused,
-    config.minBet,
-    config.maxBet,
-    config.maxSide,
-    phase,
-    input,
-    amount,
-    sideRemaining,
-    side,
-    token.balance,
-    token.decimals,
-    token.symbol,
-    token.isNative,
-    spendable,
-    quote?.refundOnly,
-  ])
+  const hint =
+    validation.ok && quote?.refundOnly
+      ? 'You are first in this round — if nobody takes the other side, you are refunded in full.'
+      : undefined
 
   const busy = busyKey !== null
 
   async function onApprove() {
     if (amount === null || amount <= 0n) return
-    const allowanceTarget = amount > config.maxBet ? amount : config.maxBet
+    const allowanceTarget = allowanceFor(allowanceMode, amount)
     await run(
       'approve',
       `Approve ${token.symbol}`,
@@ -318,6 +302,47 @@ export function BetPanel({
         </div>
       ) : null}
 
+      {!wrongChain && needsApproval && validation.ok && amount !== null ? (
+        <div className="card-muted p-3">
+          <p className="label">Approval</p>
+          <div className="mt-1.5 grid grid-cols-2 gap-2" role="radiogroup" aria-label="Approval size">
+            {[
+              {
+                mode: 'exact' as const,
+                title: 'This bet only',
+                body: formatAmountWithSymbol(amount, token.decimals, token.symbol),
+              },
+              { mode: 'unlimited' as const, title: 'Unlimited', body: 'no approval again' },
+            ].map((opt) => {
+              const active = allowanceMode === opt.mode
+              return (
+                <button
+                  key={opt.mode}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  disabled={busy}
+                  onClick={() => setAllowanceMode(opt.mode)}
+                  className={`rounded-lg border px-2.5 py-2 text-left text-xs transition-colors ${
+                    active
+                      ? 'border-slate-900 bg-white dark:border-slate-200 dark:bg-slate-900'
+                      : 'border-slate-200 bg-transparent hover:border-slate-400 dark:border-slate-800 dark:hover:border-slate-600'
+                  }`}
+                >
+                  <span className="block font-bold">{opt.title}</span>
+                  <span className="num block text-[11px] text-slate-500 dark:text-slate-400">{opt.body}</span>
+                </button>
+              )
+            })}
+          </div>
+          <p className="mt-2 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+            {allowanceMode === 'exact'
+              ? `Approves exactly this stake, so the market can never move more than ${formatAmountWithSymbol(amount, token.decimals, token.symbol)} — you approve again for the next bet.`
+              : `The market can move any amount of your ${token.symbol} until you revoke it, and you never approve again. Revoke by approving 0 in your wallet or any allowance manager.`}
+          </p>
+        </div>
+      ) : null}
+
       {wrongChain ? (
         <button
           type="button"
@@ -346,20 +371,12 @@ export function BetPanel({
         </button>
       )}
 
-      {!wrongChain && needsApproval && validation.ok ? (
-        <p className="text-[11px] text-slate-500 dark:text-slate-400">
-          One-time approval up to the per-bet cap so you do not have to approve every round.
-        </p>
-      ) : null}
-
       {!validation.ok && validation.reason ? (
         <p role="status" className="text-xs font-medium text-amber-700 dark:text-amber-400">
           {validation.reason}
         </p>
       ) : null}
-      {validation.ok && validation.hint ? (
-        <p className="text-xs text-slate-500 dark:text-slate-400">{validation.hint}</p>
-      ) : null}
+      {validation.ok && hint ? <p className="text-xs text-slate-500 dark:text-slate-400">{hint}</p> : null}
     </div>
   )
 }

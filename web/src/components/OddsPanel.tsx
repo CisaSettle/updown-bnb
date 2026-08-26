@@ -1,4 +1,4 @@
-import { formatImplied, formatMultiple } from '../lib/format'
+import { formatBreakEven, formatMultiple, overroundPoints } from '../lib/format'
 
 function Side({
   side,
@@ -38,9 +38,15 @@ function Side({
           </p>
           <p className="mt-0.5 text-[11px] font-medium text-slate-600 dark:text-slate-400">payout on a win</p>
 
-          {/* Polymarket vocabulary: implied probability. */}
-          <p className="num mt-2 text-sm font-bold text-slate-800 dark:text-slate-200">{formatImplied(multipleBps)}</p>
-          <p className="text-[11px] font-medium text-slate-600 dark:text-slate-400">implied chance</p>
+          {/*
+            NOT an implied probability. `1/multiple` is the win rate at which this bet's expected
+            value is exactly zero — a true statement about the price on offer. Calling it an
+            implied chance would claim the two sides are calibrated probabilities, and they are
+            not: they sum to more than 100% (the fee), and a pool ratio on a coin-flip event is a
+            statement about where the money is, not about how likely the move is.
+          */}
+          <p className="num mt-2 text-sm font-bold text-slate-800 dark:text-slate-200">{formatBreakEven(multipleBps)}</p>
+          <p className="text-[11px] font-medium text-slate-600 dark:text-slate-400">break-even win rate</p>
         </>
       ) : (
         <>
@@ -64,6 +70,7 @@ export function OddsPanel({
   live: boolean
 }) {
   const empty = !upBps || !downBps || upBps === 0n || downBps === 0n
+  const overround = overroundPoints(upBps, downBps)
 
   return (
     <div>
@@ -84,6 +91,16 @@ export function OddsPanel({
             ? 'These are the final odds for this round — the book is locked.'
             : 'Odds move with every bet and are only final at lock. The number you see is the multiple the contract itself would use.'}
       </p>
+
+      {!empty && overround !== undefined ? (
+        <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+          A <strong>break-even win rate</strong> is what a side has to win to leave you level at that payout — not a
+          forecast. The two add up to <span className="num">{(100 + overround).toFixed(1)}%</span>, and the{' '}
+          <span className="num">{overround.toFixed(1)}</span> points above 100 are the fee sitting inside both
+          multiples, so they are not probabilities and cannot be read as a pair of them. A pool price says where the
+          money is; on a short coin-flip window that is not the same thing as how likely the move is.
+        </p>
+      ) : null}
     </div>
   )
 }

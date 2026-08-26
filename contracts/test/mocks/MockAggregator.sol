@@ -80,7 +80,12 @@ contract MockAggregator is IAggregatorV3 {
         return latestId;
     }
 
-    function getRoundData(uint80 roundId) public view override returns (uint80, int256, uint256, uint256, uint80) {
+    function getRoundData(uint80 roundId)
+        public
+        view
+        override
+        returns (uint80, int256, uint256, uint256, uint80)
+    {
         require(!shouldRevert, "MockAggregator: forced revert");
         RoundData memory d = _history[roundId];
         require(d.updatedAt != 0, "MockAggregator: no data present");

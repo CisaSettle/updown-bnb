@@ -27,10 +27,17 @@ function PhaseChip({ phase }: { phase: RoundPhase }) {
 /**
  * The bettable round is never "live" from a bettor's point of view: once its lock time passes it is
  * simply waiting to be locked by the next `executeRound` call.
+ *
+ * `expired` is the one state that must survive that collapse. A bettable round that was never
+ * locked expires at `lockTs + bufferSeconds` — one stalled keeper and the round taking bets a
+ * moment ago is one `_isExpired` the chain already agrees with: `refundable()` is true, `claim()`
+ * pays every stake back in full, and the positions table below offers a Collect button for it.
+ * Calling that "Settling" says a settlement is still coming when the chain has closed the door on
+ * one, and contradicts the positions table on the same epoch.
  */
 function bettingChipPhase(phase: RoundPhase): RoundPhase {
   if (phase === 'betting' || phase === 'upcoming' || phase === 'voided' || phase === 'unstarted') return phase
-  return 'settling'
+  return phase === 'expired' ? 'expired' : 'settling'
 }
 
 /**
@@ -205,7 +212,11 @@ export function LiveRoundCard({
                 ? 'Betting closes in'
                 : bettablePhase === 'upcoming'
                   ? 'Betting opens in'
-                  : 'Waiting to lock'
+                  : // This round can never be locked now — saying "waiting to lock" would promise
+                    // a lock the contract's own window check has already ruled out.
+                    bettablePhase === 'expired' || bettablePhase === 'voided'
+                    ? 'Settlement window closed'
+                    : 'Waiting to lock'
             }
             tone={bettablePhase === 'betting' ? 'betting' : 'idle'}
           />

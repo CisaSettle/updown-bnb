@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { createLogger, isLogLevel, serialiseValue, registerSecret, clearSecrets, scrubSecrets } from '../src/logger.js';
+import {
+  createLogger,
+  isLogLevel,
+  serialiseValue,
+  registerSecret,
+  registerEnvSecrets,
+  SECRET_ENV_VARS,
+  clearSecrets,
+  scrubSecrets,
+} from '../src/logger.js';
 
 const capture = () => {
   const lines: string[] = [];
@@ -100,6 +109,60 @@ describe('secret scrubbing', () => {
     // A different host, but the same credential — a redaction keyed only on the exact URL misses it.
     log.error('boom', { url: 'wss://other.example.com/0123456789abcdef0123456789abcdef' });
     expect(lines[0]).not.toContain('0123456789abcdef0123456789abcdef');
+  });
+
+  it('scrubs every endpoint in a comma-separated list, not just the list as a whole', () => {
+    // PRICE_API_FALLBACKS holds several endpoints in one variable, and price.ts embeds the ONE that
+    // failed into the error text the keeper then logs at error level — never the list. Registering
+    // only the whole string scrubbed nothing at all.
+    // A keyed provider first, the public endpoint as its backstop — and the credential in the query
+    // string, where parsing the joined list as one URL swallows it into a value that never appears
+    // in a log line on its own.
+    registerSecret(
+      'https://pro-api.example.com/v1/ticker?apikey=SECRETKEY1234567,https://data-api.binance.vision/api/v3/ticker/price',
+    );
+    const lines: string[] = [];
+    const log = createLogger({ write: (l) => lines.push(l) });
+    log.error('price fetch failed', {
+      detail:
+        'all price endpoints failed for BTCUSDT -> https://pro-api.example.com/v1/ticker?apikey=SECRETKEY1234567: 401',
+    });
+    expect(lines[0]).not.toContain('SECRETKEY1234567');
+    expect(lines[0]).toContain('***');
+  });
+
+  it('registers every credential-bearing setting the keeper actually reads', () => {
+    // The registration itself lives in the entrypoint, which nothing can import without starting the
+    // keeper — so the one line that was missing (`PRICE_API_FALLBACKS`) was missing precisely where
+    // no test could see it. `registerEnvSecrets` exists so the SET is testable.
+    const env = {
+      RPC_URL: 'https://rpc.example.com/bsc/RPCKEY0123456789abcdef',
+      KEEPER_PRIVATE_KEY: '0x' + '7'.repeat(64),
+      PRICE_API: 'https://api.example.com/v3/ticker?apikey=PRIMARYKEY123456',
+      PRICE_API_FALLBACKS:
+        'https://pro-api.example.com/v1/ticker?apikey=FALLBACKKEY98765,https://data-api.binance.vision/api/v3/ticker/price',
+    } as NodeJS.ProcessEnv;
+    registerEnvSecrets(env);
+
+    const lines: string[] = [];
+    const log = createLogger({ write: (l) => lines.push(l) });
+    // Each credential the way it actually reaches a log: viem stamps the RPC URL into every
+    // transport error, and price.ts names the ONE endpoint that failed, never the list.
+    log.error('rpc failed', { detail: 'URL: https://rpc.example.com/bsc/RPCKEY0123456789abcdef' });
+    log.error('price failed', {
+      detail:
+        'all price endpoints failed for BTCUSDT -> https://api.example.com/v3/ticker?apikey=PRIMARYKEY123456: 429 ;; https://pro-api.example.com/v1/ticker?apikey=FALLBACKKEY98765: 401',
+    });
+    log.error('signing failed', { oops: '0x' + '7'.repeat(64) });
+
+    const all = lines.join('\n');
+    for (const secret of ['RPCKEY0123456789abcdef', 'PRIMARYKEY123456', 'FALLBACKKEY98765', '7'.repeat(64)]) {
+      expect(all).not.toContain(secret);
+    }
+    // And every variable the keeper reads that can hold a credential is in the set.
+    expect([...SECRET_ENV_VARS].sort()).toEqual(
+      ['KEEPER_PRIVATE_KEY', 'PRICE_API', 'PRICE_API_FALLBACKS', 'RPC_URL'].sort(),
+    );
   });
 
   it('scrubs query-string credentials', () => {

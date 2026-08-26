@@ -7,11 +7,13 @@
  */
 
 import { parseEventLogs, type Address, type Hex, type TransactionReceipt } from 'viem';
-import { marketAbi, relayAggregatorAbi, voidReasonName } from './abi.js';
+import { isKeeperFaultVoid, marketAbi, relayAggregatorAbi, VOID_REASONS, voidReasonName } from './abi.js';
 import { chainTimestamp, type Clients } from './chain.js';
+import { ChainClock } from './clock.js';
 import type { KeeperConfig } from './config.js';
 import type { Logger } from './logger.js';
-import { M, HELP, type MetricsRegistry } from './metrics.js';
+import { M, HELP, NEVER_EXECUTED, type MetricsRegistry } from './metrics.js';
+import type { SettlementWindowStats } from './health.js';
 import { PriceSource, formatPrice8dp, normaliseKey, symbolFromDescription, SymbolMappingError } from './price.js';
 import {
   applyCooldown,
@@ -20,6 +22,7 @@ import {
   missedEpochs,
   relayCanStillLand,
   relayCapacity,
+  secondsUntilLockable,
   RELAY_DEADLINE_MARGIN_MS,
   RELAY_MIN_LANDING_MS,
   type RoundTiming,
@@ -41,6 +44,7 @@ import {
 } from './boundary.js';
 import {
   applyGasPremium,
+  completesAttempt,
   padGas,
   sendWithRetry,
   sleep,
@@ -56,11 +60,76 @@ import { computeBackoff, errorText, isContractRejection, type BackoffOptions } f
  */
 const TICK_BACKOFF: BackoffOptions = { baseMs: 2_000, factor: 2, maxMs: 60_000, jitter: 0.2 };
 
+/**
+ * Every value `updown_keeper_failures_total{kind=...}` can take.
+ *
+ * Listed in one place so all of them can be pre-declared at zero: a Prometheus alert on a series
+ * that does not exist yet evaluates to no data and, on the usual `for:` rule shape, never fires —
+ * so the failure kinds that matter most (a boundary the chain will reject, a relay that missed its
+ * boundary) were invisible until after the damage was done.
+ */
+export const FAILURE_KINDS = [
+  'boundary-lookup',
+  'boundary-not-found',
+  'boundary-unusable',
+  'execute-revert',
+  'execute-send',
+  'execute-simulate',
+  'no-progress',
+  'price',
+  'read',
+  'relay-deadline',
+  'relay-late',
+  'relay-revert',
+  'relay-send',
+  'relay-simulate',
+  'tick',
+  'watchdog-restart',
+] as const;
+
+export type FailureKind = (typeof FAILURE_KINDS)[number];
+
 /** Never re-arm a timer tighter than this straight after a tick. */
 const MIN_REARM_MS = 250;
 
 /** How long `#awaitChainLock` will wait for the chain clock to reach the boundary. */
 const CHAIN_LOCK_WAIT_MS = 30_000;
+
+/**
+ * How many rounds' worth of time the settlement-outcome window spans.
+ *
+ * Long enough that one bad round is noise and a broken feed is a trend; short enough that a market
+ * which recovers is reported healthy again within the hour. On a 5m market that is an hour of
+ * rounds; on a 1h market, half a day.
+ */
+const SETTLEMENT_WINDOW_ROUNDS = 12;
+
+/** Hard cap on remembered outcomes per market, so a fast-forward burst cannot grow without bound. */
+const MAX_REMEMBERED_OUTCOMES = 64;
+
+/**
+ * How many completed rounds one `executeRound` receipt may contribute to the health window.
+ *
+ * A call in normal operation completes at most two rounds: it settles (or voids) the previous epoch
+ * and locks (or voids) the current one. A call that catches up after an outage voids every epoch the
+ * keeper slept through — ten, fifty — in one transaction. Those voids are real and each is counted
+ * in `rounds_voided_total`, but letting all of them into the health window would keep a keeper that
+ * has already recovered and is settling perfectly reported as broken for the rest of the window.
+ * Staleness is what pages during the outage itself; this signal is about whether the rounds being
+ * settled NOW are worth anything.
+ */
+const MAX_OUTCOMES_PER_RECEIPT = 2;
+
+/** One completed round, as this keeper's own `executeRound` receipt reported it. */
+interface RoundOutcome {
+  atMs: number;
+  epoch: bigint;
+  voided: boolean;
+  /** Void reason, or null for a round that genuinely settled. */
+  reason: string | null;
+  /** True when the void is one the keeper is answerable for. */
+  fault: boolean;
+}
 
 export interface RelayProfile {
   feed: Address;
@@ -226,6 +295,12 @@ export interface MarketDeps {
   priceSource: PriceSource;
   relays: RelayCoordinator;
   now?: () => number;
+  /**
+   * The chain's clock. Every wake is planned against it rather than the local one, because every
+   * deadline the keeper has (`TooEarly`, a print at or before the boundary) is measured in chain
+   * time. Defaults to trusting the local clock, which is what a bare worker in a test wants.
+   */
+  clock?: ChainClock;
 }
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000' as const;
@@ -236,6 +311,8 @@ export class MarketWorker {
 
   readonly #deps: MarketDeps;
   readonly #now: () => number;
+  /** Chain-time "now" for planning. Durations, latencies and timers stay on the local clock. */
+  readonly #chainNow: () => number;
   #profile: MarketProfile | null = null;
   #timer: NodeJS.Timeout | null = null;
   #stopped = false;
@@ -248,6 +325,8 @@ export class MarketWorker {
   #lastInactiveLogMs = 0;
   #lastRelayCapacityLogMs = 0;
   #idleTicks = 0;
+  /** Completed rounds seen in this keeper's own receipts, newest last. Bounded two ways. */
+  #outcomes: RoundOutcome[] = [];
   #armed = false;
   #tickActive = false;
   #started = false;
@@ -258,6 +337,8 @@ export class MarketWorker {
     this.address = address;
     this.#deps = deps;
     this.#now = deps.now ?? Date.now;
+    const clock = deps.clock ?? ChainClock.local(this.#now);
+    this.#chainNow = () => clock.nowMs();
     this.#supervisedSinceMs = this.#now();
     this.#log = deps.logger.child({ market: name, address });
   }
@@ -422,7 +503,20 @@ export class MarketWorker {
     const m = this.#deps.metrics;
     m.declare(M.executions, HELP[M.executions] as string, 'counter', labels);
     m.declare(M.relays, HELP[M.relays] as string, 'counter', labels);
-    m.setGauge(M.secondsSinceExecution, HELP[M.secondsSinceExecution] as string, 0, labels);
+    // Every failure kind and every void reason, at zero, BEFORE any of them can happen. A rule like
+    // `rate(updown_keeper_rounds_voided_total{reason="settlement-window-elapsed"}[15m]) > 0` is no
+    // data until the series exists, and no data does not page.
+    for (const kind of FAILURE_KINDS) {
+      m.declare(M.failures, HELP[M.failures] as string, 'counter', { ...labels, kind });
+    }
+    for (const reason of Object.values(VOID_REASONS)) {
+      m.declare(M.voided, HELP[M.voided] as string, 'counter', { ...labels, reason });
+    }
+    // -1, not 0: "never executed" is not "executed a moment ago". See `tickGauges`.
+    m.setGauge(M.secondsSinceExecution, HELP[M.secondsSinceExecution] as string, NEVER_EXECUTED, labels);
+    m.setGauge(M.recentRounds, HELP[M.recentRounds] as string, 0, labels);
+    m.setGauge(M.recentVoidRatio, HELP[M.recentVoidRatio] as string, 0, labels);
+    m.setGauge(M.recentFaultVoidRatio, HELP[M.recentFaultVoidRatio] as string, 0, labels);
     m.setGauge(M.marketActive, HELP[M.marketActive] as string, 0, labels);
     m.setGauge(M.marketHealthy, HELP[M.marketHealthy] as string, 0, labels);
   }
@@ -529,8 +623,11 @@ export class MarketWorker {
       return;
     }
 
-    const plan = computeNextWake(this.#now(), snapshot.round, this.#wakeOptions(snapshot.round));
-    const missed = missedEpochs(Math.floor(this.#now() / 1000), snapshot.round, this.intervalSec);
+    // Chain time, not local: the boundary these wakes are aimed at is a `block.timestamp`, and a
+    // local clock that has drifted moves every wake relative to it. Only the DELAY comes back out
+    // of the plan, and a delay is a difference, so the timer itself still runs on the local clock.
+    const plan = computeNextWake(this.#chainNow(), snapshot.round, this.#wakeOptions(snapshot.round));
+    const missed = missedEpochs(Math.floor(this.#chainNow() / 1000), snapshot.round, this.intervalSec);
     this.#log.debug('scheduled', {
       epoch: snapshot.currentEpoch,
       lockTs: snapshot.round.lockTs,
@@ -552,7 +649,8 @@ export class MarketWorker {
   }
 
   #delayWithCooldown(plan: WakePlan, round: RoundTiming): number {
-    return applyCooldown(plan, this.#cooldownMs(), this.#now(), round, RELAY_DEADLINE_MARGIN_MS);
+    // Chain time again: the clamp compares against `lockTs`, a chain timestamp.
+    return applyCooldown(plan, this.#cooldownMs(), this.#chainNow(), round, RELAY_DEADLINE_MARGIN_MS);
   }
 
   /**
@@ -712,25 +810,11 @@ export class MarketWorker {
       return true;
     }
     const chainNow = await chainTimestamp(this.#deps.clients.publicClient);
-    if (!relayCanStillLand(chainNow, boundaryTs)) {
-      // The explicit deadline. Relays queue behind one another on a single key, so a relay that
-      // waited too long cannot produce a print at or before the boundary any more — broadcasting
-      // it would burn gas, land useless, and hold the queue against the relays still behind it.
-      // Say so loudly and drop it, rather than discovering the void after the fact.
-      this.#deps.relays.abandon(relay.feed, boundaryTs, this.#now());
-      this.#countFailure('relay-deadline');
-      this.#log.error('relay skipped: it can no longer land at or before the boundary', {
-        feed: relay.feed,
-        symbol: relay.symbol,
-        boundaryTs,
-        chainNow,
-        shortBySec: chainNow + Math.ceil(RELAY_MIN_LANDING_MS / 1000) - boundaryTs,
-        waitedMs: this.#now() - startedAt,
-        queueDepth: this.#deps.queue.depth,
-        hint: 'raise RELAY_LEAD_MS, or give the relay feeds sharing this keeper key more room',
-      });
-      return true;
-    }
+    // The explicit deadline. Relays queue behind one another on a single key, so a relay that
+    // waited too long cannot produce a print at or before the boundary any more — broadcasting it
+    // would burn gas, land useless, and hold the queue against the relays still behind it. Say so
+    // loudly and drop it, rather than discovering the void after the fact.
+    if (this.#dropIfUnlandable(relay, boundaryTs, chainNow, startedAt, 'queue')) return true;
     if (boundaryTs - chainNow > snapshot.round.oracleMaxAge) {
       // Only reachable when the chain clock lags the local clock badly. Back off and retry closer
       // to the boundary rather than burning a print the contract would reject as too old.
@@ -797,6 +881,16 @@ export class MarketWorker {
       }),
     );
 
+    // Take the deadline AGAIN, right before the wire. The check at the front of the queue was made
+    // before the quote was fetched, and the quote is where the seconds actually go: `PRICE_TIMEOUT_MS`
+    // is 4s *per endpoint* and `price.ts` tries the primary and then every fallback, so a primary
+    // that hangs and a fallback that answers can burn 4-8s between "there is still time" and this
+    // line. Simulation and gas estimation add their own round trips. Headroom measured before all of
+    // that is not headroom: the print mines after the boundary, `_priceAt` ignores it, and the round
+    // voids anyway — having spent gas and a queue slot in front of relays that still had a chance.
+    const chainNowBeforeSend = await chainTimestamp(publicClient);
+    if (this.#dropIfUnlandable(relay, boundaryTs, chainNowBeforeSend, startedAt, 'send')) return true;
+
     try {
       const result = await sendWithRetry<TransactionReceipt>(this.#sendPolicy(), {
         getBaseGasPrice: () => this.#baseGasPrice(),
@@ -823,10 +917,14 @@ export class MarketWorker {
         sleep: (ms) => sleep(ms),
         now: this.#now,
         onAttempt: (event) => {
-          this.#deps.metrics.increment(M.txAttempts, HELP[M.txAttempts] as string, {
-            market: this.name,
-            op: 'relay',
-          });
+          // One increment per ATTEMPT, not per event: a single successful send fires 'sent' and
+          // then 'mined', and counting both made the counter read 2x the true attempt count.
+          if (completesAttempt(event.outcome)) {
+            this.#deps.metrics.increment(M.txAttempts, HELP[M.txAttempts] as string, {
+              market: this.name,
+              op: 'relay',
+            });
+          }
           if (event.outcome === 'timeout' || event.outcome === 'error') {
             this.#log.warn('relay attempt failed; retrying with a higher gas price', {
               attempt: event.attempt,
@@ -841,17 +939,37 @@ export class MarketWorker {
       this.#deps.relays.mark(relay.feed, boundaryTs, this.#now());
       this.#deps.metrics.increment(M.relays, HELP[M.relays] as string, { market: this.name });
       this.#deps.metrics.increment(M.txGasUsed, HELP[M.txGasUsed] as string, { market: this.name, op: 'relay' }, Number(result.receipt.gasUsed));
-      this.#log.info('relay published', {
+
+      // A confirmed receipt is not a relay that did its job. `_priceAt` accepts a print only when
+      // `updatedAt <= boundaryTs`, and `updatedAt` is the timestamp of the block this transaction
+      // landed in — so a relay that confirms one block late is worthless to the boundary it was
+      // sent for, and every round on this feed then voids into refunds. Saying 'relay published'
+      // and nothing else is how that becomes an unexplained void: compare, and shout.
+      const minedTs = await this.#minedAt(result.receipt);
+      const fields = {
         feed: relay.feed,
         symbol: relay.symbol,
         price: raw,
         price8dp,
         boundaryTs,
+        minedTs,
+        secondsBeforeBoundary: minedTs === null ? null : boundaryTs - minedTs,
         txHash: result.hash,
         gasUsed: result.receipt.gasUsed,
         attempts: result.attempts,
         latencyMs: this.#now() - startedAt,
-      });
+      };
+      if (minedTs !== null && minedTs > boundaryTs) {
+        this.#countFailure('relay-late');
+        this.#log.error('relay MISSED its boundary; the print is timestamped after it and cannot settle this round', {
+          ...fields,
+          lateBySec: minedTs - boundaryTs,
+          queueDepth: this.#deps.queue.depth,
+          hint: 'raise RELAY_LEAD_MS, relay fewer feeds from this key, or check RPC/mempool latency',
+        });
+        return true;
+      }
+      this.#log.info('relay published', fields);
       return true;
     } catch (error) {
       // Consume the pair even though this failed. `sendWithRetry` has already broadcast (and
@@ -869,6 +987,43 @@ export class MarketWorker {
       });
       return false;
     }
+  }
+
+  /**
+   * Give up on a relay that can no longer produce a print at or before its boundary.
+   *
+   * Taken twice: once at the front of the queue, and once immediately before the transaction goes
+   * out. The two are not redundant — everything between them (the price quote, the simulation, the
+   * gas estimate) costs chain time, and the quote alone can cost `PRICE_TIMEOUT_MS` per endpoint.
+   *
+   * @param at which check this is, for the log only.
+   * @returns true when the relay was dropped and the tick is over.
+   */
+  #dropIfUnlandable(
+    relay: RelayProfile,
+    boundaryTs: number,
+    chainNow: number,
+    startedAt: number,
+    at: 'queue' | 'send',
+  ): boolean {
+    if (relayCanStillLand(chainNow, boundaryTs)) return false;
+    this.#deps.relays.abandon(relay.feed, boundaryTs, this.#now());
+    this.#countFailure('relay-deadline');
+    this.#log.error('relay skipped: it can no longer land at or before the boundary', {
+      feed: relay.feed,
+      symbol: relay.symbol,
+      boundaryTs,
+      chainNow,
+      checkedAt: at,
+      shortBySec: chainNow + Math.ceil(RELAY_MIN_LANDING_MS / 1000) - boundaryTs,
+      waitedMs: this.#now() - startedAt,
+      queueDepth: this.#deps.queue.depth,
+      hint:
+        at === 'send'
+          ? 'the price fetch or the RPC round trips ate the headroom; lower PRICE_TIMEOUT_MS, or raise RELAY_LEAD_MS'
+          : 'raise RELAY_LEAD_MS, or give the relay feeds sharing this keeper key more room',
+    });
+    return true;
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -914,8 +1069,11 @@ export class MarketWorker {
         // not punish a market that is being executed by somebody else.
         return true;
       }
-      if (chainNow < boundaryTs) {
-        this.#log.debug('chain clock slipped back behind the boundary; re-planning', { boundaryTs, chainNow });
+      if (secondsUntilLockable(chainNow, boundaryTs) > 0) {
+        // Not merely "before the boundary": `executeRound` reverts `TooEarly` while
+        // `block.timestamp <= boundaryTs`, because inside the boundary second a print timestamped
+        // exactly `boundaryTs` still qualifies and ordering would pick the settlement price.
+        this.#log.debug('chain clock is not strictly past the boundary yet; re-planning', { boundaryTs, chainNow });
         return false;
       }
 
@@ -999,10 +1157,14 @@ export class MarketWorker {
           sleep: (ms) => sleep(ms),
           now: this.#now,
           onAttempt: (event) => {
-            this.#deps.metrics.increment(M.txAttempts, HELP[M.txAttempts] as string, {
-              market: this.name,
-              op: 'executeRound',
-            });
+            // See the relay path: `onAttempt` fires more than once per attempt, so only the event
+            // that ENDS an attempt may increment the counter.
+            if (completesAttempt(event.outcome)) {
+              this.#deps.metrics.increment(M.txAttempts, HELP[M.txAttempts] as string, {
+                market: this.name,
+                op: 'executeRound',
+              });
+            }
             if (event.outcome === 'timeout' || event.outcome === 'error') {
               this.#log.warn('executeRound attempt failed; retrying with a higher gas price', {
                 attempt: event.attempt,
@@ -1028,6 +1190,7 @@ export class MarketWorker {
         });
 
         const outcomes = this.#decodeOutcomes(result.receipt);
+        this.#recordOutcomes(outcomes);
         this.#log.info('executeRound confirmed', {
           epoch,
           boundaryTs,
@@ -1334,8 +1497,11 @@ export class MarketWorker {
   #decodeOutcomes(receipt: TransactionReceipt): {
     summary: Record<string, unknown>;
     voided: { epoch: bigint; reason: string }[];
+    /** The epoch this call genuinely settled — priced, paid, fee taken — or null. */
+    settled: bigint | null;
   } {
     const voided: { epoch: bigint; reason: string }[] = [];
+    let settled: bigint | null = null;
     const summary: Record<string, unknown> = {};
     try {
       const events = parseEventLogs({ abi: marketAbi, logs: receipt.logs });
@@ -1347,6 +1513,7 @@ export class MarketWorker {
             summary['lockPrice'] = formatPrice8dp(event.args.lockPrice);
             break;
           case 'RoundSettled':
+            settled = event.args.epoch;
             summary['settledEpoch'] = event.args.epoch;
             summary['closePrice'] = formatPrice8dp(event.args.closePrice);
             summary['rewardPool'] = event.args.rewardPool;
@@ -1366,7 +1533,78 @@ export class MarketWorker {
     } catch (error) {
       this.#log.debug('could not decode receipt logs', { error: errorText(error) });
     }
-    return { summary, voided };
+    return { summary, voided, settled };
+  }
+
+  /**
+   * Remember how the rounds in one receipt turned out.
+   *
+   * This is the input `/healthz` never had. Without it the only per-market signal is staleness, and
+   * staleness is satisfied by a keeper whose every round voids: once a boundary has no usable print
+   * `executeRound` still SUCCEEDS, once per interval, forever, refunding every stake behind a green
+   * health check.
+   */
+  #recordOutcomes(outcomes: { voided: { epoch: bigint; reason: string }[]; settled: bigint | null }): void {
+    const atMs = this.#now();
+    if (outcomes.settled !== null) {
+      this.#outcomes.push({ atMs, epoch: outcomes.settled, voided: false, reason: null, fault: false });
+    }
+    for (const voided of outcomes.voided.slice(0, MAX_OUTCOMES_PER_RECEIPT)) {
+      this.#outcomes.push({
+        atMs,
+        epoch: voided.epoch,
+        voided: true,
+        reason: voided.reason,
+        fault: isKeeperFaultVoid(voided.reason),
+      });
+    }
+    this.#pruneOutcomes(atMs);
+  }
+
+  #pruneOutcomes(nowMs: number): void {
+    const cutoff = nowMs - this.#settlementWindowMs();
+    let kept = this.#outcomes.filter((o) => o.atMs >= cutoff);
+    if (kept.length > MAX_REMEMBERED_OUTCOMES) kept = kept.slice(kept.length - MAX_REMEMBERED_OUTCOMES);
+    this.#outcomes = kept;
+  }
+
+  #settlementWindowMs(): number {
+    return this.intervalSec * SETTLEMENT_WINDOW_ROUNDS * 1000;
+  }
+
+  /**
+   * How the rounds this market completed recently turned out, or null when it has completed none.
+   * Null is "no signal": a market that has settled nothing is judged by the staleness budget alone.
+   */
+  settlementStats(nowMs: number = this.#now()): SettlementWindowStats | null {
+    this.#pruneOutcomes(nowMs);
+    if (this.#outcomes.length === 0) return null;
+    let voided = 0;
+    let faultVoided = 0;
+    const byReason = new Map<string, number>();
+    for (const outcome of this.#outcomes) {
+      if (!outcome.voided) continue;
+      voided += 1;
+      if (!outcome.fault) continue;
+      faultVoided += 1;
+      const reason = outcome.reason ?? 'unknown';
+      byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
+    }
+    let dominantFaultReason: string | null = null;
+    let best = 0;
+    for (const [reason, count] of byReason) {
+      if (count > best) {
+        best = count;
+        dominantFaultReason = reason;
+      }
+    }
+    return {
+      completed: this.#outcomes.length,
+      voided,
+      faultVoided,
+      dominantFaultReason,
+      windowSec: Math.round(this.#settlementWindowMs() / 1000),
+    };
   }
 
   /** `executeRound` fast-forwards past an outage in one call; confirm the epoch actually moved. */
@@ -1401,17 +1639,20 @@ export class MarketWorker {
   // ───────────────────────────────────────────────────────────────────────────
 
   /**
-   * Block until the chain clock reaches `boundaryTs`. Returns the chain time, or null when the
-   * boundary is still in the future after the bounded wait (the tick is abandoned and re-planned).
+   * Block until the chain clock is strictly past `boundaryTs` — the earliest point `executeRound`
+   * stops reverting `TooEarly`, since the boundary second itself can still receive a qualifying
+   * print. Returns the chain time, or null when the boundary is still ahead after the bounded wait
+   * (the tick is abandoned and re-planned).
    */
   async #awaitChainLock(boundaryTs: number): Promise<number | null> {
     const deadline = this.#now() + CHAIN_LOCK_WAIT_MS;
     for (;;) {
       if (this.#stopped) return null;
       const chainNow = await chainTimestamp(this.#deps.clients.publicClient);
-      if (chainNow >= boundaryTs) return chainNow;
+      const waitSec = secondsUntilLockable(chainNow, boundaryTs);
+      if (waitSec === 0) return chainNow;
       if (this.#now() >= deadline) return null;
-      await sleep(Math.min((boundaryTs - chainNow) * 1000 + 500, 5_000));
+      await sleep(Math.min(waitSec * 1000 + 500, 5_000));
       if (this.#stopped) return null;
     }
   }
@@ -1440,6 +1681,23 @@ export class MarketWorker {
     });
   }
 
+  /**
+   * The chain timestamp a confirmed transaction actually landed at — the `updatedAt` a relay print
+   * carries, and therefore the only figure that says whether the relay beat its boundary.
+   * Null when the block could not be read: that is a failure to look, never evidence of landing
+   * on time, and it must not turn a successful relay into a reported failure.
+   */
+  async #minedAt(receipt: TransactionReceipt): Promise<number | null> {
+    try {
+      const block = await this.#deps.clients.publicClient.getBlock({ blockNumber: receipt.blockNumber });
+      const ts = Number(block.timestamp);
+      return Number.isFinite(ts) && ts > 0 ? ts : null;
+    } catch (error) {
+      this.#log.debug('could not read the block a transaction landed in', { error: errorText(error) });
+      return null;
+    }
+  }
+
   async #receiptIfMined(hash: Hex): Promise<TransactionReceipt | null> {
     try {
       return await this.#deps.clients.publicClient.getTransactionReceipt({ hash });
@@ -1459,21 +1717,39 @@ export class MarketWorker {
     };
   }
 
-  #countFailure(kind: string): void {
+  #countFailure(kind: FailureKind): void {
     this.#deps.metrics.increment(M.failures, HELP[M.failures] as string, { market: this.name, kind });
   }
 
   /** Refresh the derived gauges that only move with wall-clock time. */
   tickGauges(nowMs: number, healthy: boolean): void {
     const labels = { market: this.name };
-    const since = this.#lastExecutionMs === null ? null : Math.floor((nowMs - this.#lastExecutionMs) / 1000);
+    // A market that has NEVER executed publishes the sentinel, not its supervision age: the age of
+    // the process is not the age of a settlement, and exporting it as one makes a freshly booted
+    // 1h market indistinguishable from one that has been stalled for the same span. `/healthz`
+    // says `secondsSinceExecution: null` for exactly this case; the gauge now agrees with it.
+    const since =
+      this.#lastExecutionMs === null ? NEVER_EXECUTED : Math.floor((nowMs - this.#lastExecutionMs) / 1000);
+    this.#deps.metrics.setGauge(M.secondsSinceExecution, HELP[M.secondsSinceExecution] as string, since, labels);
+    this.#deps.metrics.setGauge(M.marketHealthy, HELP[M.marketHealthy] as string, healthy ? 1 : 0, labels);
+
+    // The settlement signal, in /metrics as well as /healthz: a market whose rounds all void is
+    // failing at the keeper's actual job, and nothing else exported here would show it.
+    const stats = this.settlementStats(nowMs);
+    const completed = stats?.completed ?? 0;
+    this.#deps.metrics.setGauge(M.recentRounds, HELP[M.recentRounds] as string, completed, labels);
     this.#deps.metrics.setGauge(
-      M.secondsSinceExecution,
-      HELP[M.secondsSinceExecution] as string,
-      since ?? Math.floor((nowMs - this.#supervisedSinceMs) / 1000),
+      M.recentVoidRatio,
+      HELP[M.recentVoidRatio] as string,
+      completed === 0 ? 0 : (stats as SettlementWindowStats).voided / completed,
       labels,
     );
-    this.#deps.metrics.setGauge(M.marketHealthy, HELP[M.marketHealthy] as string, healthy ? 1 : 0, labels);
+    this.#deps.metrics.setGauge(
+      M.recentFaultVoidRatio,
+      HELP[M.recentFaultVoidRatio] as string,
+      completed === 0 ? 0 : (stats as SettlementWindowStats).faultVoided / completed,
+      labels,
+    );
   }
 
   get currentEpoch(): bigint {

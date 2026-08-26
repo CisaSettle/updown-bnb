@@ -169,13 +169,28 @@ connected to the wrong network still shows correct data (with a "switch network"
 
 - `currentEpoch()` is the epoch **accepting bets**; `currentEpoch() - 1` is the locked, live round.
   The card shows both at once.
-- Odds are shown in both reference vocabularies at the same time: **`3.91x` payout** (Binance-style)
-  and **`25.6%` implied** (Polymarket-style, `1 / multiple`).
+- Odds are shown as a **`3.91x` payout** (Binance-style) plus the **break-even win rate** that
+  payout implies (`1 / multiple`). That second number is deliberately *not* labelled an implied
+  probability: the fee sits inside both sides' multiples, so the two figures always sum to more
+  than 100% (101.6% on an even book at 300 bps), and a parimutuel pool ratio on a five-minute
+  coin-flip window says where the money is, not how likely the move is. The panel prints the total
+  and names the excess as the fee, so neither figure can be read as a calibrated probability.
 - The payout quote reproduces the contract's integer arithmetic exactly, including truncation, and
   includes the user's own stake in the book — so the quoted number is the number the contract pays.
 - `voided` means **full refund, zero fee**: a tie, a one-sided book, an unusable oracle print, a
   missed settlement window, or a pause. This is stated in plain language on the round card, in the
   positions table and in the history table.
+- A round whose **settlement window has elapsed is a refund even if nobody voided it**: `claim()`
+  pays the full stake back with no admin action. The history table resolves its label through the
+  same `roundOutcome` helper the positions table uses and against the same chain clock, so the two
+  panels cannot call one epoch "Pending" and "Refunded" at the same time.
+- That applies to the **round taking bets** too. It was never locked, so its own deadline is
+  `lockTs + bufferSeconds`, not `closeTs + bufferSeconds` — a keeper that stalls for one buffer
+  strands the epoch a user just bet in. Past that second the round card's chip says *Refundable*
+  rather than *Settling*, the clock says the settlement window closed rather than "waiting to
+  lock", and the bet form says the stakes are refundable in full instead of promising that "the
+  next one opens shortly". All three read the same `roundPhase`/`isExpired` mirror of
+  `_isExpired`, which the positions table's Collect button already agreed with.
 - **Claim all** batches only epochs where `claimable || refundable` is true, because `claim()`
   reverts the **whole array** if any epoch in it is not collectable. Two consequences the UI holds
   to: the batch is rebuilt from a fresh `pendingPayout` read taken at the moment you press it (the
@@ -188,6 +203,17 @@ connected to the wrong network still shows correct data (with a "switch network"
 - BSC-USDT has **18 decimals**. Nothing in the UI hard-codes a decimal count — it reads
   `decimals()` from the settlement asset, and the bet button stays disabled until that read has
   actually landed, so an amount is never parsed against a guessed decimal count.
+- **A comma is a decimal separator, not a thousands separator.** `inputMode="decimal"` hands
+  de/fr/es/pt/id/vi/tr/ru users a comma key, so `2,50` means two and a half and is parsed that way.
+  Where both separators appear the last one is the decimal point (`1,234.56` and `1.234,56` are the
+  same number); repeated commas are grouping, western or Indian (`1,234,567`, `12,34,567`); and the
+  one genuinely undecidable shape — `1,234`, which is 1.234 or 1234 depending on where you live —
+  is **refused with an explanation** rather than guessed at, because either guess is a 1000x error.
+  One parse feeds the quote, the limit checks and the transaction argument, so the number quoted is
+  always the number sent.
+- **The approval size is the user's choice**, offered as *this bet only* (exactly the stake) or
+  *unlimited* (never approve again, revocable by approving 0). Nothing is picked silently, and no
+  copy promises a "one-time" approval that a single maximum-size bet would exhaust.
 - **Time comes from the chain, not the browser.** Every deadline the UI counts down to is compared
   against `block.timestamp` inside the contract, so `useChainNow` samples the latest block once a
   minute, keeps the offset against local time, and ticks locally in between. A machine with a slow

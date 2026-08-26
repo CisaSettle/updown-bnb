@@ -514,33 +514,33 @@ contract UpDownMarketTest is UpDownBaseTest {
         _advance(P0); // epoch 1 locked, epoch 2 bettable
         vm.prank(alice);
         vm.expectRevert(UpDownMarketBase.WrongEpoch.selector);
-        market.betUp(1, 100e18);
+        erc20.betUp(1, 100e18);
     }
 
     function test_cannotBetAfterLockTime() public {
         vm.warp(_round(1).lockTs);
         vm.prank(alice);
         vm.expectRevert(UpDownMarketBase.NotBettable.selector);
-        market.betUp(1, 100e18);
+        erc20.betUp(1, 100e18);
     }
 
     function test_minAndMaxBetEnforced() public {
         vm.prank(alice);
         vm.expectRevert(UpDownMarketBase.BelowMinBet.selector);
-        market.betUp(1, MIN_BET - 1);
+        erc20.betUp(1, MIN_BET - 1);
 
         vm.prank(alice);
         vm.expectRevert(UpDownMarketBase.AboveMaxBet.selector);
-        market.betUp(1, MAX_BET + 1);
+        erc20.betUp(1, MAX_BET + 1);
     }
 
     function test_sideCapEnforced() public {
         vm.startPrank(alice);
         for (uint256 i; i < MAX_SIDE / MAX_BET; ++i) {
-            market.betUp(1, MAX_BET);
+            erc20.betUp(1, MAX_BET);
         }
         vm.expectRevert(UpDownMarketBase.SideCapExceeded.selector);
-        market.betUp(1, MIN_BET);
+        erc20.betUp(1, MIN_BET);
         vm.stopPrank();
         assertEq(_round(1).upAmount, MAX_SIDE);
     }
@@ -551,7 +551,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         usdt.setTransferFeeBps(100); // 1% burned in transit
         vm.prank(alice);
         vm.expectRevert(UpDownMarketBase.UnsupportedAsset.selector);
-        market.betUp(1, 1_000e18);
+        erc20.betUp(1, 1_000e18);
         assertEq(_round(1).upAmount, 0);
         assertEq(market.outstanding(), 0);
     }
@@ -615,6 +615,63 @@ contract UpDownMarketTest is UpDownBaseTest {
         vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
         market.executeRound(rid);
         assertEq(market.treasuryAmount(), 0);
+    }
+
+    /**
+     * @notice Every round records the `oracleMaxAge` that was in force when it opened, and that
+     *         value always equals the immutable it was copied from.
+     * @dev The snapshot has **no reader in the settlement path**: `_priceAt` consults the immutable
+     *      `oracleMaxAge` directly and never looks at `r.oracleMaxAge`. The field is recorded for
+     *      historical transparency, so today this assertion is a tautology — and that is the point.
+     *      The day someone makes the parameter mutable, this test goes red and forces a deliberate
+     *      decision about which of the two settlement should read: the round's own snapshot (each
+     *      round keeps the rule it opened under, matching how `feeBps` and `bufferSeconds` already
+     *      behave) or the live value (two rounds that share a boundary could then disagree on
+     *      whether a given proof is valid and stall the market — which is exactly why the parameter
+     *      is immutable today). Leaving it to whichever the reader happened to reach for is the one
+     *      outcome this test exists to prevent.
+     */
+    function test_everyRoundRecordsTheImmutableOracleMaxAge() public {
+        uint32 immutableAge = market.oracleMaxAge();
+        assertEq(immutableAge, MAX_AGE, "fixture");
+
+        // ordinary rounds, with the two *mutable* knobs churning underneath them
+        for (uint256 i; i < 5; ++i) {
+            vm.prank(owner);
+            // safe: i < 5, so `100 * i` and `60 + 20 * i` are both far inside uint16
+            // forge-lint: disable-next-line(unsafe-typecast)
+            market.setParams(uint16(100 * i), uint16(60 + 20 * i));
+            // safe: i < 5, so the widening cannot truncate
+            // forge-lint: disable-next-line(unsafe-typecast)
+            _advance(P0 + int256(i + 1) * 1e8);
+        }
+
+        // a keeper outage: the rounds it runs over void, and the grid fast-forwards in one tx
+        UpDownMarketBase.Round memory live = _round(market.currentEpoch());
+        vm.warp(uint256(live.lockTs) + 4 * INTERVAL);
+        uint80 rid = feed.setAnswer(P0);
+        vm.warp(block.timestamp + 1);
+        vm.prank(keeper);
+        market.executeRound(rid);
+
+        // a pause/restart re-anchors the grid onto a fresh run of epochs
+        vm.startPrank(owner);
+        market.pause();
+        market.unpause();
+        market.genesisStart();
+        vm.stopPrank();
+        vm.warp(market.anchorTs());
+        _advance(P0 + 9e8);
+
+        uint256 opened;
+        for (uint256 e = 1; e <= market.currentEpoch(); ++e) {
+            UpDownMarketBase.Round memory r = _round(e);
+            if (r.startTs == 0) continue; // an epoch the fast-forward skipped: never opened
+            ++opened;
+            assertEq(r.oracleMaxAge, immutableAge, "round snapshot diverged from the immutable");
+            assertEq(r.oracleMaxAge, market.oracleMaxAge(), "and from the live getter");
+        }
+        assertGe(opened, 8, "the walk did not open enough rounds to mean anything");
     }
 
     /// @notice A token that debits the market MORE than it credits the recipient must also be
@@ -715,7 +772,7 @@ contract UpDownMarketTest is UpDownBaseTest {
 
         vm.prank(alice);
         vm.expectRevert(Pausable.EnforcedPause.selector);
-        market.betUp(1, 100e18);
+        erc20.betUp(1, 100e18);
 
         vm.warp(_round(1).lockTs + BUFFER + 1);
         _claim(alice, 1); // claim is deliberately not pausable
@@ -790,9 +847,18 @@ contract UpDownMarketTest is UpDownBaseTest {
     function test_constructorRejectsBadConfig() public {
         vm.expectRevert(UpDownMarketBase.InvalidBuffer.selector);
         new UpDownMarketERC20(
-            // safe: deliberately passing an out-of-range buffer to prove the constructor rejects it
+            owner,
+            address(feed),
+            address(usdt),
+            INTERVAL,
+            FEE_BPS,
+            // safe: deliberately out of range — a buffer equal to the interval must be rejected
             // forge-lint: disable-next-line(unsafe-typecast)
-            owner, address(feed), address(usdt), INTERVAL, FEE_BPS, uint16(INTERVAL), MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
+            uint16(INTERVAL),
+            MAX_AGE,
+            MIN_BET,
+            MAX_BET,
+            MAX_SIDE
         );
         vm.expectRevert(UpDownMarketBase.InvalidFee.selector);
         new UpDownMarketERC20(
@@ -800,9 +866,18 @@ contract UpDownMarketTest is UpDownBaseTest {
         );
         vm.expectRevert(UpDownMarketBase.InvalidOracleMaxAge.selector);
         new UpDownMarketERC20(
-            // safe: deliberately passing an out-of-range max age to prove the constructor rejects it
+            owner,
+            address(feed),
+            address(usdt),
+            INTERVAL,
+            FEE_BPS,
+            BUFFER,
+            // safe: deliberately out of range — a max age equal to the interval must be rejected
             // forge-lint: disable-next-line(unsafe-typecast)
-            owner, address(feed), address(usdt), INTERVAL, FEE_BPS, BUFFER, uint32(INTERVAL), MIN_BET, MAX_BET, MAX_SIDE
+            uint32(INTERVAL),
+            MIN_BET,
+            MAX_BET,
+            MAX_SIDE
         );
         vm.expectRevert(UpDownMarketBase.InvalidLimits.selector);
         new UpDownMarketERC20(

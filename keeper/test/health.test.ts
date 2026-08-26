@@ -4,7 +4,9 @@ import {
   DEFAULT_HEALTH_OPTIONS,
   evaluateHealth,
   evaluateMarketHealth,
+  faultVoidReason,
   type MarketHealthInput,
+  type SettlementWindowStats,
 } from '../src/health.js';
 
 const NOW = 1_800_000_000_000;
@@ -18,6 +20,86 @@ const market = (over: Partial<MarketHealthInput> = {}): MarketHealthInput => ({
   active: true,
   observed: true,
   ...over,
+});
+
+const settlement = (over: Partial<SettlementWindowStats> = {}): SettlementWindowStats => ({
+  completed: 12,
+  voided: 12,
+  faultVoided: 12,
+  dominantFaultReason: 'oracle-no-usable-print-at-boundary',
+  windowSec: 3_600,
+  ...over,
+});
+
+describe('settlement outcomes', () => {
+  it('reports a market that voids everything for keeper-side reasons as unhealthy', () => {
+    // The failure /healthz could not see: once a boundary has no usable print, `executeRound` keeps
+    // SUCCEEDING once per interval — comfortably inside the staleness budget — while every round
+    // voids and every stake is refunded. Executing on time is not the same as settling anything.
+    const health = evaluateMarketHealth(market({ settlement: settlement() }), NOW);
+    expect(health.healthy).toBe(false);
+    expect(health.state).toBe('degraded');
+    expect(health.reason).toMatch(/12 of the last 12 completed rounds \(100%\) voided/);
+    expect(health.reason).toMatch(/oracle-no-usable-print-at-boundary/);
+    expect(health.settlement?.faultVoided).toBe(12);
+  });
+
+  it('leaves a market that voids for want of a counterparty alone', () => {
+    // A one-sided book voids by design: nobody took the other side, everyone is refunded in full,
+    // and no operational change would alter it. Reporting it unhealthy would teach an operator to
+    // ignore the signal that matters.
+    const health = evaluateMarketHealth(
+      market({ settlement: settlement({ faultVoided: 0, dominantFaultReason: null }) }),
+      NOW,
+    );
+    expect(health.state).toBe('ok');
+    expect(health.healthy).toBe(true);
+    // The information is still in the report, it just is not a fault.
+    expect(health.settlement?.voided).toBe(12);
+  });
+
+  it('waits for a sample worth judging before calling a market degraded', () => {
+    const health = evaluateMarketHealth(
+      market({ settlement: settlement({ completed: 3, voided: 3, faultVoided: 3 }) }),
+      NOW,
+    );
+    expect(health.state).toBe('ok');
+  });
+
+  it('tolerates a minority of keeper-side voids', () => {
+    const half = evaluateMarketHealth(
+      market({ settlement: settlement({ completed: 12, voided: 6, faultVoided: 6 }) }),
+      NOW,
+    );
+    expect(half.state).toBe('ok');
+    const most = evaluateMarketHealth(
+      market({ settlement: settlement({ completed: 12, voided: 7, faultVoided: 7 }) }),
+      NOW,
+    );
+    expect(most.state).toBe('degraded');
+  });
+
+  it('says nothing at all when no round has completed yet', () => {
+    expect(faultVoidReason(null)).toBeNull();
+    expect(evaluateMarketHealth(market({ settlement: null }), NOW).state).toBe('ok');
+    expect(evaluateMarketHealth(market(), NOW).settlement).toBeNull();
+  });
+
+  it('lets staleness win when a market is both stale and voiding', () => {
+    // Not executing at all is the more basic failure, and its rounds are not "voiding" — they are
+    // simply not being settled.
+    const health = evaluateMarketHealth(
+      market({ lastExecutionMs: NOW - 900_000, settlement: settlement() }),
+      NOW,
+    );
+    expect(health.state).toBe('stale');
+  });
+
+  it('counts a whole-market void rate through evaluateHealth too', () => {
+    const report = evaluateHealth([market({ settlement: settlement() })], NOW, NOW - 3_600_000);
+    expect(report.healthy).toBe(false);
+    expect(report.markets[0]?.state).toBe('degraded');
+  });
 });
 
 describe('evaluateMarketHealth', () => {
