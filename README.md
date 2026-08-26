@@ -54,6 +54,32 @@ Three properties are worth knowing before reading any code:
 
 ---
 
+## Deployed
+
+### BNB Smart Chain testnet (chain 97) — live
+
+| Contract | Address |
+|---|---|
+| `UpDownRegistry` | [`0x4A42E5CaC8Ef533699841bD1e482E0776a731A2e`](https://testnet.bscscan.com/address/0x4A42E5CaC8Ef533699841bD1e482E0776a731A2e) |
+| BTC/USD 5m (USDT) | [`0xbaBd1c1B13a524Ec53d17e9451AC69c424eA56c3`](https://testnet.bscscan.com/address/0xbaBd1c1B13a524Ec53d17e9451AC69c424eA56c3) |
+| BTC/USD 1h (USDT) | [`0xecE8eEa2f44b9a8101F030BF20aCFb3b247879C0`](https://testnet.bscscan.com/address/0xecE8eEa2f44b9a8101F030BF20aCFb3b247879C0) |
+| BNB/USD 5m (native) | [`0x5f1c8A7E6B2f84d819F95f6997F475834c50c00C`](https://testnet.bscscan.com/address/0x5f1c8A7E6B2f84d819F95f6997F475834c50c00C) |
+| `TestUSDT` (faucet, 18 dec) | [`0xD496A2CfF36396e6F2Ab89bD01A844D41c9023b5`](https://testnet.bscscan.com/address/0xD496A2CfF36396e6F2Ab89bD01A844D41c9023b5) |
+| `RelayAggregator` BTC/USD | [`0xc63d95A4C38Fa677e0fdE136DF7F3Dc5Ea28B622`](https://testnet.bscscan.com/address/0xc63d95A4C38Fa677e0fdE136DF7F3Dc5Ea28B622) |
+| `RelayAggregator` BNB/USD | [`0x0Bb81Ed57F3F3dCb1D250662cd9D32eB7EFb9c92`](https://testnet.bscscan.com/address/0x0Bb81Ed57F3F3dCb1D250662cd9D32eB7EFb9c92) |
+
+All seven are source-verified on [Sourcify](https://sourcify.dev) (`--verifier sourcify`, no API key
+needed). Testnet substitutes keeper-fed `RelayAggregator` feeds for Chainlink because BSC testnet's
+own feeds run up to ~1500 s stale, which would void every 5-minute round.
+
+### BNB Smart Chain mainnet (chain 56) — not deployed
+
+Mainnet is a deliberate, separate step. It needs a funded deployer, an owner address that should be
+a multisig behind a Timelock, and a clean cross-vendor review. `Deploy.s.sol` pins the mainnet
+settlement asset to BSC-USDT and refuses to deploy the testnet-only contracts there.
+
+---
+
 ## Repo layout
 
 | Path | What it is |
@@ -61,7 +87,7 @@ Three properties are worth knowing before reading any code:
 | `contracts/` | Foundry project — Solidity 0.8.28, OpenZeppelin 5. The whole security surface. |
 | `contracts/src/` | `UpDownMarketBase`, `UpDownMarketERC20`, `UpDownMarketNative`, `UpDownRegistry`, `IAggregatorV3`, plus `testnet/` (`RelayAggregator`, `TestUSDT`). |
 | `contracts/script/` | `Deploy.s.sol` (whole stack) and `Genesis.s.sol` (accept ownership + open the first round). |
-| `contracts/test/` | Unit, fuzz and invariant suites, with `MockAggregator` / `MockERC20`. |
+| `contracts/test/` | Unit, fuzz and invariant suites, with `MockAggregator` / `MockERC20`. `ChainlinkFork.t.sol` plays a full round against the **real** Chainlink aggregator on a BNB Chain mainnet fork. |
 | `contracts/deployments/` | `<chainId>.json`, written by `Deploy.s.sol`. Read at runtime by the keeper and the web app. |
 | `keeper/` | TypeScript + viem keeper: drives `executeRound()` and, on testnet, relays real prices into `RelayAggregator`. |
 | `web/` | React + Vite + wagmi + viem + Tailwind trading UI, built as a static bundle. |
