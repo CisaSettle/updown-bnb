@@ -365,15 +365,22 @@ and eight medium/low, every one closed with a named regression test.
 
 Deployed, Sourcify-verified, keeper running, and proven end to end on chain on 2026-08-26.
 
+> The stack was **redeployed** once, on the final reviewed code. Running
+> `scripts/verify-sourcify.sh 97` against the first deployment reported `no_match` on the two ERC20
+> markets: they had been deployed before the round-3 `_pushFunds` fix landed, so the bytecode on
+> chain no longer matched the source. That is exactly the signal a verification step exists to give.
+> All seven contracts now report `match`, so what is running on testnet is what was reviewed and
+> approved.
+
 | Contract | Address |
 |---|---|
-| `UpDownRegistry` | `0x4A42E5CaC8Ef533699841bD1e482E0776a731A2e` |
-| BTC/USD 5m (USDT) | `0xbaBd1c1B13a524Ec53d17e9451AC69c424eA56c3` |
-| BTC/USD 1h (USDT) | `0xecE8eEa2f44b9a8101F030BF20aCFb3b247879C0` |
-| BNB/USD 5m (native BNB) | `0x5f1c8A7E6B2f84d819F95f6997F475834c50c00C` |
-| `TestUSDT` (faucet, 18 dp) | `0xD496A2CfF36396e6F2Ab89bD01A844D41c9023b5` |
-| `RelayAggregator` BTC/USD | `0xc63d95A4C38Fa677e0fdE136DF7F3Dc5Ea28B622` |
-| `RelayAggregator` BNB/USD | `0x0Bb81Ed57F3F3dCb1D250662cd9D32eB7EFb9c92` |
+| `UpDownRegistry` | `0x78F4E7a5A6409fbec02f69616A1d41E83AB32D4B` |
+| BTC/USD 5m (USDT) | `0x148F483608150Ad199EA8E3E80C25316bfC425fa` |
+| BTC/USD 1h (USDT) | `0xc6B51FA73317cD549BBd69271539089050197f6d` |
+| BNB/USD 5m (native BNB) | `0xb3b8A907168dE8383353CB3aC18e40E227153751` |
+| `TestUSDT` (faucet, 18 dp) | `0xBbDFfdf7c1Cf91e21AB42149D3130a6439f89195` |
+| `RelayAggregator` BTC/USD | `0x1dFFe321462aEBb1aB829Dcd78C04903278E0739` |
+| `RelayAggregator` BNB/USD | `0xf471390e8C840F59607f30b2e3dA25691482Fd39` |
 
 ### The first round, start to finish
 
