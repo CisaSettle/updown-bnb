@@ -153,8 +153,6 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         vm.expectRevert(denied);
         market.setLimits(1e18, 2e18, 3e18);
         vm.expectRevert(denied);
-        market.setOracle(address(feed));
-        vm.expectRevert(denied);
         market.genesisStart();
         vm.expectRevert(denied);
         market.claimTreasury(carol);
@@ -185,8 +183,6 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         nativeMarket.setParams(100, BUFFER);
         vm.expectRevert(denied);
         nativeMarket.setLimits(1e18, 2e18, 3e18);
-        vm.expectRevert(denied);
-        nativeMarket.setOracle(address(feed));
         vm.expectRevert(denied);
         nativeMarket.genesisStart();
         vm.expectRevert(denied);
@@ -490,8 +486,6 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         // admin
         vm.startPrank(owner);
         market.pause();
-        vm.expectRevert(UpDownMarketBase.ZeroAddress.selector);
-        market.setOracle(address(0));
         market.unpause();
         vm.expectRevert(UpDownMarketBase.ZeroAddress.selector);
         market.claimTreasury(address(0));

@@ -300,14 +300,6 @@ contract UpDownEventsTest is UpDownBaseTest {
         vm.prank(owner);
         market.setLimits(2e18, 9e18, 90e18);
 
-        MockAggregator feed2 = new MockAggregator(8, "BTC / USD", P0);
-        vm.startPrank(owner);
-        market.pause();
-        vm.expectEmit(true, false, false, false, address(market));
-        emit UpDownMarketBase.OracleUpdated(address(feed2));
-        market.setOracle(address(feed2));
-        vm.stopPrank();
-
         MockERC20 stray = new MockERC20("Stray", "STR", 18);
         stray.mint(address(market), 4e18);
         vm.expectEmit(true, true, false, true, address(market));

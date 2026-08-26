@@ -15,7 +15,7 @@ import {MockERC20} from "./mocks/MockERC20.sol";
  * @notice Ownership is a one-way, two-step door on every deployed contract.
  *
  * `renounceOwnership()` is disabled: an owner-less market would strand `treasuryAmount` forever,
- * make `pause()` and `setOracle()` unreachable, and — because `pause()` clears `genesisStarted`
+ * make `pause()` unreachable, and — because `pause()` clears `genesisStarted`
  * while `genesisStart()` is `onlyOwner` — could leave a paused market unable to ever trade again.
  * An owner-less registry could never list a new market or retire a bad one. The only way out is
  * `transferOwnership` + `acceptOwnership`, which cannot land ownership on an address that has not

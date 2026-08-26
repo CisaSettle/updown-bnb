@@ -92,8 +92,28 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
 
     /// @notice Round duration in seconds (betting phase and holding phase are each `interval`).
     uint256 public immutable interval;
-    /// @notice Chainlink feed used for both the strike and the settlement print.
-    IAggregatorV3 public oracle;
+    /**
+     * @notice Chainlink feed used for both the strike and the settlement print.
+     * @dev Immutable, and deliberately so. A settable price source is a path from the admin key to
+     *      the settlement price of a round that is ALREADY LOCKED: pause, point the market at a
+     *      feed you control, settle the locked round at a price of your choosing, point it back,
+     *      unpause — one atomic transaction from a multisig, taking the whole opposing pool. No
+     *      timelock fixes that, because a locked position has no exit. On mainnet this points at a
+     *      Chainlink *proxy*, whose address is stable by design, so nothing is given up: if a feed
+     *      genuinely dies, every round refunds through the void path and a new market is deployed.
+     */
+    IAggregatorV3 public immutable oracle;
+    /**
+     * @notice The aggregator phase this market is bound to for life.
+     * @dev Proxy round ids are `phaseId << 64 | aggregatorRoundId`, and a proxy can confirm a
+     *      replacement aggregator that already carries history timestamped *before* the switch.
+     *      Once confirmed, two different ids both look like "the last print at or before the
+     *      boundary" and the caller picks — so the settled price would depend on whether the call
+     *      landed before or after the confirmation. Pinning the phase removes the choice: a print
+     *      from any other phase is not a valid proof, and if the feed moves on, every round times
+     *      out into a full refund and the market retires safely.
+     */
+    uint256 public immutable oraclePhase;
     /**
      * @notice How stale the boundary print may be, in seconds. Immutable on purpose: two rounds
      *         that share a boundary must agree on whether a given proof is valid, otherwise a
@@ -146,7 +166,6 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     event BetPlaced(address indexed user, uint256 indexed epoch, bool indexed isUp, uint256 amount);
     event Claimed(address indexed user, uint256 indexed epoch, address to, uint256 amount, bool refund);
     event TreasuryClaimed(address indexed to, uint256 amount);
-    event OracleUpdated(address indexed oracle);
     event ParamsUpdated(uint16 feeBps, uint16 bufferSeconds);
     event LimitsUpdated(uint256 minBet, uint256 maxBet, uint256 maxSide);
     event TokenRecovered(address indexed token, address indexed to, uint256 amount);
@@ -157,7 +176,6 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     uint8 internal constant VOID_ONE_SIDED = 3; // no counterparty on the other side
     uint8 internal constant VOID_NOT_LOCKED = 4; // round never received a strike
     uint8 internal constant VOID_WINDOW = 5; // settlement window elapsed
-    uint8 internal constant VOID_PHASE_CHANGE = 6; // the feed changed aggregator mid-round
 
     // ─────────────────────────────────────────────────────────────────────────
     // Errors
@@ -188,6 +206,7 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     error UnsupportedAsset();
     error InvalidBoundaryProof();
     error OwnershipCannotBeRenounced();
+    error OracleUnusable();
 
     // ─────────────────────────────────────────────────────────────────────────
     // Construction
@@ -212,6 +231,11 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
 
         interval = interval_;
         oracle = IAggregatorV3(oracle_);
+        // Bind to the aggregator behind the proxy right now. A feed that cannot answer here is not
+        // one this market should be deployed against, so failing loudly at construction is correct.
+        (uint80 rid, int256 ans,, uint256 upd,) = IAggregatorV3(oracle_).latestRoundData();
+        if (ans <= 0 || upd == 0) revert OracleUnusable();
+        oraclePhase = uint256(rid) >> PHASE_SHIFT;
         oracleMaxAge = oracleMaxAge_;
         feeBps = feeBps_;
         bufferSeconds = bufferSeconds_;
@@ -462,16 +486,6 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
             return false;
         }
         if (!priceOk) return true;
-        // A Chainlink proxy can confirm a replacement aggregator that already carries history with
-        // earlier timestamps, so "the last print at or before the boundary" is not stable across an
-        // upgrade: the answer would depend on whether settlement ran before or after confirmation.
-        // A round whose two boundaries fall in different phases therefore refunds rather than
-        // settling on an ambiguous pair. Phase changes are rare and announced; a refund is cheap.
-        if (uint256(roundId) >> PHASE_SHIFT != uint256(r.lockOracleId) >> PHASE_SHIFT) {
-            r.voided = true;
-            emit RoundVoided(epoch, VOID_PHASE_CHANGE);
-            return false;
-        }
 
         r.closePrice = price;
         r.closeOracleId = roundId;
@@ -519,44 +533,25 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
         if (updatedAt > targetTs) return (false, 0); // print is after the boundary
         if (targetTs - updatedAt > oracleMaxAge) return (false, 0); // feed was dead at the boundary
 
-        (bool gotLatest, uint80 latestId) = _tryLatestRoundId();
-        if (!gotLatest) return (false, 0);
-        if (latestId == roundId) return (true, answer); // trivially the last print in existence
-
-        // a newer print exists somewhere; prove the very next one already sits past the boundary
-        (bool gotNext, uint256 nextUpdatedAt) = _successorUpdatedAt(roundId, latestId);
-        if (!gotNext) return (false, 0);
-        if (nextUpdatedAt <= targetTs) return (false, 0); // caller supplied a non-final round
+        // Is it the LAST qualifying print? Within the pinned phase, ids are chronological, so the
+        // only thing that could displace it is the very next id. If that print exists and is itself
+        // at or before the boundary, the caller handed us a stale candidate; if it does not exist,
+        // nothing in this phase comes after the candidate and it stands.
+        //
+        // Deliberately measured against this market's own phase rather than the feed's global
+        // latest: after a proxy confirms a replacement aggregator, the global latest belongs to a
+        // phase this market is not bound to, and the phase's own last print must still be provable.
+        if (roundId == type(uint80).max) return (true, answer);
+        (bool gotNext,, uint256 nextUpdatedAt) = _tryRound(roundId + 1);
+        if (gotNext && nextUpdatedAt <= targetTs) return (false, 0); // a later print also qualifies
         return (true, answer);
     }
 
-    /**
-     * @dev Chainlink proxies encode `roundId = phaseId << 64 | aggregatorRoundId`, so the successor
-     *      of the last round of a phase is the *first round of the next phase*, not `roundId + 1`.
-     *      Walking phases keeps settlement deterministic across an aggregator upgrade instead of
-     *      making the outcome depend on whether the call landed before or after it.
-     */
-    function _successorUpdatedAt(uint80 roundId, uint80 latestId) private view returns (bool, uint256) {
-        if (roundId != type(uint80).max) {
-            (bool got,, uint256 updatedAt) = _tryRound(roundId + 1);
-            if (got) return (true, updatedAt);
-        }
-        uint256 phase = uint256(roundId) >> PHASE_SHIFT;
-        uint256 latestPhase = uint256(latestId) >> PHASE_SHIFT;
-        if (latestPhase <= phase) return (false, 0);
-        uint256 limit = phase + MAX_PHASE_LOOKAHEAD;
-        if (latestPhase < limit) limit = latestPhase;
-        for (uint256 p = phase + 1; p <= limit; ++p) {
-            uint256 candidate = (p << PHASE_SHIFT) | 1;
-            if (candidate > type(uint80).max) break;
-            // forge-lint: disable-next-line(unsafe-typecast)
-            (bool got,, uint256 updatedAt) = _tryRound(uint80(candidate));
-            if (got) return (true, updatedAt);
-        }
-        return (false, 0);
-    }
-
     function _tryRound(uint80 roundId) private view returns (bool, int256, uint256) {
+        // Outside the phase this market is bound to, a print is not evidence about this market's
+        // price at all. The proof is then invalid, which REVERTS rather than voiding, so a losing
+        // bettor cannot use a cross-phase id to cancel a round they are about to lose.
+        if (uint256(roundId) >> PHASE_SHIFT != oraclePhase) return (false, 0, 0);
         try oracle.getRoundData(roundId) returns (
             uint80 rid, int256 answer, uint256, uint256 updatedAt, uint80
         ) {
@@ -707,12 +702,6 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     // Admin
     // ─────────────────────────────────────────────────────────────────────────
 
-    function setOracle(address oracle_) external onlyOwner whenPaused {
-        if (oracle_ == address(0)) revert ZeroAddress();
-        oracle = IAggregatorV3(oracle_);
-        emit OracleUpdated(oracle_);
-    }
-
     /// @dev Only ever affects rounds started *after* this call — live rounds keep their snapshots.
     ///      `oracleMaxAge` is deliberately absent: it is immutable.
     function setParams(uint16 feeBps_, uint16 bufferSeconds_) external onlyOwner {
@@ -765,7 +754,7 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
 
     /**
      * @notice Disabled. Ownership cannot be renounced.
-     * @dev Renouncing would strand `treasuryAmount` forever, make `pause()` and `setOracle()`
+     * @dev Renouncing would strand `treasuryAmount` forever, make `pause()`
      *      permanently unreachable, and — because `pause()` clears `genesisStarted` while
      *      `genesisStart()` is `onlyOwner` — could leave a paused market unable to ever trade
      *      again. Transfer ownership to a multisig or a Timelock instead.

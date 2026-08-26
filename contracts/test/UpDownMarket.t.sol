@@ -292,49 +292,34 @@ contract UpDownMarketTest is UpDownBaseTest {
         assertEq(_round(1).closePrice, 90_000e8, "only the final boundary print may settle");
     }
 
-    /// @notice A Chainlink aggregator upgrade renumbers round ids (`phaseId << 64 | aggRoundId`), so
-    ///         the successor of a phase's last round is the first round of the NEXT phase. The
-    ///         settled price must not depend on whether the call landed before or after the upgrade.
-    function test_aggregatorPhaseChangeDoesNotChangeSettlement() public {
+    /// @notice A market is bound to one aggregator phase for life, so an upgrade cannot change what
+    ///         a round settles at — a print from another phase is simply not a valid proof.
+    ///
+    ///         The alternative was worse: a proxy can confirm a replacement aggregator carrying
+    ///         history timestamped BEFORE the switch, after which two different ids both look like
+    ///         "the last print at or before the boundary" and the caller picks which. Pinning
+    ///         removes the choice.
+    function test_aPrintFromAnotherPhaseIsNotAValidProof() public {
         _betUp(alice, 1_000e18);
         _betDown(bob, 1_000e18);
         _advance(P0);
 
         UpDownMarketBase.Round memory r2 = _round(2);
         vm.warp(r2.lockTs);
-        uint80 boundaryId = feed.setAnswer(81_000e8); // last print of the current phase
-
-        // the feed is upgraded and starts a fresh round-id sequence after the boundary
-        vm.warp(uint256(r2.lockTs) + 30);
+        uint80 honest = feed.setAnswer(81_000e8);
         feed.startNewPhase();
-        uint80 newPhaseId = feed.setAnswer(95_000e8);
-        assertGt(newPhaseId >> 64, boundaryId >> 64, "mock did not actually change phase");
-        assertNotEq(newPhaseId, boundaryId + 1, "successor is not the numeric increment");
-
-        vm.prank(keeper);
-        market.executeRound(boundaryId);
-        assertTrue(_round(1).settled && !_round(1).voided, "phase change must not void the round");
-        assertEq(_round(1).closePrice, 81_000e8, "settled at the boundary print, as always");
-    }
-
-    /// @notice ...and a post-upgrade print that still precedes the boundary must still disqualify an
-    ///         earlier candidate, exactly as it would within one phase.
-    function test_phaseChangeStillRejectsANonFinalRound() public {
-        _betUp(alice, 100e18);
-        _betDown(bob, 100e18);
-        _advance(P0);
-
-        UpDownMarketBase.Round memory r2 = _round(2);
-        vm.warp(uint256(r2.lockTs) - 20);
-        uint80 oldPhaseId = feed.setAnswer(70_000e8);
-        feed.startNewPhase();
-        vm.warp(uint256(r2.lockTs) - 5);
-        feed.setAnswer(88_000e8); // newer, and still at or before the boundary
+        uint80 otherPhase = feed.setAnswer(99_000e8); // a price that would pay UP handsomely
+        assertGt(otherPhase >> 64, honest >> 64, "the mock must really have changed phase");
         vm.warp(uint256(r2.lockTs) + 1);
 
         vm.prank(keeper);
         vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
-        market.executeRound(oldPhaseId);
+        market.executeRound(otherPhase);
+
+        // the same-phase print still settles it, at the price it always would have
+        vm.prank(keeper);
+        market.executeRound(honest);
+        assertEq(_round(1).closePrice, 81_000e8, "the pinned phase decides, and nothing else can");
     }
 
     /// @notice Regression: the boundary second itself must be closed.
@@ -848,28 +833,39 @@ contract UpDownMarketTest is UpDownBaseTest {
         _assertSolvent();
     }
 
-    /// @notice A round whose two boundaries fall in different aggregator phases refunds rather than
-    ///         settling on a pair whose "last print before the boundary" depends on when a proxy
-    ///         upgrade was confirmed.
-    function test_roundSpanningAnAggregatorPhaseChangeRefunds() public {
+    /// @notice When the feed has genuinely moved on, nothing can be proved: the round refunds on its
+    ///         own timer and the market retires safely rather than settling on a phase it was never
+    ///         bound to.
+    function test_aFeedThatChangesPhaseRetiresTheMarketIntoRefunds() public {
+        uint256 a0 = usdt.balanceOf(alice);
+        uint256 b0 = usdt.balanceOf(bob);
         _betUp(alice, 1_000e18);
         _betDown(bob, 1_000e18);
-        _advance(P0); // locked in the current phase
+        _advance(P0);
 
         UpDownMarketBase.Round memory r2 = _round(2);
-        feed.startNewPhase();
+        feed.startNewPhase(); // the bound phase never prints again
         vm.warp(r2.lockTs);
-        uint80 newPhase = feed.setAnswer(P0 + 5_000e8);
+        feed.setAnswer(99_000e8);
         vm.warp(uint256(r2.lockTs) + 1);
-        vm.prank(keeper);
-        market.executeRound(newPhase);
 
-        UpDownMarketBase.Round memory g = _round(1);
-        assertTrue(g.voided, "a round may not settle across a phase change");
-        assertEq(g.closePrice, 0);
-        assertEq(market.treasuryAmount(), 0, "and no fee is taken");
+        // read before the cheatcodes: a staticcall in the argument list consumes both the prank
+        // and the expectRevert
+        uint80 wrongPhase = feed.latestId();
+        vm.prank(keeper);
+        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        market.executeRound(wrongPhase);
+
+        vm.warp(uint256(r2.lockTs) + BUFFER + 1);
+        assertTrue(market.refundable(1, alice), "it frees itself on the timer");
+        vm.prank(keeper);
+        market.executeRound(wrongPhase);
+        assertTrue(_round(1).voided);
+        assertEq(market.treasuryAmount(), 0, "no fee on a refund");
         _claim(alice, 1);
         _claim(bob, 1);
+        assertEq(usdt.balanceOf(alice), a0, "made whole");
+        assertEq(usdt.balanceOf(bob), b0, "made whole");
         _assertSolvent();
     }
 
@@ -930,17 +926,24 @@ contract UpDownMarketTest is UpDownBaseTest {
         market.pause();
     }
 
-    function test_setOracleRequiresPause() public {
-        vm.prank(owner);
-        vm.expectRevert(Pausable.ExpectedPause.selector);
-        market.setOracle(address(feed));
+    /// @notice The price source cannot be changed at all — there is no setter, at any privilege.
+    ///
+    ///         A settable oracle is a path from the admin key straight to the settlement price of a
+    ///         round that is ALREADY locked: pause, point the market at a feed you control, settle
+    ///         at a price of your choosing, point it back, unpause — one atomic multisig
+    ///         transaction taking the whole opposing pool. No timelock fixes it, because a locked
+    ///         position has no exit. So the setter is gone and `oracle` is immutable.
+    function test_thePriceSourceCanNeverBeChanged() public {
+        address before = address(market.oracle());
+        (bool ok,) = address(market).call(abi.encodeWithSignature("setOracle(address)", address(0xBEEF)));
+        assertFalse(ok, "there must be no way to point the market at another feed");
+        assertEq(address(market.oracle()), before, "the price source is fixed at deployment");
 
-        MockAggregator feed2 = new MockAggregator(8, "BTC / USD", P0);
-        vm.startPrank(owner);
-        market.pause();
-        market.setOracle(address(feed2));
-        vm.stopPrank();
-        assertEq(address(market.oracle()), address(feed2));
+        // and the phase it is bound to is fixed too
+        uint256 pinned = market.oraclePhase();
+        feed.startNewPhase();
+        feed.setAnswer(P0);
+        assertEq(market.oraclePhase(), pinned, "the bound phase is immutable");
     }
 
     function test_constructorRejectsBadConfig() public {
