@@ -10,6 +10,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { ConfigError, defaultDeploymentsPath, loadDeployment, type DeploymentFile } from './deployments.js';
 import { isLogLevel, type LogLevel } from './logger.js';
 import { DEFAULT_BACKOFF, type BackoffOptions } from './backoff.js';
+import { DEFAULT_RELAY_LEAD_MS } from './schedule.js';
 import { normaliseKey } from './price.js';
 
 export { ConfigError };
@@ -47,7 +48,11 @@ export interface KeeperConfig {
   schedule: {
     /** Milliseconds after `lockTs` to call `executeRound`. */
     executeLeadMs: number;
-    /** Milliseconds before `lockTs` to publish a testnet relay print. */
+    /**
+     * Milliseconds before `lockTs` to publish a testnet relay print — the budget for ONE relay.
+     * The scheduler multiplies it by how many relays can share the boundary, because they all go
+     * out one after another from a single key.
+     */
     relayLeadMs: number;
     maxTimerMs: number;
     minTimerMs: number;
@@ -356,7 +361,7 @@ export function loadConfig(options: LoadConfigOptions = {}): KeeperConfig {
 
     schedule: {
       executeLeadMs: readInt(env, 'EXECUTE_LEAD_MS', 2_000, issues, 0, 120_000),
-      relayLeadMs: readInt(env, 'RELAY_LEAD_MS', 15_000, issues, 1_000, 600_000),
+      relayLeadMs: readInt(env, 'RELAY_LEAD_MS', DEFAULT_RELAY_LEAD_MS, issues, 1_000, 600_000),
       maxTimerMs: readInt(env, 'MAX_TIMER_MS', 15 * 60_000, issues, 1_000, 2_147_483_000),
       minTimerMs: readInt(env, 'MIN_TIMER_MS', 0, issues, 0, 60_000),
       idlePollMs: readInt(env, 'IDLE_POLL_MS', 30_000, issues, 1_000, 600_000),

@@ -18,12 +18,25 @@ import {
   computeNextWake,
   isPastSettlementWindow,
   missedEpochs,
+  relayCanStillLand,
   RELAY_DEADLINE_MARGIN_MS,
+  RELAY_MIN_LANDING_MS,
   type RoundTiming,
   type WakeOptions,
   type WakePlan,
 } from './schedule.js';
-import { verifyBoundaryRound, type BoundaryProof, type OraclePrint } from './boundary.js';
+import {
+  findLastRoundOfPhase,
+  firstRoundOfPhase,
+  isUsablePrint,
+  MAX_PHASE_LOOKBACK,
+  phaseOf,
+  resolveSuccessor,
+  usableLatestRoundId,
+  verifyBoundaryRound,
+  type BoundaryProof,
+  type OraclePrint,
+} from './boundary.js';
 import {
   applyGasPremium,
   padGas,
@@ -77,15 +90,45 @@ export interface MarketSnapshot {
   round: RoundTiming;
 }
 
-/** Deduplicates relays across markets that share one feed and one boundary timestamp. */
+/**
+ * Deduplicates relays across markets that share one feed and one boundary timestamp, and counts how
+ * many relays a boundary still has to fit through the single-key transaction queue.
+ */
 export class RelayCoordinator {
   readonly #done = new Map<string, number>();
+  readonly #feeds = new Set<string>();
 
   static key(feed: Address, boundaryTs: number): string {
     return `${feed.toLowerCase()}:${boundaryTs}`;
   }
 
-  /** True when this (feed, boundary) has already been relayed. */
+  /**
+   * Declare a feed this keeper actually relays to. Called once per market at bootstrap, so the
+   * scheduler can lead by one queue slot per relay instead of assuming it is the only one.
+   */
+  register(feed: Address): void {
+    this.#feeds.add(feed.toLowerCase());
+  }
+
+  /** Distinct relay feeds this keeper writes to. */
+  get feedCount(): number {
+    return this.#feeds.size;
+  }
+
+  /**
+   * How many relays can still be queued for `boundaryTs`: every registered feed that has not
+   * already been relayed (or given up on) for it. Markets sharing a feed count once, because the
+   * first of them to relay satisfies the rest. Never less than 1 — the caller's own relay.
+   */
+  pendingAt(boundaryTs: number): number {
+    let pending = 0;
+    for (const feed of this.#feeds) {
+      if (!this.#done.has(`${feed}:${boundaryTs}`)) pending += 1;
+    }
+    return Math.max(1, pending);
+  }
+
+  /** True when this (feed, boundary) has already been relayed, or given up on. */
   has(feed: Address, boundaryTs: number): boolean {
     return this.#done.has(RelayCoordinator.key(feed, boundaryTs));
   }
@@ -96,6 +139,14 @@ export class RelayCoordinator {
     for (const [key, ts] of this.#done) {
       if (atMs - ts > 3_600_000) this.#done.delete(key);
     }
+  }
+
+  /**
+   * Give up on this (feed, boundary). A print that can no longer land at or before the boundary is
+   * useless to every market on the feed, so none of them should keep re-queueing it.
+   */
+  abandon(feed: Address, boundaryTs: number, atMs: number): void {
+    this.mark(feed, boundaryTs, atMs);
   }
 }
 
@@ -291,6 +342,10 @@ export class MarketWorker {
       this.#log.warn('could not confirm relay write permission', { oracle, error });
     }
 
+    // Only a feed this key can actually write counts as a queue slot; one it cannot write is never
+    // relayed at all and would otherwise inflate every other market's lead forever.
+    if (canWrite) this.#deps.relays.register(oracle);
+
     return { feed: oracle, description, symbol, canWrite };
   }
 
@@ -449,6 +504,9 @@ export class MarketWorker {
     return {
       executeLeadMs: this.#deps.config.schedule.executeLeadMs,
       relayLeadMs: this.#deps.config.schedule.relayLeadMs,
+      // Every relay shares one key and therefore one queue. Waking `slots` budgets early is what
+      // stops the second and third feed of a shared boundary from dequeuing after `lockTs`.
+      relaySlots: this.#deps.relays.pendingAt(round.lockTs),
       relayEnabled,
       maxTimerMs: this.#deps.config.schedule.maxTimerMs,
       minTimerMs: this.#deps.config.schedule.minTimerMs,
@@ -534,12 +592,22 @@ export class MarketWorker {
 
     return this.#deps.queue.submit(async (): Promise<boolean> => {
       const chainNow = await chainTimestamp(this.#deps.clients.publicClient);
-      if (chainNow > boundaryTs) {
-        // The relay phase for this boundary is over either way; move on to executeRound.
-        this.#log.warn('relay skipped: boundary already passed, the print could not qualify', {
+      if (!relayCanStillLand(chainNow, boundaryTs)) {
+        // The explicit deadline. Relays queue behind one another on a single key, so a relay that
+        // waited too long cannot produce a print at or before the boundary any more — broadcasting
+        // it would burn gas, land useless, and hold the queue against the relays still behind it.
+        // Say so loudly and drop it, rather than discovering the void after the fact.
+        this.#deps.relays.abandon(relay.feed, boundaryTs, this.#now());
+        this.#countFailure('relay-deadline');
+        this.#log.error('relay skipped: it can no longer land at or before the boundary', {
+          feed: relay.feed,
+          symbol: relay.symbol,
           boundaryTs,
           chainNow,
-          symbol: relay.symbol,
+          shortBySec: chainNow + Math.ceil(RELAY_MIN_LANDING_MS / 1000) - boundaryTs,
+          waitedMs: this.#now() - startedAt,
+          queueDepth: this.#deps.queue.depth,
+          hint: 'raise RELAY_LEAD_MS, or give the relay feeds sharing this keeper key more room',
         });
         return true;
       }
@@ -703,8 +771,9 @@ export class MarketWorker {
       // Re-read the boundary instead of trusting the plan-time snapshot, which can be minutes old
       // (a timer runs up to MAX_TIMER_MS) and can have sat in this queue behind other markets.
       // `executeRound` is permissionless and winners are incentivised to call it, so the epoch may
-      // have moved on. Pricing a stale boundary does not revert: it silently VOIDS a round that
-      // would otherwise have settled, which is real money turned into refunds.
+      // have moved on. A round id resolved for the stale boundary will not prove the live one, so
+      // the call reverts with InvalidBoundaryProof: gas burnt, nothing settled, and the round left
+      // to run down its buffer towards a timeout that turns real money into refunds.
       const live = await this.#readBoundary();
       const { boundaryTs, chainNowSec: chainNow } = live;
       const epoch = live.currentEpoch;
@@ -875,15 +944,15 @@ export class MarketWorker {
   }
 
   /**
-   * Find the oracle round id to pass to `executeRound`, and say loudly when the round is going to
-   * void: a wrong id does not revert, it silently turns the round into refunds.
+   * Find the oracle round id to pass to `executeRound`, and say loudly when the round cannot be
+   * settled: the contract rejects an unprovable id outright, so the honest keeper's job is to hand
+   * it the id the chain's own rule names — including when that id lives in a previous phase.
    */
   async #resolveBoundaryRoundId(
     boundaryTs: number,
     oracleMaxAge: number,
     chainNowSec: number,
   ): Promise<{ roundId: bigint; searchFailed: boolean }> {
-    const { publicClient } = this.#deps.clients;
     const profile = this.#profile;
     const baseSteps = BigInt(this.#deps.config.oracle.findRoundMaxSteps);
 
@@ -892,12 +961,7 @@ export class MarketWorker {
     let searchFailed = false;
     for (const steps of [baseSteps, baseSteps * 8n]) {
       try {
-        [roundId, found] = await publicClient.readContract({
-          address: this.address,
-          abi: marketAbi,
-          functionName: 'findRoundIdAt',
-          args: [BigInt(boundaryTs), 0n, steps],
-        });
+        [roundId, found] = await this.#findRoundIdAt(boundaryTs, 0n, steps);
         searchFailed = false;
       } catch (error) {
         // An RPC failure is NOT evidence that the feed has no print. Say so, so the caller does not
@@ -907,6 +971,25 @@ export class MarketWorker {
         break;
       }
       if (found) break;
+    }
+
+    if (!searchFailed && !found) {
+      // `findRoundIdAt` only ever decrements, so it stops dead at the first round of an aggregator
+      // phase. When a new phase's first print lands AFTER the boundary, the settleable prior-phase
+      // print is sitting right there and the phase-local walk can never see it — the round would
+      // time out into refunds for no reason. `_priceAt` accepts that print, so the keeper has to be
+      // able to name it: step back through the previous phases the way the contract steps forward.
+      const across = await this.#findBoundaryInPreviousPhases(boundaryTs, chainNowSec, baseSteps * 8n);
+      roundId = across.roundId;
+      found = across.found;
+      searchFailed = across.searchFailed;
+      if (found) {
+        this.#log.warn('boundary print found in a previous aggregator phase', {
+          boundaryTs,
+          boundaryRoundId: roundId,
+          phase: phaseOf(roundId),
+        });
+      }
     }
 
     if (searchFailed) return { roundId: 0n, searchFailed: true };
@@ -957,47 +1040,128 @@ export class MarketWorker {
     return { currentEpoch, boundaryTs: Number(boundaryTs), chainNowSec };
   }
 
+  /** One `findRoundIdAt` eth_call. Split out so both the direct and the cross-phase walk use it. */
+  async #findRoundIdAt(boundaryTs: number, startFrom: bigint, steps: bigint): Promise<readonly [bigint, boolean]> {
+    return this.#deps.clients.publicClient.readContract({
+      address: this.address,
+      abi: marketAbi,
+      functionName: 'findRoundIdAt',
+      args: [BigInt(boundaryTs), startFrom, steps],
+    });
+  }
+
+  /** Raw `getRoundData`, or null when the call fails. */
+  async #readPrint(oracle: Address, id: bigint): Promise<OraclePrint | null> {
+    try {
+      const [rid, answer, , updatedAt] = await this.#deps.clients.publicClient.readContract({
+        address: oracle,
+        abi: relayAggregatorAbi,
+        functionName: 'getRoundData',
+        args: [id],
+      });
+      return { roundId: rid, answer, updatedAt: Number(updatedAt) };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * `getRoundData` filtered exactly like the contract's `_tryRound`, so a proxy that answers a
+   * missing round with zeroes cannot be mistaken here for a print the chain would honour.
+   */
+  #strictPrintReader(oracle: Address, chainNowSec: number): (id: bigint) => Promise<OraclePrint | null> {
+    return async (id: bigint) => {
+      const print = await this.#readPrint(oracle, id);
+      return isUsablePrint(print, id, chainNowSec) ? print : null;
+    };
+  }
+
+  /**
+   * The feed's latest print, or null when `latestRoundData()` could not be read at all. Returned
+   * whole rather than as a bare id: the contract's `_tryLatestRoundId` looks at the answer and the
+   * timestamp too, and a mirror that only takes the id cannot tell a live feed from a dead one.
+   */
+  async #latestPrint(oracle: Address): Promise<OraclePrint | null> {
+    try {
+      const [rid, answer, , updatedAt] = await this.#deps.clients.publicClient.readContract({
+        address: oracle,
+        abi: relayAggregatorAbi,
+        functionName: 'latestRoundData',
+      });
+      return { roundId: rid, answer, updatedAt: Number(updatedAt) };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Find the boundary print in a phase older than the feed's current one.
+   *
+   * For each phase back (bounded like the contract's `MAX_PHASE_LOOKAHEAD`): skip it when it never
+   * existed or when even its first print is past the boundary, otherwise name its last round and
+   * let `findRoundIdAt` walk back from there — phase-locally, which is all it can do, but now
+   * inside the right phase.
+   */
+  async #findBoundaryInPreviousPhases(
+    boundaryTs: number,
+    chainNowSec: number,
+    steps: bigint,
+  ): Promise<{ roundId: bigint; found: boolean; searchFailed: boolean }> {
+    const oracle = this.#profile?.oracle;
+    if (!oracle) return { roundId: 0n, found: false, searchFailed: false };
+    try {
+      const latest = await this.#latestPrint(oracle);
+      // Could not read the feed: "we could not look" is not "there is nothing there". A latest print
+      // the CONTRACT would reject is not that case — it still names the phase to walk back from, and
+      // `#verifyBoundary` is where the chain's verdict on it is reproduced.
+      if (latest === null) return { roundId: 0n, found: false, searchFailed: true };
+
+      const readStrict = this.#strictPrintReader(oracle, chainNowSec);
+      const exists = async (id: bigint): Promise<boolean> => (await readStrict(id)) !== null;
+      const latestPhase = phaseOf(latest.roundId);
+
+      for (let back = 1; back <= MAX_PHASE_LOOKBACK; back += 1) {
+        const phase = latestPhase - BigInt(back);
+        if (phase < 1n) break;
+        const first = await readStrict(firstRoundOfPhase(phase));
+        if (!first) continue; // this phase never existed on this proxy
+        if (first.updatedAt > boundaryTs) continue; // the whole phase is after the boundary
+        const last = await findLastRoundOfPhase(phase, exists);
+        if (last === null) continue;
+        const [rid, ok] = await this.#findRoundIdAt(boundaryTs, last, steps);
+        if (ok) return { roundId: rid, found: true, searchFailed: false };
+      }
+      return { roundId: 0n, found: false, searchFailed: false };
+    } catch (error) {
+      this.#log.warn('previous-phase boundary search failed', { boundaryTs, error: errorText(error) });
+      return { roundId: 0n, found: false, searchFailed: true };
+    }
+  }
+
   /** Reproduce `_priceAt` locally so a silent void is predicted rather than discovered. */
   async #verifyBoundary(roundId: bigint, boundaryTs: number, oracleMaxAge: number, chainNowSec: number) {
     const profile = this.#profile;
     const oracle = profile?.oracle;
     if (!oracle) return verifyBoundaryRound(this.#emptyProof(boundaryTs, oracleMaxAge, chainNowSec));
-    const { publicClient } = this.#deps.clients;
 
-    const readPrint = async (id: bigint): Promise<OraclePrint | null> => {
-      try {
-        const [rid, answer, , updatedAt] = await publicClient.readContract({
-          address: oracle,
-          abi: relayAggregatorAbi,
-          functionName: 'getRoundData',
-          args: [id],
-        });
-        return { roundId: rid, answer, updatedAt: Number(updatedAt) };
-      } catch {
-        return null;
-      }
-    };
-
-    let latestRoundId = 0n;
-    try {
-      const [rid] = await publicClient.readContract({
-        address: oracle,
-        abi: relayAggregatorAbi,
-        functionName: 'latestRoundData',
-      });
-      latestRoundId = rid;
-    } catch {
-      latestRoundId = 0n;
-    }
-
-    const candidate = await readPrint(roundId);
-    const next = candidate && candidate.roundId !== latestRoundId ? await readPrint(roundId + 1n) : null;
+    // `_priceAt` proves finality relative to `_tryLatestRoundId`, which refuses a latest round with a
+    // non-positive answer or `updatedAt == 0` and gives up on the whole boundary when it does. Taking
+    // the bare round id instead would let the keeper certify a boundary the chain rejects outright.
+    const latestRoundId = usableLatestRoundId(await this.#latestPrint(oracle));
+    const candidate = await this.#readPrint(oracle, roundId);
+    // The successor is whatever the CONTRACT would call the successor: `roundId + 1`, and failing
+    // that the first round of a following phase. Reading only `roundId + 1` makes this mirror
+    // disagree with the chain on exactly the aggregator upgrade the phase walk exists for.
+    const next =
+      candidate && latestRoundId !== null && roundId !== latestRoundId
+        ? await resolveSuccessor(roundId, latestRoundId, this.#strictPrintReader(oracle, chainNowSec))
+        : null;
     const proof: BoundaryProof = { targetTs: boundaryTs, oracleMaxAge, candidate, latestRoundId, next, chainNowSec };
     return verifyBoundaryRound(proof);
   }
 
   #emptyProof(boundaryTs: number, oracleMaxAge: number, chainNowSec: number): BoundaryProof {
-    return { targetTs: boundaryTs, oracleMaxAge, candidate: null, latestRoundId: 0n, next: null, chainNowSec };
+    return { targetTs: boundaryTs, oracleMaxAge, candidate: null, latestRoundId: null, next: null, chainNowSec };
   }
 
   #decodeOutcomes(receipt: TransactionReceipt): {

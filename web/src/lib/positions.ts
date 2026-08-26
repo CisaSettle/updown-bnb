@@ -17,12 +17,6 @@ export const EPOCH_ID_CHUNK = 400
  * quietly dropping the tail.
  */
 export const MAX_SCANNED_EPOCHS = 5_000
-/**
- * The newest N positions are polled on the live cadence. Everything older is fetched once (and
- * again after a claim): those rounds resolved long ago, so they only change when the user collects
- * them.
- */
-export const HOT_SCAN_EPOCHS = 60
 /** `claim(epochs[])` is one transaction — batch it so a long tail cannot exceed the block gas limit. */
 export const MAX_CLAIM_BATCH = 40
 
@@ -111,6 +105,30 @@ export function collectableSelection(
 }
 
 /**
+ * Forget the collectability of epochs a confirmed `claim` has already collected in this session.
+ *
+ * `pendingPayout`, `claimable` and `refundable` all keep reporting the old answer until the reads
+ * refetch, and the refetch only *starts* when the receipt lands. In that window the Claim-all
+ * button is enabled again and still advertises the batch it just sent — and its own copy invites a
+ * second press for the remainder. `claim` reverts the WHOLE array on an already-claimed epoch
+ * (`AlreadyClaimed`), so re-sending it would fail the transaction and collect nothing.
+ *
+ * `BetInfo.claimed` is monotonic per (epoch, user): once set it is never cleared, so dropping these
+ * for the rest of the session can never hide money that is still owed.
+ */
+export function dropClaimed(
+  view: ReadonlyMap<string, Collectability>,
+  claimed: ReadonlySet<string>,
+): Map<string, Collectability> {
+  const out = new Map(view)
+  if (claimed.size === 0) return out
+  for (const epoch of claimed) {
+    if (out.has(epoch)) out.set(epoch, { collectable: false, payout: 0n })
+  }
+  return out
+}
+
+/**
  * What one press of "Claim all" sends, and what is left over afterwards. `claim` reverts if any
  * epoch in the array is not collectable, so the batch is always a prefix of the collectable list —
  * never a slice of everything on screen.
@@ -125,13 +143,20 @@ export function claimPlan(
 }
 
 /**
- * Split the epoch list into the part polled on the live cadence and the part fetched once.
- * `epochs` is newest-first, so the hot slice is the front of it.
+ * Split the newest-first epoch list into the rows that get full detail on the live cadence and the
+ * tail that only needs the cheap collectability probe.
+ *
+ * Every epoch whose collectability can change *without a transaction* — a round settling, or one
+ * whose settlement window elapses into a refund — is within the last few epochs of the market, so
+ * it is always inside `loaded` (never fewer than `POSITION_PAGE` rows). The tail is history: it
+ * moves only when the user claims, which refetches anyway.
+ *
+ * The two halves are exactly complementary; nothing may fall between them.
  */
-export function splitScan(
+export function splitLoaded(
   epochs: readonly bigint[],
-  hot = HOT_SCAN_EPOCHS,
-): { hot: bigint[]; cold: bigint[] } {
-  const size = Math.max(0, hot)
-  return { hot: epochs.slice(0, size), cold: epochs.slice(size) }
+  loadedCount: number,
+): { loaded: bigint[]; tail: bigint[] } {
+  const size = Math.max(0, loadedCount)
+  return { loaded: epochs.slice(0, size), tail: epochs.slice(size) }
 }

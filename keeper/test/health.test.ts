@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  balanceVerdict,
   DEFAULT_HEALTH_OPTIONS,
   evaluateHealth,
   evaluateMarketHealth,
@@ -117,6 +118,71 @@ describe('evaluateHealth', () => {
 
   it('uses the documented default of two intervals', () => {
     expect(DEFAULT_HEALTH_OPTIONS.intervalsAllowed).toBe(2);
+  });
+
+  it('fails the whole report on a keeper-wide blocker, however healthy the markets are', () => {
+    const report = evaluateHealth([market()], NOW, NOW, [], DEFAULT_HEALTH_OPTIONS, ['keeper cannot pay for gas']);
+    expect(report.markets[0]?.healthy).toBe(true);
+    expect(report.blockers).toEqual(['keeper cannot pay for gas']);
+    expect(report.healthy).toBe(false);
+  });
+});
+
+describe('markets that never bootstrapped', () => {
+  // Dropping such a market from the report is how /healthz stays 200 while a live market voids
+  // round after round with nobody driving it.
+  const stuck = market({ bootstrapError: 'does not look like an UpDown market on chain 97' });
+
+  it('is reported, and unhealthy, with the reason it never came up', () => {
+    const health = evaluateMarketHealth(stuck, NOW);
+    expect(health.state).toBe('unknown');
+    expect(health.healthy).toBe(false);
+    expect(health.reason).toMatch(/failed to bootstrap and is not being supervised/);
+    expect(health.reason).toMatch(/does not look like an UpDown market/);
+  });
+
+  it('outranks every other verdict, including a market that looks active', () => {
+    expect(evaluateMarketHealth({ ...stuck, observed: true, active: true }, NOW).state).toBe('unknown');
+    expect(evaluateMarketHealth({ ...stuck, active: false }, NOW).healthy).toBe(false);
+  });
+
+  it('fails the whole report', () => {
+    expect(evaluateHealth([market(), stuck], NOW, NOW).healthy).toBe(false);
+  });
+
+  it('null and undefined both mean "bootstrapped fine"', () => {
+    expect(evaluateMarketHealth(market({ bootstrapError: null }), NOW).state).toBe('ok');
+    expect(evaluateMarketHealth(market({ bootstrapError: undefined }), NOW).state).toBe('ok');
+  });
+});
+
+describe('balanceVerdict', () => {
+  const FLOOR = 50_000_000_000_000_000n; // 0.05 BNB
+  const ONE_TX = 30_000_000_000_000_000n; // 0.03 BNB — 600k gas at the 50 gwei ceiling
+
+  it('never calls an empty account healthy, whatever the configured floor says', () => {
+    expect(balanceVerdict(0n, FLOOR, ONE_TX)).toBe('unfunded');
+    expect(balanceVerdict(0n, 0n, ONE_TX)).toBe('unfunded');
+    expect(balanceVerdict(0n, 0n, 0n)).toBe('unfunded');
+  });
+
+  it('separates "low, warn" from "cannot transact, unhealthy"', () => {
+    expect(balanceVerdict(ONE_TX - 1n, FLOOR, ONE_TX)).toBe('unfunded');
+    expect(balanceVerdict(ONE_TX, FLOOR, ONE_TX)).toBe('low');
+    expect(balanceVerdict(FLOOR - 1n, FLOOR, ONE_TX)).toBe('low');
+    expect(balanceVerdict(FLOOR, FLOOR, ONE_TX)).toBe('ok');
+  });
+
+  it('never overrules an operator who deliberately set a lower floor', () => {
+    // Floor 0.01 BNB with a 0.03 BNB worst-case transaction: the operator's line is the hard one,
+    // so a 0.02 BNB balance is not screamed about as unfunded.
+    const lowFloor = 10_000_000_000_000_000n;
+    expect(balanceVerdict(20_000_000_000_000_000n, lowFloor, ONE_TX)).toBe('ok');
+    expect(balanceVerdict(lowFloor - 1n, lowFloor, ONE_TX)).toBe('unfunded');
+  });
+
+  it('reports an unread balance as unknown rather than empty', () => {
+    expect(balanceVerdict(null, FLOOR, ONE_TX)).toBe('unknown');
   });
 });
 

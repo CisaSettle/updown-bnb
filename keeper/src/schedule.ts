@@ -31,10 +31,13 @@ export const DEFAULT_RELAY_LEAD_MS = 20_000;
 
 /**
  * Least time a relay needs between dequeuing and the boundary for its print to have any chance of
- * landing at or before it — one BSC block plus a little. Below this the send is a wasted queue slot
- * that only delays the relays behind it, so it is dropped loudly instead.
+ * landing at or before it: one BSC block. A print's `updatedAt` is the timestamp of the block it
+ * lands in, so with less headroom than a block there is no block left for it to land in at or
+ * before the boundary — the send is a wasted queue slot that only delays the relays behind it, and
+ * is dropped loudly instead. Deliberately the *least* aggressive value that still drops the
+ * hopeless: a relay that might yet make it is always sent.
  */
-export const RELAY_MIN_LANDING_MS = 3_500;
+export const RELAY_MIN_LANDING_MS = 3_000;
 
 export interface RoundTiming {
   /** Unix seconds. `0` means the round was never started. */

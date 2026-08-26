@@ -45,7 +45,8 @@ const ERROR_COPY: Record<string, string> = {
   // ── access / admin ──
   OwnableUnauthorizedAccount: 'Only the market owner can do that.',
   OwnableInvalidOwner: 'Invalid owner address.',
-  NotOperator: 'Only the keeper can settle a round this early. Anyone may settle it once the buffer passes.',
+  InvalidBoundaryProof:
+    'The settlement price for this round could not be proved yet. Anyone can settle it — including you — once the price feed has published at or before the round boundary.',
   NotUpdater: 'Only the price relay updater can push a price.',
   NoData: 'The price feed has no data for that round.',
   BadAnswer: 'The price feed rejected that value.',

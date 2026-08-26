@@ -1,16 +1,18 @@
 /**
  * Off-chain mirror of `UpDownMarketBase._priceAt`.
  *
- * `executeRound(boundaryRoundId)` never reverts on a bad id — it silently **voids** the round into
- * refunds. Simulation therefore proves nothing about whether the round will settle, so the keeper
- * reproduces the contract's proof locally and refuses to accept a silent void without shouting
- * about it first.
+ * `executeRound(boundaryRoundId)` **reverts** with `InvalidBoundaryProof` on an id it cannot prove;
+ * only a genuine timeout past the round's own `bufferSeconds` voids a round into refunds. So the
+ * keeper reproduces the contract's proof locally to know, before it sends, whether it is holding
+ * the id the chain will accept — and to say loudly when a round is about to time out instead.
  *
  * The contract accepts `roundId` for boundary `targetTs` when:
  *   1. the print exists, its answer is > 0 and `0 < updatedAt <= block.timestamp`;
  *   2. `updatedAt <= targetTs`                    — the print is not from after the boundary;
  *   3. `targetTs - updatedAt <= oracleMaxAge`     — the feed was alive at the boundary;
- *   4. it is the feed's latest print, **or** its *successor* exists and is already past the
+ *   4. `latestRoundData()` is itself usable (`_tryLatestRoundId`: answer > 0 and `updatedAt != 0`),
+ *      because the proof of finality is expressed relative to it;
+ *   5. `roundId` IS that latest print, **or** its *successor* exists and is already past the
  *      boundary — which proves `roundId` really is the last one at or before it.
  *
  * Chainlink proxies encode `roundId = phaseId << 64 | aggregatorRoundId`, so the successor of the
@@ -34,8 +36,13 @@ export interface BoundaryProof {
   oracleMaxAge: number;
   /** The candidate print returned by `findRoundIdAt`. */
   candidate: OraclePrint | null;
-  /** The feed's current latest round id. */
-  latestRoundId: bigint;
+  /**
+   * The feed's latest round id as the contract's `_tryLatestRoundId` judges it, or **null** when
+   * that call reverts or answers with `answer <= 0` / `updatedAt == 0`. Build it with
+   * `usableLatestRoundId`: `_priceAt` gives up entirely when this fails, so a mirror that reads the
+   * raw round id and shrugs the rest off predicts a settlement the chain will refuse.
+   */
+  latestRoundId: bigint | null;
   /**
    * The candidate's successor as the contract resolves it — `roundId + 1`, else the first round of
    * the next existing aggregator phase — or null when no successor exists at all.
@@ -88,6 +95,18 @@ export function isUsablePrint(print: OraclePrint | null, requestedId: bigint, ch
   if (print.updatedAt <= 0) return false;
   if (print.updatedAt > chainNowSec) return false;
   return true;
+}
+
+/**
+ * Mirror of the contract's `_tryLatestRoundId`. Deliberately checks exactly what the chain checks —
+ * `answer > 0` and `updatedAt != 0`, and neither the round id nor the block timestamp — because a
+ * mirror that is stricter or looser than the chain here is a mirror that disagrees with it.
+ */
+export function usableLatestRoundId(print: OraclePrint | null): bigint | null {
+  if (!print) return null;
+  if (print.answer <= 0n) return null;
+  if (print.updatedAt <= 0) return null;
+  return print.roundId;
 }
 
 /**
@@ -173,10 +192,11 @@ export async function findLastRoundOfPhase(
   }
   if (high === null) return idOf(low);
 
-  while (budget > 0 && low + 1n < high) {
-    const mid = (low + high) / 2n;
+  let hi: bigint = high;
+  while (budget > 0 && low + 1n < hi) {
+    const mid: bigint = (low + hi) / 2n;
     if (await probe(mid)) low = mid;
-    else high = mid;
+    else hi = mid;
   }
   return idOf(low);
 }
@@ -202,6 +222,16 @@ export function verifyBoundaryRound(proof: BoundaryProof): BoundaryVerdict {
   const ageSec = targetTs - candidate.updatedAt;
   if (ageSec > oracleMaxAge) {
     return { usable: false, reason: `print ${candidate.roundId} is ${ageSec}s stale at the boundary (max ${oracleMaxAge}s)` };
+  }
+  if (proof.latestRoundId === null) {
+    // `_priceAt` bails out here: with no usable latest round there is nothing to express finality
+    // against, so the chain cannot accept ANY id for this boundary however good the print looks.
+    return {
+      usable: false,
+      reason:
+        `the feed's latestRoundData() is unusable (reverted, or answered with a non-positive price ` +
+        `or updatedAt == 0), so the chain cannot prove any print final at this boundary`,
+    };
   }
   if (candidate.roundId !== proof.latestRoundId) {
     if (candidate.roundId >= UINT80_MAX) return { usable: false, reason: 'round id is at uint80 max' };

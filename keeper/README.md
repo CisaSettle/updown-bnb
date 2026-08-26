@@ -28,22 +28,32 @@ Two facts drive the whole design:
    last oracle print at or before the boundary — a pure function of the boundary timestamp. The
    caller supplies the round id and the contract *proves* it. The keeper holds no settlement option
    and no privilege; it is simply whoever turns the crank on time.
-2. **A wrong round id does not revert — it voids the round.** Simulation therefore proves nothing
-   about whether a round will settle. The keeper reproduces the contract's `_priceAt` proof locally
-   (`src/boundary.ts`) and logs loudly *before* sending when a round is going to void.
+2. **A wrong round id reverts; only a timeout voids.** `executeRound` reverts with
+   `InvalidBoundaryProof` on an id it cannot prove — that is what stops a losing bettor from
+   front-running an honest call with a bogus id to force refunds. A round voids only when nobody
+   produced a valid proof before its own `bufferSeconds` elapsed. So the keeper's job is to arrive
+   holding the id the chain will accept: it reproduces the contract's `_priceAt` proof locally
+   (`src/boundary.ts`) and logs loudly *before* sending when a boundary has no usable print and the
+   round is heading for a timeout.
 
 On testnet the oracle is a keeper-fed `RelayAggregator`, because BSC testnet's own Chainlink feeds
 run up to ~1480 s stale and would void every 5-minute round. The relay print must land **at or
 before** the boundary and within the round's `oracleMaxAge` of it, so each round gets two wakes:
 
 ```
-  lockTs − RELAY_LEAD_MS        lockTs        lockTs + EXECUTE_LEAD_MS
-         │                        │                     │
-      relay(price8dp)         boundary          executeRound(roundId)
+  lockTs − RELAY_LEAD_MS × relays      lockTs      lockTs + EXECUTE_LEAD_MS
+         │                               │                    │
+      relay(price8dp)                boundary        executeRound(roundId)
 ```
 
 Everything that writes to the chain passes through a single queue, so the keeper key never has two
-transactions in flight and nonces cannot collide.
+transactions in flight and nonces cannot collide. That queue is also why `RELAY_LEAD_MS` is a budget
+for **one** relay rather than for the boundary: several markets share an aligned boundary, their
+relays go out one after another, and the wake has to be early enough for the *last* of them to still
+land at or before `lockTs`. The keeper therefore leads by `RELAY_LEAD_MS` × the number of relay feeds
+still to publish at that boundary (clamped by the round's `oracleMaxAge`), and a relay that reaches
+the front of the queue too late to land is dropped with an error rather than broadcast to arrive
+after the boundary and hold up the relays behind it.
 
 ---
 
@@ -94,7 +104,7 @@ Only the first three are required.
 | `METRICS_PORT` | `9464` | HTTP port for `/healthz` and `/metrics`. `0` disables the server. |
 | `METRICS_HOST` | `0.0.0.0` | Bind address. |
 | `EXECUTE_LEAD_MS` | `2000` | Fire `executeRound` this long **after** `lockTs`. |
-| `RELAY_LEAD_MS` | `15000` | Publish the relay price this long **before** `lockTs` (testnet only). |
+| `RELAY_LEAD_MS` | `20000` | Budget for **one** relay before `lockTs` (testnet only). The actual lead is this × the relay feeds sharing the boundary, capped by the round's `oracleMaxAge`. |
 | `MAX_TIMER_MS` | `900000` | Cap on a single timer; state is re-read at least this often. |
 | `IDLE_POLL_MS` | `30000` | Poll interval while a market is paused or not genesis-started. |
 | `TX_MAX_ATTEMPTS` | `4` | Attempts per logical transaction, including the first. |
@@ -151,7 +161,17 @@ journalctl -u updown-keeper -f -o cat | jq 'select(.market=="btcUsd5m")'
 | `inactive` | yes | Paused, or `genesisStart()` not called. The keeper is working; the market is closed. |
 | `stale` | no | Active, but no execution inside the budget. |
 | `degraded` | no | Executing on time and *structurally unable to settle correctly* — today, the keeper key is not the relay feed's `updater`, so every `relay()` reverts and every round voids into refunds. The execution budget alone reports this green, which is exactly why it is called out. |
-| `unknown` | no | The market's state has never been read successfully. Silence about a market is a keeper failure, not a market state. |
+| `unknown` | no | The market's state has never been read successfully, or it never bootstrapped at all. Silence about a market is a keeper failure, not a market state. |
+
+A market that fails to bootstrap is **not** dropped: it stays in this list as `unknown` with the
+reason it could not be read, and the keeper keeps retrying it (5s, backing off to 2 min) until it
+comes up, at which point it is supervised normally. A market that disappeared from both supervision
+and the report is a market whose rounds void behind a green `/healthz`.
+
+The body also carries `warnings` (non-fatal) and `blockers`. A blocker fails the report on its own,
+however healthy the markets look: today the only one is a keeper account that cannot pay for a
+single transaction (600k gas at `MAX_GAS_PRICE_GWEI`), because it can neither relay a boundary price
+nor settle a round. A balance under `MIN_BALANCE_BNB` that can still transact stays a warning.
 
 **`GET /metrics`** → Prometheus text format:
 
@@ -170,7 +190,7 @@ journalctl -u updown-keeper -f -o cat | jq 'select(.market=="btcUsd5m")'
 | `updown_keeper_last_execution_latency_ms` | gauge | `market` |
 | `updown_keeper_current_epoch` | gauge | `market` |
 | `updown_keeper_market_active` / `_healthy` | gauge | `market` |
-| `updown_keeper_balance_wei` / `_native` / `_below_floor` | gauge | — |
+| `updown_keeper_balance_wei` / `_native` / `_below_floor` / `_unfunded` | gauge | — |
 | `updown_keeper_price_fetches_total` | counter | `symbol`, `outcome` |
 | `updown_keeper_uncaught_errors_total` | counter | — |
 
@@ -205,7 +225,7 @@ so a non-zero rate means the product is degraded even though nothing is erroring
 | Price API down | All endpoints tried, then the relay is skipped and the round is flagged as heading for a void. `executeRound` still runs so the grid advances. |
 | Boundary print missing or unusable | Logged at `error` *before sending* with the exact reason. The call still goes out: voiding unsticks the grid, and a stuck market cannot even take bets. |
 | `findRoundIdAt` itself fails (RPC error) | The tick aborts and retries. "We could not look" is **not** treated as "the feed has no print": sending anyway would void a round that is still perfectly settleable. Past the settlement window the round can only void regardless, so the call is then still made. |
-| Someone else calls `executeRound` first | `executeRound` is permissionless, so the epoch can move while a tick is queued. The boundary and epoch are re-read from chain immediately before sending; if they moved, the keeper re-plans instead of pricing a stale boundary. Pricing a stale boundary does not revert — it silently voids a round that would have settled. |
+| Someone else calls `executeRound` first | `executeRound` is permissionless, so the epoch can move while a tick is queued. The boundary and epoch are re-read from chain immediately before sending; if they moved, the keeper re-plans instead of pricing a stale boundary. A stale boundary's round id will not prove the live boundary, so the call reverts, burns gas and leaves the round to run down its buffer. |
 | Keeper was down for hours | One `executeRound` fast-forwards `currentEpoch` on chain. The keeper re-reads `currentEpoch` afterwards and logs how many rounds were skipped. |
 | Market paused / no genesis | Polled every `IDLE_POLL_MS`, reported `inactive`, not counted as unhealthy. |
 | One market misbehaving | Contained to that market. A tick that achieves nothing backs off exponentially (2 s → 60 s) instead of spinning. The backoff is clamped for a **relay** wake so it can never grow past the boundary the print must beat — otherwise the backoff would void the very round it exists to protect. |

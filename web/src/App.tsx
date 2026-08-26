@@ -12,6 +12,7 @@ import { TestnetBanner } from './components/TestnetBanner'
 import { Toaster } from './components/Toaster'
 import { activeChain, addressUrl, isTestnet } from './config/chains'
 import { deployment, isPlaceholderDeployment, usesRelayFeeds } from './config/deployment'
+import { useBoundaryPrice } from './hooks/useBoundaryPrice'
 import { useHistory } from './hooks/useHistory'
 import { useLiveRounds } from './hooks/useRound'
 import { useMarketConfig } from './hooks/useMarketConfig'
@@ -44,6 +45,15 @@ function MarketView({ market }: { market: Market }) {
   const currentEpoch = config?.currentEpoch
   const rounds = useLiveRounds(market.address, currentEpoch)
   const oracle = useOraclePrice(config?.oracle ?? market.oracle, now)
+  // Past `closeTs` the feed's latest print is not the price this round settles on; resolve the
+  // print the contract will actually prove instead of showing the live one.
+  const boundary = useBoundaryPrice(
+    market.address,
+    config?.oracle ?? market.oracle,
+    rounds.live,
+    rounds.live?.oracleMaxAge ?? 0,
+    now,
+  )
   const token = useSettlementToken(config?.settlementAsset ?? market.asset, market.address, address)
   const positions = usePositions(market.address, address, now)
   const history = useHistory(market.address, currentEpoch, 20)
@@ -91,6 +101,7 @@ function MarketView({ market }: { market: Market }) {
         liveOdds={rounds.liveOdds}
         currentEpoch={currentEpoch}
         oracle={oracle}
+        boundary={boundary.proof}
         token={token}
         now={now}
       >
@@ -109,6 +120,11 @@ function MarketView({ market }: { market: Market }) {
         positions={positions.positions}
         collectableEpochs={positions.collectableEpochs}
         collectableTotal={positions.collectableTotal}
+        total={positions.total}
+        hasMore={positions.hasMore}
+        loadMore={positions.loadMore}
+        incomplete={positions.incomplete}
+        markClaimed={positions.markClaimed}
         token={token}
         isLoading={positions.isLoading}
         onClaimed={refreshAll}

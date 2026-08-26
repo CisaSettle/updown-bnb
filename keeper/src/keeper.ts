@@ -8,18 +8,47 @@ import type { Address } from 'viem';
 import { chainTimestamp, formatNative, weiToNative, type Clients } from './chain.js';
 import { createClients } from './chain.js';
 import type { KeeperConfig } from './config.js';
-import { evaluateHealth, type HealthReport, type MarketHealthInput } from './health.js';
+import { balanceVerdict, evaluateHealth, type HealthReport, type MarketHealthInput } from './health.js';
+import type { MarketRef } from './deployments.js';
 import type { Logger } from './logger.js';
 import { HELP, M, MetricsRegistry } from './metrics.js';
 import { PriceSource } from './price.js';
 import { MarketWorker, RelayCoordinator } from './market.js';
 import { TxQueue } from './tx.js';
-import { errorText } from './backoff.js';
+import { computeBackoff, errorText, type BackoffOptions } from './backoff.js';
 
 export const VERSION = '1.0.0';
 
 /** How often to check that every market still has a timer armed. */
 const WATCHDOG_INTERVAL_MS = 30_000;
+
+/** How often the keeper looks at markets that have not bootstrapped yet. */
+const BOOTSTRAP_RETRY_TICK_MS = 5_000;
+
+/**
+ * Backoff between bootstrap attempts for a market that is not up yet. A transient RPC failure is
+ * back within seconds; a genuinely bad address is retried a few times a minute forever, which costs
+ * nothing and means the market comes up on its own the moment it is deployed.
+ */
+const BOOTSTRAP_RETRY_BACKOFF: BackoffOptions = { baseMs: 5_000, factor: 2, maxMs: 120_000, jitter: 0.2 };
+
+/**
+ * Gas one keeper transaction is assumed to need when judging whether the account can still pay for
+ * anything — the same fixed limit `market.ts` falls back to when estimation fails.
+ */
+const ASSUMED_TX_GAS = 600_000n;
+
+/** Interval used for a market whose real interval has never been read. Only affects the report's
+ *  stated budget; a market waiting on bootstrap is unhealthy regardless of it. */
+const UNKNOWN_INTERVAL_SEC = 300;
+
+/** A market in the deployments file that has not been read from chain successfully yet. */
+interface PendingMarket {
+  ref: MarketRef;
+  attempts: number;
+  error: string;
+  nextAttemptMs: number;
+}
 
 export interface KeeperDeps {
   config: KeeperConfig;
@@ -40,11 +69,15 @@ export class Keeper {
   readonly #priceSource: PriceSource;
   readonly #workers: MarketWorker[] = [];
   readonly #startedAtMs: number;
+  #pending: PendingMarket[] = [];
 
   #gaugeTimer: NodeJS.Timeout | null = null;
   #balanceTimer: NodeJS.Timeout | null = null;
   #watchdogTimer: NodeJS.Timeout | null = null;
-  #balanceWei = 0n;
+  #bootstrapTimer: NodeJS.Timeout | null = null;
+  #bootstrapRetryInFlight = false;
+  /** null until a balance poll has succeeded: unknown is not the same as empty. */
+  #balanceWei: bigint | null = null;
   #stopped = false;
 
   constructor(deps: KeeperDeps) {
@@ -65,6 +98,11 @@ export class Keeper {
 
   get workers(): readonly MarketWorker[] {
     return this.#workers;
+  }
+
+  /** Markets from the deployments file that are not being supervised yet, and why. */
+  get pendingMarkets(): readonly { name: string; attempts: number; error: string }[] {
+    return this.#pending.map((p) => ({ name: p.ref.name, attempts: p.attempts, error: p.error }));
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -92,6 +130,8 @@ export class Keeper {
     this.#watchdogTimer = setInterval(() => this.#kickStalledMarkets(), WATCHDOG_INTERVAL_MS);
     this.#watchdogTimer.unref?.();
 
+    this.#armBootstrapRetries();
+
     this.#refreshGauges();
 
     this.#logger.info('keeper running', {
@@ -107,6 +147,7 @@ export class Keeper {
     if (this.#gaugeTimer) clearInterval(this.#gaugeTimer);
     if (this.#balanceTimer) clearInterval(this.#balanceTimer);
     if (this.#watchdogTimer) clearInterval(this.#watchdogTimer);
+    if (this.#bootstrapTimer) clearInterval(this.#bootstrapTimer);
     this.metrics.setGauge(M.up, HELP[M.up] as string, 0);
     // Let any in-flight transaction finish so we never abandon a sent-but-unconfirmed tx.
     await Promise.race([this.#queue.drain(), new Promise((resolve) => setTimeout(resolve, 20_000))]);
@@ -124,6 +165,7 @@ export class Keeper {
     this.metrics.setGauge(M.balanceWei, HELP[M.balanceWei] as string, 0);
     this.metrics.setGauge(M.balanceNative, HELP[M.balanceNative] as string, 0);
     this.metrics.setGauge(M.balanceLow, HELP[M.balanceLow] as string, 0);
+    this.metrics.setGauge(M.balanceUnfunded, HELP[M.balanceUnfunded] as string, 0);
     this.metrics.declare(M.uncaught, HELP[M.uncaught] as string, 'counter');
   }
 
@@ -147,25 +189,38 @@ export class Keeper {
     this.#logger.info('chain reachable', { chainId: actual, chainNow, clockDriftSec: drift });
   }
 
+  #makeWorker(ref: MarketRef): MarketWorker {
+    return new MarketWorker(ref.name, ref.address as Address, {
+      config: this.config,
+      clients: this.clients,
+      logger: this.#logger,
+      metrics: this.metrics,
+      queue: this.#queue,
+      priceSource: this.#priceSource,
+      relays: this.#relays,
+      now: this.#now,
+    });
+  }
+
   async #bootstrapMarkets(): Promise<void> {
     const failures: string[] = [];
     for (const ref of this.config.deployment.markets) {
-      const worker = new MarketWorker(ref.name, ref.address as Address, {
-        config: this.config,
-        clients: this.clients,
-        logger: this.#logger,
-        metrics: this.metrics,
-        queue: this.#queue,
-        priceSource: this.#priceSource,
-        relays: this.#relays,
-        now: this.#now,
-      });
+      const worker = this.#makeWorker(ref);
       try {
         await worker.bootstrap();
         this.#workers.push(worker);
       } catch (error) {
-        failures.push(`${ref.name}: ${errorText(error)}`);
-        this.#logger.error('market failed to bootstrap and will not be supervised', {
+        const text = errorText(error);
+        failures.push(`${ref.name}: ${text}`);
+        // NOT forgotten. A market dropped here is a live market whose rounds void unobserved behind
+        // a green /healthz, so it stays in the report as unhealthy and keeps being retried.
+        this.#pending.push({
+          ref,
+          attempts: 1,
+          error: text,
+          nextAttemptMs: this.#now() + computeBackoff(0, BOOTSTRAP_RETRY_BACKOFF),
+        });
+        this.#logger.error('market failed to bootstrap; it is unhealthy and will be retried', {
           market: ref.name,
           address: ref.address,
           error,
@@ -178,7 +233,60 @@ export class Keeper {
       );
     }
     if (failures.length > 0) {
-      this.#logger.warn('starting with a partial market set', { skipped: failures.length, failures });
+      this.#logger.warn('starting with a partial market set; the rest are unhealthy until they come up', {
+        skipped: failures.length,
+        failures,
+      });
+    }
+  }
+
+  #armBootstrapRetries(): void {
+    if (this.#pending.length === 0 || this.#bootstrapTimer) return;
+    this.#bootstrapTimer = setInterval(() => {
+      void this.#retryPendingBootstraps();
+    }, BOOTSTRAP_RETRY_TICK_MS);
+    this.#bootstrapTimer.unref?.();
+  }
+
+  /** Bring up any market that failed to bootstrap. Runs until every one of them is supervised. */
+  async #retryPendingBootstraps(): Promise<void> {
+    if (this.#stopped || this.#bootstrapRetryInFlight || this.#pending.length === 0) return;
+    this.#bootstrapRetryInFlight = true;
+    try {
+      for (const entry of [...this.#pending]) {
+        if (this.#stopped) return;
+        if (this.#now() < entry.nextAttemptMs) continue;
+        entry.attempts += 1;
+        const worker = this.#makeWorker(entry.ref);
+        try {
+          await worker.bootstrap();
+        } catch (error) {
+          entry.error = errorText(error);
+          const waitMs = computeBackoff(entry.attempts - 1, BOOTSTRAP_RETRY_BACKOFF);
+          entry.nextAttemptMs = this.#now() + waitMs;
+          this.#logger.warn('market still cannot be bootstrapped; staying unhealthy and retrying', {
+            market: entry.ref.name,
+            attempts: entry.attempts,
+            retryInMs: waitMs,
+            error: entry.error,
+          });
+          continue;
+        }
+        if (this.#stopped) return;
+        this.#pending = this.#pending.filter((p) => p.ref.name !== entry.ref.name);
+        this.#workers.push(worker);
+        worker.start();
+        this.#logger.info('market bootstrapped on retry and is now supervised', {
+          market: entry.ref.name,
+          attempts: entry.attempts,
+        });
+      }
+      if (this.#pending.length === 0 && this.#bootstrapTimer) {
+        clearInterval(this.#bootstrapTimer);
+        this.#bootstrapTimer = null;
+      }
+    } finally {
+      this.#bootstrapRetryInFlight = false;
     }
   }
 
@@ -186,15 +294,31 @@ export class Keeper {
   // periodic
   // ───────────────────────────────────────────────────────────────────────────
 
+  /**
+   * What one keeper transaction can cost: the assumed gas limit at the highest gas price the retry
+   * ladder is allowed to reach. Below this the keeper cannot settle a round on a busy chain, which
+   * is precisely when a round must not be missed.
+   */
+  #txCostWei(): bigint {
+    return ASSUMED_TX_GAS * (this.config.tx.fixedGasPriceWei ?? this.config.tx.maxGasPriceWei);
+  }
+
   async #pollBalance(): Promise<void> {
     try {
       const balance = await this.clients.publicClient.getBalance({ address: this.config.keeperAddress });
       this.#balanceWei = balance;
-      const low = balance < this.config.health.minBalanceWei;
+      const state = balanceVerdict(balance, this.config.health.minBalanceWei, this.#txCostWei());
       this.metrics.setGauge(M.balanceWei, HELP[M.balanceWei] as string, Number(balance));
       this.metrics.setGauge(M.balanceNative, HELP[M.balanceNative] as string, weiToNative(balance));
-      this.metrics.setGauge(M.balanceLow, HELP[M.balanceLow] as string, low ? 1 : 0);
-      if (low) {
+      this.metrics.setGauge(M.balanceLow, HELP[M.balanceLow] as string, state === 'ok' ? 0 : 1);
+      this.metrics.setGauge(M.balanceUnfunded, HELP[M.balanceUnfunded] as string, state === 'unfunded' ? 1 : 0);
+      if (state === 'unfunded') {
+        this.#logger.error('keeper cannot pay for a transaction; every round it is due to settle will void', {
+          balance: formatNative(balance),
+          oneTxCost: formatNative(this.#txCostWei()),
+          symbol: this.config.nativeSymbol,
+        });
+      } else if (state === 'low') {
         this.#logger.warn('keeper balance is below the configured floor; top it up or rounds will stop', {
           balance: formatNative(balance),
           floor: formatNative(this.config.health.minBalanceWei),
@@ -223,7 +347,10 @@ export class Keeper {
     this.metrics.setGauge(M.healthy, HELP[M.healthy] as string, report.healthy ? 1 : 0);
     for (const market of report.markets) {
       const worker = this.#workers.find((w) => w.name === market.name);
-      worker?.tickGauges(now, market.healthy);
+      if (worker) worker.tickGauges(now, market.healthy);
+      // A market still waiting on bootstrap has no worker to publish its gauges, and a market that
+      // is missing from /metrics is a market nobody alerts on.
+      else this.metrics.setGauge(M.marketHealthy, HELP[M.marketHealthy] as string, 0, { market: market.name });
     }
   }
 
@@ -232,7 +359,7 @@ export class Keeper {
   // ───────────────────────────────────────────────────────────────────────────
 
   healthInputs(): MarketHealthInput[] {
-    return this.#workers.map((worker) => ({
+    const inputs: MarketHealthInput[] = this.#workers.map((worker) => ({
       name: worker.name,
       intervalSec: worker.intervalSec,
       lastExecutionMs: worker.lastExecutionMs,
@@ -241,19 +368,51 @@ export class Keeper {
       observed: worker.observed,
       degraded: worker.degradedReason,
     }));
+    // Markets that have not come up yet are part of the keeper's responsibility, so they are part
+    // of its health. Leaving them out is what lets /healthz report 200 while a live market voids.
+    for (const entry of this.#pending) {
+      inputs.push({
+        name: entry.ref.name,
+        intervalSec: UNKNOWN_INTERVAL_SEC,
+        lastExecutionMs: null,
+        supervisedSinceMs: this.#startedAtMs,
+        active: true,
+        observed: false,
+        bootstrapError: entry.error,
+      });
+    }
+    return inputs;
   }
 
   health(nowMs = this.#now()): HealthReport {
     const warnings: string[] = [];
-    if (this.#balanceWei < this.config.health.minBalanceWei) {
+    const blockers: string[] = [];
+    const balance = this.#balanceWei;
+    const state = balanceVerdict(balance, this.config.health.minBalanceWei, this.#txCostWei());
+    if (state === 'unknown') {
+      warnings.push('keeper balance is unknown: no balance poll has succeeded yet');
+    } else if (state === 'unfunded') {
+      // Not a warning. An account that cannot pay for a transaction cannot relay and cannot settle,
+      // so every round it is responsible for voids — long before the staleness budget notices.
+      blockers.push(
+        `keeper balance ${formatNative(balance as bigint)} ${this.config.nativeSymbol} cannot pay for a ` +
+          `single transaction (needs ~${formatNative(this.#txCostWei())} ${this.config.nativeSymbol}); ` +
+          `it can neither relay nor settle`,
+      );
+    } else if (state === 'low') {
       warnings.push(
-        `keeper balance ${formatNative(this.#balanceWei)} ${this.config.nativeSymbol} is below the ` +
+        `keeper balance ${formatNative(balance as bigint)} ${this.config.nativeSymbol} is below the ` +
           `${formatNative(this.config.health.minBalanceWei)} floor`,
       );
     }
-    return evaluateHealth(this.healthInputs(), nowMs, this.#startedAtMs, warnings, {
-      intervalsAllowed: this.config.health.intervalsAllowed,
-    });
+    return evaluateHealth(
+      this.healthInputs(),
+      nowMs,
+      this.#startedAtMs,
+      warnings,
+      { intervalsAllowed: this.config.health.intervalsAllowed },
+      blockers,
+    );
   }
 
   noteUncaught(): void {

@@ -5,5 +5,9 @@
     "rootDir": ".",
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"],
+  // `exclude` is NOT inherited-and-merged: the base config excludes "test", and an inherited
+  // exclude filters this file's `include`. Without restating it, `npm test`'s typecheck step
+  // silently covered only src/ and no test file was ever type-checked at all.
+  "exclude": ["node_modules", "dist"]
 }

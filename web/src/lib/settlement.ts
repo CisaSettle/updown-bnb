@@ -144,15 +144,47 @@ export type PriceViewKind =
   | 'pending' // past close, boundary print not resolvable — assert nothing
   | 'refund' // this round pays every stake back; there is no winner to show
 
+/**
+ * Why a round pays everybody back. Mirrors the void reasons in `_endRound` / `_lockRound` as far as
+ * the round's own storage can tell them apart, so the card names the actual reason rather than a
+ * generic "no winner".
+ */
+export type RefundReason =
+  | 'one-sided' // `VOID_ONE_SIDED`: a side of the book was empty, so there was nobody to win from
+  | 'tie' // `VOID_TIE`: the settling print landed exactly on the strike
+  | 'no-print' // no usable feed print at or before the boundary — nobody can ever settle it
+  | 'window' // the round's own settlement window elapsed (`_isExpired`)
+  | 'voided' // voided on chain for a reason the round's storage does not distinguish
+
 export interface PriceView {
   kind: PriceViewKind
   price?: bigint
   /** Whether the signed move against the strike may be rendered at all. */
   showMove: boolean
-  /** True only when that move is the outcome the chain has already committed to. */
+  /** True only when that move — or that refund — is what the chain has already committed to. */
   committed: boolean
   label: string
   moveLabel: string
+  /** Set whenever `kind` is `'refund'`. */
+  refundReason?: RefundReason
+}
+
+/**
+ * Why an already-refundable round refunds.
+ *
+ * `_endRound` writes `settled` before it voids, and it tests the one-sided book *before* the tie,
+ * so a round that is both settled and voided can be told apart exactly the way the contract
+ * decided it. Everything else (never locked, window blown at lock, defensive oracle void) leaves
+ * no distinguishing trace in storage, so it is reported as the plain `voided`.
+ */
+function refundReasonFor(round: Round, nowSeconds: number): RefundReason {
+  if (round.settled) {
+    if (round.upAmount === 0n || round.downAmount === 0n) return 'one-sided'
+    if (round.closePrice === round.lockPrice) return 'tie'
+    return 'voided'
+  }
+  if (round.voided) return 'voided'
+  return isExpired(round, nowSeconds) ? 'window' : 'voided'
 }
 
 /**
@@ -186,7 +218,17 @@ export function priceView(args: {
   }
 
   if (round.voided || isExpired(round, nowSeconds)) {
-    return { kind: 'refund', showMove: false, committed: true, label: 'Settlement price', moveLabel: 'Move' }
+    return {
+      kind: 'refund',
+      // A round voided *after* settlement (tie, one-sided book) still recorded its close price, and
+      // that number is real; a round that never settled has none.
+      price: round.settled ? round.closePrice : undefined,
+      showMove: false,
+      committed: true,
+      label: 'Settlement price',
+      moveLabel: 'Move',
+      refundReason: refundReasonFor(round, nowSeconds),
+    }
   }
 
   if (BigInt(Math.floor(nowSeconds)) < round.closeTs) {
@@ -195,6 +237,22 @@ export function priceView(args: {
 
   // Past close, not yet executed. `livePrice` is now a number the contract will not settle on.
   if (boundary?.status === 'proven') {
+    // Knowing the settling print is not the same as knowing there is a winner. `_endRound` voids a
+    // round whose book is one-sided, and voids a tie, *before* it ever compares the two prices — so
+    // in both cases a coloured move here would name a winner the chain is about to refund.
+    const oneSided = round.upAmount === 0n || round.downAmount === 0n
+    const tie = round.locked && boundary.price === round.lockPrice
+    if (oneSided || tie) {
+      return {
+        kind: 'refund',
+        price: boundary.price,
+        showMove: false,
+        committed: false,
+        label: 'Settling price',
+        moveLabel: 'Move at close',
+        refundReason: oneSided ? 'one-sided' : 'tie',
+      }
+    }
     return {
       kind: 'boundary',
       price: boundary.price,
@@ -205,7 +263,16 @@ export function priceView(args: {
     }
   }
   if (boundary?.status === 'stale') {
-    return { kind: 'refund', showMove: false, committed: false, label: 'Settling price', moveLabel: 'Move at close' }
+    return {
+      kind: 'refund',
+      showMove: false,
+      // The refund is certain — the prints at or before a passed boundary are frozen — but the
+      // chain has not marked it yet, and `refundable()` stays false until the window elapses.
+      committed: false,
+      label: 'Settling price',
+      moveLabel: 'Move at close',
+      refundReason: 'no-print',
+    }
   }
   return { kind: 'pending', showMove: false, committed: false, label: 'Settling price', moveLabel: 'Move at close' }
 }

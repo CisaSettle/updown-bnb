@@ -34,7 +34,8 @@ export const marketAbi = [
   /**
    * Permissionless. `boundaryRoundId` must be the oracle round id of the last print at or before
    * `boundaryTimestamp()`; the contract proves it, so settlement carries no timing discretion.
-   * A wrong or missing id does not revert — it voids the round into refunds.
+   * A wrong or unprovable id REVERTS with `InvalidBoundaryProof`; only a timeout past the round's
+   * own `bufferSeconds` voids it into refunds.
    */
   {
     type: 'function',

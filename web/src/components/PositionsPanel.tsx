@@ -7,6 +7,7 @@ import type { SettlementToken } from '../hooks/useSettlementToken'
 import { useTxRunner } from '../hooks/useTxRunner'
 import { formatAmountWithSymbol, formatDateTime } from '../lib/format'
 import { betSide, type PositionStatus } from '../lib/market'
+import { claimPlan } from '../lib/positions'
 import { SkeletonRows } from './Skeleton'
 
 const STATUS_CHIP: Record<PositionStatus, { text: string; className: string }> = {
@@ -34,20 +35,40 @@ export function PositionsPanel({
   positions,
   collectableEpochs,
   collectableTotal,
+  total,
+  hasMore,
+  loadMore,
+  incomplete,
+  markClaimed,
   token,
   isLoading,
   onClaimed,
 }: {
   market: Address
   positions: Position[]
+  /** Every collectable epoch in this market, including rounds older than the rows on screen. */
   collectableEpochs: bigint[]
   collectableTotal: bigint
+  /** How many rounds the user has ever had a position in. */
+  total: bigint
+  hasMore: boolean
+  loadMore: () => void
+  /** Some epoch's collectability could not be read; never claim silently over that. */
+  incomplete: boolean
+  /** Records the epochs a claim confirmed, so the next press cannot re-send an already-claimed one. */
+  markClaimed: (epochs: readonly bigint[]) => void
   token: SettlementToken
   isLoading: boolean
   onClaimed: () => void
 }) {
   const { isConnected } = useAccount()
   const { writeContractAsync, run, busyKey } = useTxRunner()
+
+  // One transaction can only carry so many epochs, so a long tail is collected in batches. The
+  // count on the button is always the count actually being sent.
+  const plan = claimPlan(collectableEpochs)
+  const claimAllLabel =
+    plan.remaining > 0 ? `Claim ${plan.batch.length} of ${collectableEpochs.length}` : `Claim all${plan.batch.length ? ` (${plan.batch.length})` : ''}`
 
   // `claim` reverts if ANY epoch in the array is not collectable, so only ever send these.
   async function claim(epochs: bigint[], key: string, title: string) {
@@ -63,7 +84,14 @@ export function PositionsPanel({
           functionName: 'claim',
           args: [epochs],
         }),
-      onClaimed,
+      // Retire these epochs the instant the receipt confirms. The refetch below only *starts* here,
+      // and until it lands the reads still call them collectable — so without this, the very next
+      // press (which the button's own copy invites, for "the remaining N") would re-send the batch
+      // that was just collected and revert the whole transaction with `AlreadyClaimed`.
+      () => {
+        markClaimed(epochs)
+        onClaimed()
+      },
     )
   }
 
@@ -79,15 +107,17 @@ export function PositionsPanel({
         <button
           type="button"
           className="btn-primary ml-auto !py-2 text-xs"
-          disabled={collectableEpochs.length === 0 || busyKey !== null}
-          onClick={() => void claim(collectableEpochs, 'claim-all', 'Claim all')}
+          disabled={plan.batch.length === 0 || busyKey !== null}
+          onClick={() => void claim(plan.batch, 'claim-all', 'Claim all')}
           title={
-            collectableEpochs.length === 0
+            plan.batch.length === 0
               ? 'Nothing is collectable yet'
-              : `Collect ${collectableEpochs.length} round${collectableEpochs.length === 1 ? '' : 's'}`
+              : plan.remaining > 0
+                ? `Collecting ${plan.batch.length} of your ${collectableEpochs.length} collectable rounds — one transaction can only carry so many. Press again for the remaining ${plan.remaining}.`
+                : `Collect all ${plan.batch.length} collectable round${plan.batch.length === 1 ? '' : 's'}, including any older than the rows shown below`
           }
         >
-          {busyKey === 'claim-all' ? 'Claiming…' : `Claim all${collectableEpochs.length ? ` (${collectableEpochs.length})` : ''}`}
+          {busyKey === 'claim-all' ? 'Claiming…' : claimAllLabel}
         </button>
       </div>
 
@@ -103,7 +133,9 @@ export function PositionsPanel({
         ) : (
           <div className="-mx-5 overflow-x-auto px-5">
             <table className="w-full min-w-[560px] text-sm">
-              <caption className="sr-only">Your last {positions.length} rounds in this market</caption>
+              <caption className="sr-only">
+                {positions.length} of your {total.toString()} rounds in this market, newest first
+              </caption>
               <thead>
                 <tr className="border-b border-slate-200 text-left dark:border-slate-800">
                   <th scope="col" className="label py-2 pr-3 font-medium">
@@ -175,9 +207,32 @@ export function PositionsPanel({
           </div>
         )}
 
+        {isConnected && positions.length > 0 ? (
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Showing {positions.length} of {total.toString()} round{total === 1n ? '' : 's'}.
+            </p>
+            {hasMore ? (
+              <button type="button" className="btn-secondary !px-3 !py-1.5 text-xs" onClick={loadMore}>
+                Load older rounds
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {isConnected && incomplete ? (
+          <p className="mt-3 text-[11px] leading-relaxed text-amber-700 dark:text-amber-400">
+            Part of your history could not be read just now, so a collectable round may be missing from the count above.
+            Reload before assuming there is nothing left to collect — your stake stays on chain and stays claimable
+            either way.
+          </p>
+        ) : null}
+
         <p className="mt-4 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-          Collecting is a pull payment: nothing is ever pushed to you during settlement, and claiming is never pausable.
-          A refunded round returns your full stake with no fee taken.
+          <strong>Claim all</strong> covers every collectable round in this market, including ones older than the rows
+          shown here; when there are more than one transaction can carry, the button says exactly how many it is
+          sending. Collecting is a pull payment: nothing is ever pushed to you during settlement, and claiming is never
+          pausable. A refunded round returns your full stake with no fee taken.
         </p>
       </div>
     </section>

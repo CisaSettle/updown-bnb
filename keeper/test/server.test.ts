@@ -10,6 +10,7 @@ const healthy: HealthReport = {
     { name: 'btcUsd5m', state: 'ok', healthy: true, secondsSinceExecution: 12, budgetSec: 600, reason: 'ok' },
   ],
   warnings: [],
+  blockers: [],
 };
 
 const unhealthy: HealthReport = {

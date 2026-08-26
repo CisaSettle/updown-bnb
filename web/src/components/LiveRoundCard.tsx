@@ -1,5 +1,6 @@
 import { formatPctDelta, formatPrice, formatPriceDelta, formatTime } from '../lib/format'
 import { roundPhase, type Round, type RoundPhase } from '../lib/market'
+import { priceView, type BoundaryProof, type PriceView } from '../lib/settlement'
 import type { MarketConfig } from '../hooks/useMarketConfig'
 import type { OraclePrice } from '../hooks/useOraclePrice'
 import type { SettlementToken } from '../hooks/useSettlementToken'
@@ -32,19 +33,63 @@ function bettingChipPhase(phase: RoundPhase): RoundPhase {
   return 'settling'
 }
 
+/**
+ * What the price column is allowed to claim, in words.
+ *
+ * Past `closeTs` the feed's latest print is *not* the number the round is judged on — the round
+ * settles on the last print at or before `closeTs`. So once the round has closed the card either
+ * names the proved settling print or says plainly that no outcome is decided yet.
+ */
+function settlementNote(view: PriceView, closeTs: bigint | undefined) {
+  const closedAt = formatTime(closeTs)
+  switch (view.kind) {
+    case 'boundary':
+      return `Closed at ${closedAt}. This is the last feed print at or before that moment — the price the contract settles on. Not final until the round is executed on chain.`
+    case 'pending':
+      return `Closed at ${closedAt}. This round settles on the last feed print at or before that moment, which is not the live price, and that print is not resolved yet — no outcome here.`
+    case 'refund':
+      // `committed` is the difference between a refund the chain has already recorded — the stake
+      // is collectable right now — and one that is certain but still waiting on the settlement
+      // window. Saying "refunded" of the second would promise a claim the contract still reverts.
+      switch (view.refundReason) {
+        case 'no-print':
+          return `There is no usable feed print at or before ${closedAt}, so nobody can settle this round. Once its settlement window closes, every stake is returned in full with no fee taken.`
+        case 'one-sided':
+          return view.committed
+            ? 'Only one side of this round had money in it, so there was nobody to win from: every stake is returned in full, no fee taken.'
+            : 'Only one side of this round has money in it, so there is nobody to win from. Whatever this price is, every stake is returned in full once the round is executed, with no fee taken.'
+        case 'tie':
+          return view.committed
+            ? 'The settlement price landed exactly on the strike — a tie. Every stake is returned in full, no fee taken.'
+            : 'This price is exactly the strike — a tie, so there is no winner. Every stake is returned in full once the round is executed, with no fee taken.'
+        case 'window':
+          return 'This round’s settlement window closed without a settlement, so it can no longer be settled: every stake is returned in full, no fee taken.'
+        default:
+          return 'There is no winner in this round: every stake is returned in full, no fee taken.'
+      }
+    default:
+      return undefined
+  }
+}
+
 function PriceBlock({
   strike,
-  current,
+  view,
   decimals,
   ageSeconds,
+  closeTs,
+  boundary,
 }: {
   strike?: bigint
-  current?: bigint
+  view: PriceView
   decimals: number
   ageSeconds?: number
+  closeTs?: bigint
+  boundary?: BoundaryProof
 }) {
-  const hasBoth = strike !== undefined && strike !== 0n && current !== undefined
-  const delta = hasBoth ? current - strike : undefined
+  // A move is only ever drawn against a number the chain does (or will) judge the round on.
+  const hasBoth = strike !== undefined && strike !== 0n && view.price !== undefined && view.showMove
+  const delta = hasBoth ? view.price! - strike! : undefined
   const up = delta !== undefined && delta > 0n
   const down = delta !== undefined && delta < 0n
 
@@ -53,6 +98,9 @@ function PriceBlock({
     : down
       ? 'text-rose-600 dark:text-rose-400'
       : 'text-slate-500 dark:text-slate-400'
+
+  const note = settlementNote(view, closeTs)
+  const printedAt = view.kind === 'boundary' && boundary?.status === 'proven' ? boundary.updatedAt : undefined
 
   return (
     <div className="grid grid-cols-2 gap-3">
@@ -63,20 +111,34 @@ function PriceBlock({
         </p>
       </div>
       <div className="text-right">
-        <p className="label">Live price</p>
-        <p className="num mt-1 text-xl font-bold sm:text-2xl">{formatPrice(current, decimals)}</p>
-        {ageSeconds !== undefined ? (
+        <p className="label">{view.label}</p>
+        <p className="num mt-1 text-xl font-bold sm:text-2xl">
+          {view.price !== undefined ? formatPrice(view.price, decimals) : '—'}
+        </p>
+        {view.kind === 'live' && ageSeconds !== undefined ? (
           <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">feed {ageSeconds}s ago</p>
+        ) : null}
+        {printedAt !== undefined ? (
+          <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">printed {formatTime(printedAt)}</p>
         ) : null}
       </div>
       <div className="col-span-2 flex items-baseline gap-2 border-t border-slate-200 pt-2 dark:border-slate-800">
-        <span className="label">Move</span>
-        <span className={`num text-lg font-bold ${deltaColor}`}>
-          {up ? '▲ ' : down ? '▼ ' : ''}
-          {formatPriceDelta(delta, decimals)}
-        </span>
-        <span className={`num text-sm font-semibold ${deltaColor}`}>{formatPctDelta(delta, strike)}</span>
+        <span className="label">{view.moveLabel}</span>
+        {view.showMove ? (
+          <>
+            <span className={`num text-lg font-bold ${deltaColor}`}>
+              {up ? '▲ ' : down ? '▼ ' : ''}
+              {formatPriceDelta(delta, decimals)}
+            </span>
+            <span className={`num text-sm font-semibold ${deltaColor}`}>{formatPctDelta(delta, strike)}</span>
+          </>
+        ) : (
+          <span className="num text-lg font-bold text-slate-400 dark:text-slate-500">—</span>
+        )}
       </div>
+      {note ? (
+        <p className="col-span-2 -mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">{note}</p>
+      ) : null}
     </div>
   )
 }
@@ -90,6 +152,7 @@ export function LiveRoundCard({
   liveOdds,
   currentEpoch,
   oracle,
+  boundary,
   token,
   now,
   children,
@@ -102,6 +165,8 @@ export function LiveRoundCard({
   liveOdds?: [bigint, bigint]
   currentEpoch: bigint
   oracle: OraclePrice
+  /** The proved settling print for the live round, once its close time has passed. */
+  boundary?: BoundaryProof
   token: SettlementToken
   now: number
   /** The bet form, rendered inside the betting column. */
@@ -109,6 +174,7 @@ export function LiveRoundCard({
 }) {
   const bettablePhase = roundPhase(bettable, now)
   const livePhase = roundPhase(live, now)
+  const liveView = priceView({ round: live, nowSeconds: now, livePrice: oracle.answer, boundary })
 
   // While the round has not opened yet the clock must count to `startTs`, not to `lockTs`.
   const bettingTarget = bettable ? (bettablePhase === 'upcoming' ? bettable.startTs : bettable.lockTs) : 0n
@@ -182,9 +248,11 @@ export function LiveRoundCard({
 
               <PriceBlock
                 strike={live.lockPrice}
-                current={oracle.answer}
+                view={liveView}
                 decimals={oracle.decimals}
                 ageSeconds={oracle.ageSeconds}
+                closeTs={live.closeTs}
+                boundary={boundary}
               />
 
               <PoolBar up={live.upAmount} down={live.downAmount} decimals={token.decimals} symbol={token.symbol} />

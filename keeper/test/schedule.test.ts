@@ -3,10 +3,14 @@ import {
   bettableEpochAt,
   clampRelayLead,
   computeNextWake,
+  computeRelayLeadMs,
   isPastSettlementWindow,
   missedEpochs,
+  relayCanStillLand,
   secondsUntilLockable,
+  DEFAULT_RELAY_LEAD_MS,
   MAX_TIMEOUT_MS,
+  RELAY_MIN_LANDING_MS,
   type RoundTiming,
   type WakeOptions,
   applyCooldown,
@@ -26,6 +30,7 @@ const round: RoundTiming = {
 const base: WakeOptions = {
   executeLeadMs: 2_000,
   relayLeadMs: 15_000,
+  relaySlots: 1,
   relayEnabled: false,
   maxTimerMs: 15 * 60_000,
   minTimerMs: 0,
@@ -111,6 +116,64 @@ describe('computeNextWake', () => {
       const plan = computeNextWake(at(-120), round, { ...relay, relayEnabled: false });
       expect(plan.action).toBe('execute');
     });
+
+    it('leads by one queue slot per relay sharing the boundary', () => {
+      // Three feeds hit the same aligned boundary and one key signs for all of them, so the relays
+      // go out strictly one after another. Waking a single 15s lead before `lockTs` means the third
+      // relay dequeues after the boundary, can never qualify, and that market's round voids.
+      const plan = computeNextWake(at(-120), round, { ...relay, relaySlots: 3 });
+      expect(plan.action).toBe('relay');
+      expect(plan.targetMs).toBe((LOCK_TS - 45) * 1000);
+      expect(plan.delayMs).toBe(75_000);
+    });
+
+    it('still refuses to lead further than the oracle staleness budget allows', () => {
+      // Six feeds would want 90s of lead, but a print older than half the 150s budget is refused by
+      // `_priceAt` just as surely as a late one, so the lead is clamped rather than the print wasted.
+      const plan = computeNextWake(at(-200), round, { ...relay, relaySlots: 6 });
+      expect(plan.targetMs).toBe((LOCK_TS - 75) * 1000);
+    });
+  });
+});
+
+describe('computeRelayLeadMs', () => {
+  it('is the per-relay budget when this market is the only relay', () => {
+    expect(computeRelayLeadMs(20_000, 1, 150)).toBe(20_000);
+  });
+
+  it('scales with the number of relays that have to share the transaction queue', () => {
+    // One key means one relay in flight at a time: the last of three still has to beat `lockTs`.
+    expect(computeRelayLeadMs(20_000, 2, 150)).toBe(40_000);
+    expect(computeRelayLeadMs(20_000, 3, 150)).toBe(60_000);
+  });
+
+  it('never exceeds the staleness budget, however many relays share the boundary', () => {
+    expect(computeRelayLeadMs(20_000, 10, 150)).toBe(75_000);
+  });
+
+  it('treats a missing or nonsensical slot count as one relay', () => {
+    expect(computeRelayLeadMs(20_000, 0, 150)).toBe(20_000);
+    expect(computeRelayLeadMs(20_000, Number.NaN, 150)).toBe(20_000);
+  });
+
+  it('defaults to a per-relay budget wide enough for a real BSC confirmation', () => {
+    // The old 15s was the whole lead for every feed at once; it is now the budget for one relay.
+    expect(DEFAULT_RELAY_LEAD_MS).toBeGreaterThan(15_000);
+  });
+});
+
+describe('relayCanStillLand', () => {
+  it('is true while there is at least a block of headroom before the boundary', () => {
+    expect(relayCanStillLand(LOCK_TS - 30, LOCK_TS)).toBe(true);
+    expect(relayCanStillLand(LOCK_TS - Math.ceil(RELAY_MIN_LANDING_MS / 1000), LOCK_TS)).toBe(true);
+  });
+
+  it('is false once the print could only land after the boundary', () => {
+    // A relay dequeued this late cannot produce a print `_priceAt` will look at; sending it only
+    // burns gas and holds the queue against the relays still waiting behind it.
+    expect(relayCanStillLand(LOCK_TS - 1, LOCK_TS)).toBe(false);
+    expect(relayCanStillLand(LOCK_TS, LOCK_TS)).toBe(false);
+    expect(relayCanStillLand(LOCK_TS + 5, LOCK_TS)).toBe(false);
   });
 });
 
