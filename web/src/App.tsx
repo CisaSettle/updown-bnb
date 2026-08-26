@@ -11,7 +11,8 @@ import { RoundProof } from './components/RoundProof'
 import { SkeletonCard } from './components/Skeleton'
 import { TestnetBanner } from './components/TestnetBanner'
 import { Toaster } from './components/Toaster'
-import { activeChain, addressUrl, isTestnet } from './config/chains'
+import * as ui from './content/ui'
+import { addressUrl, isTestnet } from './config/chains'
 import { deployment, isPlaceholderDeployment, usesRelayFeeds } from './config/deployment'
 import { useBoundaryPrice } from './hooks/useBoundaryPrice'
 import { useHistory } from './hooks/useHistory'
@@ -25,7 +26,7 @@ import { useSettlementToken } from './hooks/useSettlementToken'
 import { humanizeError } from './lib/errors'
 import { shortAddress } from './lib/format'
 import { useChainNow } from './hooks/useChainNow'
-import { useLang } from './lib/i18n'
+import { t, useLang } from './lib/i18n'
 import { useRoute } from './lib/route'
 import { useTheme } from './lib/theme'
 
@@ -45,9 +46,7 @@ const SELECTED_KEY = 'updown.market'
  * mainnet reads Chainlink's aggregated answer. Both differ from any single venue's spot, and the
  * chart plots the one the chain settles on.
  */
-const FEED_NAME = usesRelayFeeds
-  ? 'plotted from the market’s own relay feed, the series it settles on — not an exchange price'
-  : 'plotted from the market’s own Chainlink feed, the series it settles on — not an exchange price'
+const FEED_NAME = ui.feedName(usesRelayFeeds)
 
 function readSelected(): string | undefined {
   try {
@@ -58,6 +57,7 @@ function readSelected(): string | undefined {
 }
 
 function MarketView({ market }: { market: Market }) {
+  const lang = useLang()
   // Anchored to the chain, not to the browser clock: every deadline the UI counts down to is
   // compared against `block.timestamp` inside the contract.
   const now = useChainNow(1000)
@@ -100,10 +100,10 @@ function MarketView({ market }: { market: Market }) {
   if (configError) {
     return (
       <div className="card p-5">
-        <p className="text-sm font-semibold text-rose-700 dark:text-rose-400">Could not read this market</p>
-        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{humanizeError(configError)}</p>
+        <p className="text-sm font-semibold text-rose-700 dark:text-rose-400">{t(lang, ui.app.marketReadFailed)}</p>
+        <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">{humanizeError(configError, lang)}</p>
         <button type="button" className="btn-secondary mt-4" onClick={() => void refetchConfig()}>
-          Retry
+          {t(lang, ui.app.retry)}
         </button>
       </div>
     )
@@ -117,9 +117,10 @@ function MarketView({ market }: { market: Market }) {
     <div className="space-y-6">
       {!config.genesisStarted ? (
         <div className="card-muted p-4 text-sm text-slate-700 dark:text-slate-200">
-          <strong>This market has not opened yet.</strong> The owner still has to call{' '}
-          <code className="rounded bg-slate-200 px-1.5 py-0.5 text-xs dark:bg-slate-800">genesisStart()</code> before the
-          first round begins.
+          <strong>{t(lang, ui.app.notOpenBold)}</strong>
+          {t(lang, ui.app.notOpenBefore)}
+          <code className="rounded bg-slate-200 px-1.5 py-0.5 text-xs dark:bg-slate-800">genesisStart()</code>
+          {t(lang, ui.app.notOpenAfter)}
         </div>
       ) : null}
 
@@ -192,29 +193,25 @@ function MarketView({ market }: { market: Market }) {
       <footer className="pb-10 text-xs text-slate-500 dark:text-slate-400">
         <p className="flex flex-wrap items-center gap-x-4 gap-y-1">
           <span>
-            Market{' '}
+            {t(lang, ui.app.market)}{' '}
             <a className="link num" href={addressUrl(market.address)} target="_blank" rel="noreferrer">
               {shortAddress(market.address)}
             </a>
           </span>
           <span>
-            Feed{' '}
+            {t(lang, ui.app.feed)}{' '}
             <a className="link num" href={addressUrl(config.oracle)} target="_blank" rel="noreferrer">
               {shortAddress(config.oracle)}
             </a>
           </span>
           <span>
-            Registry{' '}
+            {t(lang, ui.app.registry)}{' '}
             <a className="link num" href={addressUrl(deployment.registry)} target="_blank" rel="noreferrer">
               {shortAddress(deployment.registry)}
             </a>
           </span>
         </p>
-        <p className="mt-2 max-w-3xl leading-relaxed">
-          Non-custodial and parimutuel: there is no house. The winning side splits the losing side&rsquo;s pool and the
-          fee is charged on the losing pool only, so a winner is never paid less than their own stake. Nothing here is
-          financial advice.
-        </p>
+        <p className="mt-2 max-w-3xl leading-relaxed">{t(lang, ui.app.footer)}</p>
       </footer>
     </div>
   )
@@ -240,6 +237,16 @@ export default function App() {
       /* private mode — the choice just does not persist */
     }
   }, [selected])
+
+  // `index.html` gets the description right before first paint, and `i18n.ts` keeps <html lang> in
+  // step with the toggle — but nothing was keeping the description in step with it, so a reader who
+  // switched to English left the document describing itself in 中文 under `lang="en"`. Anything that
+  // reads the live DOM (a share-card scraper, a translation extension, a reading-mode view) sees
+  // that mismatch, so the description follows the toggle too.
+  useEffect(() => {
+    const el = document.getElementById('meta-description')
+    if (el) el.setAttribute('content', t(lang, ui.meta.description))
+  }, [lang])
 
   const showTestnetHelpers = isTestnet && usesRelayFeeds && !isPlaceholderDeployment
 
@@ -275,8 +282,8 @@ export default function App() {
 
           {usingFallback ? (
             <div className="card-muted p-3 text-xs text-amber-800 dark:text-amber-300">
-              The registry could not be read, so markets are listed from the deployment file instead.
-              {error ? ` (${humanizeError(error)})` : ''}
+              {t(lang, ui.app.registryFallback)}
+              {error ? ` (${humanizeError(error, lang)})` : ''}
             </div>
           ) : null}
 
@@ -286,13 +293,13 @@ export default function App() {
             <MarketView key={selected.address} market={selected} />
           ) : (
             <div className="card p-5">
-              <p className="text-sm font-semibold">No markets available on {activeChain.name}</p>
+              <p className="text-sm font-semibold">{t(lang, ui.noMarkets(lang))}</p>
               <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
-                The registry at{' '}
+                {t(lang, ui.noMarketsBody.before)}
                 <a className="link num" href={addressUrl(deployment.registry)} target="_blank" rel="noreferrer">
                   {shortAddress(deployment.registry)}
-                </a>{' '}
-                has no enabled markets yet.
+                </a>
+                {t(lang, ui.noMarketsBody.after)}
               </p>
             </div>
           )}

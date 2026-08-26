@@ -1,7 +1,7 @@
 import { ConnectButton } from './ConnectButton'
 import { LangToggle } from './LangToggle'
 import { ThemeToggle } from './ThemeToggle'
-import { activeChain } from '../config/chains'
+import * as ui from '../content/ui'
 import { setLang, t, type Lang } from '../lib/i18n'
 import { FAQ_HASH } from '../lib/route'
 import type { ThemePref } from '../lib/theme'
@@ -31,7 +31,7 @@ export function Header({
           <div className="min-w-0">
             <h1 className="truncate text-base font-bold leading-tight sm:text-lg">UpDown</h1>
             <p className="hidden truncate text-xs text-slate-500 dark:text-slate-400 sm:block">
-              Parimutuel binary options · {activeChain.name}
+              {t(lang, ui.headerTagline(lang))}
             </p>
           </div>
         </a>
@@ -49,7 +49,7 @@ export function Header({
               onFaq ? '!border-slate-900 !bg-slate-900 !text-white dark:!border-white dark:!bg-white dark:!text-slate-900' : ''
             }`}
           >
-            {t(lang, { en: 'FAQ', zh: '常见问题' })}
+            {t(lang, ui.header.faq)}
           </a>
           <LangToggle lang={lang} onChange={setLang} className="hidden h-10 items-center sm:inline-flex" />
           <ThemeToggle pref={themePref} onCycle={onCycleTheme} />

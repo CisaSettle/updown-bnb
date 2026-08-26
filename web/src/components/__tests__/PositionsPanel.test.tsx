@@ -1,8 +1,8 @@
-import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { Position } from '../../hooks/usePositions'
+import type { Lang } from '../../lib/i18n'
 import type { PositionStatus } from '../../lib/market'
-import { ONE, round, usdt } from './fixtures'
+import { ONE, renderIn, round, usdt } from './fixtures'
 
 // The panel only needs an identity and a transaction runner from wagmi; neither is exercised by a
 // static render, and neither may drag a live connection into a unit test.
@@ -27,8 +27,9 @@ function position(status: PositionStatus, payout: bigint, overrides: Partial<Pos
   }
 }
 
-function render(positions: Position[]) {
-  return renderToStaticMarkup(
+function render(positions: Position[], lang: Lang = 'en') {
+  return renderIn(
+    lang,
     <PositionsPanel
       market="0x0000000000000000000000000000000000000001"
       positions={positions}
@@ -78,5 +79,40 @@ describe('PositionsPanel payout column', () => {
     const collectable = render([position('refunded', 25n * ONE, { collectable: true })])
     expect(collectable.split('>Collect<').length - 1).toBe(2)
     expect(render([position('pending', 0n)]).split('>Collect<').length - 1).toBe(1)
+  })
+})
+
+describe('PositionsPanel in 中文', () => {
+  it('separates money you can still take from money already taken', () => {
+    // 可退款 is a claim you can make right now; 已领取 is one you already made. Rendering the first
+    // as 已退款 would tell a user their stake had been sent when it is still sitting on chain.
+    expect(render([position('refunded', 25n * ONE, { collectable: true })], 'zh')).toContain('>可退款<')
+    expect(render([position('claimed', 197n * ONE)], 'zh')).toContain('>已领取<')
+    expect(render([position('refunded', 25n * ONE)], 'zh')).not.toContain('已退款')
+  })
+
+  it('calls an undecided round 未结算, not 处理中', () => {
+    const html = render([position('pending', 0n)], 'zh')
+    expect(html).toContain('>未结算<')
+    expect(html).not.toContain('处理中')
+    expect(html).toContain('还没有结果')
+    expect(html).not.toContain('0 USDT')
+  })
+
+  it('translates the whole table, headers and screen-reader text included', () => {
+    const html = render([position('won', 197n * ONE, { collectable: true })], 'zh')
+    for (const header of ['轮次', '方向', '本金', '结果', '赔付', '领取']) {
+      expect(html).toContain(header)
+    }
+    expect(html).toContain('aria-label="我的仓位"')
+    expect(html).toContain('第 42 轮')
+    expect(html).toContain('▲ UP')
+  })
+
+  it('keeps 领取 a pull payment in the footer, and never promises a push', () => {
+    const html = render([position('won', 197n * ONE)], 'zh')
+    expect(html).toContain('你来取')
+    expect(html).toContain('不收手续费')
+    expect(html).not.toContain('自动到账')
   })
 })

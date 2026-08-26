@@ -114,7 +114,7 @@ export function FaqLiveValues({
               <span key={f.address}>
                 {i > 0 ? ' · ' : ''}
                 <span className="font-semibold">{f.label}</span>{' '}
-                <span className="num text-slate-500 dark:text-slate-400">{formatInterval(f.interval)}</span>
+                <span className="num text-slate-500 dark:text-slate-400">{formatInterval(f.interval, lang)}</span>
               </span>
             ))}
           </p>,
@@ -221,7 +221,7 @@ export function FaqLiveValues({
           {facts.map((f) => (
             <tr key={f.address} className="border-b border-sky-100 last:border-0 dark:border-sky-900/50">
               <td className="py-1.5 pr-3 font-semibold">{f.label}</td>
-              <td className="num py-1.5 pr-3">{formatInterval(f.interval)}</td>
+              <td className="num py-1.5 pr-3">{formatInterval(f.interval, lang)}</td>
               <td className="py-1.5 pr-3">
                 <AddressLink address={f.address} />
               </td>

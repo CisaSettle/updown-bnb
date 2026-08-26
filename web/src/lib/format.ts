@@ -1,4 +1,5 @@
 import { formatUnits, parseUnits } from 'viem'
+import type { Lang } from './i18n'
 
 /** Chainlink AggregatorV3 feeds on BSC report 8 decimals. */
 export const PRICE_DECIMALS = 8
@@ -215,25 +216,89 @@ export function formatCountdown(seconds: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`
 }
 
-/** `300` → `"5m"`, `3600` → `"1h"`. */
-export function formatInterval(seconds: number): string {
+/**
+ * A duration spelled out, for the places a clock face is not enough — the countdown's `title`,
+ * which is what a screen reader announces instead of `04:59`.
+ *
+ * Two deliberate decisions:
+ *  - English pluralises. "1 seconds remaining" is a number on screen written wrong, and this is
+ *    read aloud to somebody who cannot see the digits.
+ *  - 中文 composes the same units the countdown itself shows — `4 分 12 秒`, not `252 秒` — so the
+ *    spoken form and the clock face agree. `分` rather than `分钟`: this is an elapsing duration, not
+ *    the name of an interval (see `formatInterval`).
+ */
+export function formatDurationWords(seconds: number, lang: Lang): string {
+  const s = Math.max(0, Math.floor(seconds))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+
+  if (lang === 'zh') {
+    const parts: string[] = []
+    if (h > 0) parts.push(`${h} 小时`)
+    // 分 inside a compound — 4 分 12 秒 reads as one duration, the way the clock face shows it.
+    // But a bare `2 分` is not a length of time in 中文, it is an unfinished phrase; standing on
+    // its own the unit is 分钟. At exactly a whole minute the countdown is the only thing a
+    // screen reader gets, so this is the difference between "two minutes left" and "two point".
+    if (m > 0) parts.push(h === 0 && sec === 0 ? `${m} 分钟` : `${m} 分`)
+    if (sec > 0 || parts.length === 0) parts.push(`${sec} 秒`)
+    return parts.join(' ')
+  }
+
+  const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? '' : 's'}`
+  const parts: string[] = []
+  if (h > 0) parts.push(plural(h, 'hour'))
+  if (m > 0) parts.push(plural(m, 'minute'))
+  if (sec > 0 || parts.length === 0) parts.push(plural(sec, 'second'))
+  return parts.join(' ')
+}
+
+/**
+ * A round's interval, as a unit rather than as an elapsing duration: `5m` / `5 分钟`.
+ *
+ * 中文 says `分钟` here and `分` in `formatDurationWords` on purpose — "5 分钟一轮" is the length of a
+ * round, "剩余 4 分 12 秒" is a clock running down. Collapsing the two reads wrong in one place or
+ * the other.
+ */
+export function formatInterval(seconds: number, lang: Lang): string {
+  if (lang === 'zh') {
+    if (seconds % 3600 === 0) return `${seconds / 3600} 小时`
+    if (seconds % 60 === 0) return `${seconds / 60} 分钟`
+    return `${seconds} 秒`
+  }
   if (seconds % 3600 === 0) return `${seconds / 3600}h`
   if (seconds % 60 === 0) return `${seconds / 60}m`
   return `${seconds}s`
 }
 
-export function formatTime(tsSeconds: number | bigint | undefined): string {
-  if (tsSeconds === undefined) return '—'
-  const ts = Number(tsSeconds)
-  if (!ts) return '—'
-  return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+/**
+ * The locale a timestamp is rendered in.
+ *
+ * 中文 is pinned to `zh-CN`, because a 中文 reader on an `en-US` browser would otherwise get
+ * `Nov 14, 02:13 PM` inside an otherwise Chinese table. English keeps the runtime default — an
+ * `en-GB` or `de-DE` reader has always seen their own clock here and pinning `en-US` would take
+ * their 24-hour time away.
+ */
+function localeFor(lang: Lang): string | string[] {
+  return lang === 'zh' ? 'zh-CN' : []
 }
 
-export function formatDateTime(tsSeconds: number | bigint | undefined): string {
+export function formatTime(tsSeconds: number | bigint | undefined, lang: Lang): string {
   if (tsSeconds === undefined) return '—'
   const ts = Number(tsSeconds)
   if (!ts) return '—'
-  return new Date(ts * 1000).toLocaleString([], {
+  return new Date(ts * 1000).toLocaleTimeString(localeFor(lang), {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
+export function formatDateTime(tsSeconds: number | bigint | undefined, lang: Lang): string {
+  if (tsSeconds === undefined) return '—'
+  const ts = Number(tsSeconds)
+  if (!ts) return '—'
+  return new Date(ts * 1000).toLocaleString(localeFor(lang), {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

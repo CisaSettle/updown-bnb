@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useAccount } from 'wagmi'
 import { marketViewAbi } from '../abi'
+import * as ui from '../content/ui'
 import { activeChain } from '../config/chains'
 import type { Address } from '../config/deployment'
 import type { Position, RevalidatedClaim } from '../hooks/usePositions'
@@ -8,28 +9,37 @@ import type { SettlementToken } from '../hooks/useSettlementToken'
 import { useTxRunner } from '../hooks/useTxRunner'
 import { humanizeError } from '../lib/errors'
 import { formatAmountWithSymbol, formatDateTime } from '../lib/format'
+import { t, useLang, type Lang, type Text } from '../lib/i18n'
 import { betSide, type PositionStatus } from '../lib/market'
-import { claimAllLabel, claimPlan, olderRoundsPhrase } from '../lib/positions'
+import { claimAllLabel, claimPlan, olderRoundsNotice } from '../lib/positions'
 import { pushToast } from '../lib/toast'
 import { SkeletonRows } from './Skeleton'
 
-const STATUS_CHIP: Record<PositionStatus, { text: string; className: string }> = {
-  pending: { text: 'Pending', className: 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
-  won: { text: 'Won', className: 'bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200' },
-  lost: { text: 'Lost', className: 'bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-200' },
-  refunded: { text: 'Refunded', className: 'bg-violet-100 text-violet-900 dark:bg-violet-950 dark:text-violet-200' },
-  claimed: { text: 'Collected', className: 'bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400' },
+const STATUS_CLASS: Record<PositionStatus, string> = {
+  pending: 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+  won: 'bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200',
+  lost: 'bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-200',
+  refunded: 'bg-violet-100 text-violet-900 dark:bg-violet-950 dark:text-violet-200',
+  claimed: 'bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-400',
 }
 
-function SideBadge({ position }: { position: Position }) {
+function SideBadge({ position, lang }: { position: Position; lang: Lang }) {
   const side = betSide(position.bet)
   if (side === 'none') return <span className="text-slate-400">—</span>
   if (side === 'both')
-    return <span className="chip bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300">Both</span>
+    return (
+      <span className="chip bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+        {t(lang, ui.positions.both)}
+      </span>
+    )
   return side === 'up' ? (
-    <span className="chip bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">▲ Up</span>
+    <span className="chip bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">
+      {t(lang, ui.betSideButton('up'))}
+    </span>
   ) : (
-    <span className="chip bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-200">▼ Down</span>
+    <span className="chip bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-200">
+      {t(lang, ui.betSideButton('down'))}
+    </span>
   )
 }
 
@@ -73,6 +83,7 @@ export function PositionsPanel({
   isLoading: boolean
   onClaimed: () => void
 }) {
+  const lang = useLang()
   const { isConnected } = useAccount()
   const { writeContractAsync, run, busyKey } = useTxRunner()
   // The pre-send re-read is a round trip of its own; the button must not invite a second press
@@ -85,10 +96,12 @@ export function PositionsPanel({
   // part of the history is still unsearched.
   const plan = claimPlan(collectableEpochs)
   const label = claimAllLabel({ batch: plan.batch.length, collectable: collectableEpochs.length, complete: !incomplete })
+  const notice = olderRoundsNotice(olderUnscanned)
 
   // `claim` reverts if ANY epoch in the array is not collectable, so only ever send these.
-  async function claim(candidates: readonly bigint[], key: string, title: string) {
+  async function claim(candidates: readonly bigint[], key: string, name: Text) {
     if (candidates.length === 0) return
+    const title = t(lang, name)
 
     // The cached probes are minutes old and cannot see this wallet claiming somewhere else — in
     // another tab, on a phone. One already-claimed epoch reverts the whole array with
@@ -101,8 +114,8 @@ export function PositionsPanel({
     } catch (err) {
       pushToast({
         kind: 'error',
-        title: `${title} failed`,
-        body: `Could not check which of these rounds are still collectable, so nothing was sent. ${humanizeError(err)}`,
+        title: t(lang, ui.txFailed(title)),
+        body: `${t(lang, ui.positions.revalidateFailed)} ${humanizeError(err, lang)}`,
       })
       return
     } finally {
@@ -118,15 +131,15 @@ export function PositionsPanel({
       if (fresh.unread > 0) {
         pushToast({
           kind: 'error',
-          title: `${title} failed`,
-          body: 'Could not check which of these rounds are still collectable, so nothing was sent. Your stake stays on chain and stays claimable — try again in a moment.',
+          title: t(lang, ui.txFailed(title)),
+          body: t(lang, ui.positions.revalidateUnread),
         })
         return
       }
       pushToast({
         kind: 'info',
-        title: 'Nothing left to collect here',
-        body: 'These rounds have already been collected. Your positions are being refreshed.',
+        title: t(lang, ui.positions.nothingLeftTitle),
+        body: t(lang, ui.positions.nothingLeftBody),
       })
       onClaimed()
       return
@@ -134,7 +147,7 @@ export function PositionsPanel({
 
     await run(
       key,
-      title,
+      name,
       () =>
         writeContractAsync({
           chainId: activeChain.id,
@@ -155,91 +168,96 @@ export function PositionsPanel({
   }
 
   return (
-    <section className="card" aria-label="Your positions">
+    <section className="card" aria-label={t(lang, ui.positions.heading)}>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-slate-200 px-5 py-3 dark:border-slate-800">
-        <h2 className="text-base font-bold">Your positions</h2>
+        <h2 className="text-base font-bold">{t(lang, ui.positions.heading)}</h2>
         {collectableEpochs.length > 0 ? (
           <span className="chip bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">
-            {formatAmountWithSymbol(collectableTotal, token.decimals, token.symbol)} to collect
+            {t(lang, ui.toCollect(formatAmountWithSymbol(collectableTotal, token.decimals, token.symbol)))}
           </span>
         ) : null}
         <button
           type="button"
           className="btn-primary ml-auto !py-2 text-xs"
           disabled={plan.batch.length === 0 || busy !== null}
-          onClick={() => void claim(plan.batch, 'claim-all', 'Claim all')}
+          onClick={() => void claim(plan.batch, 'claim-all', ui.positions.claimAllTx)}
           title={
             plan.batch.length === 0
-              ? 'Nothing collectable has been found yet'
-              : plan.remaining > 0
-                ? `Collecting ${plan.batch.length} of the ${collectableEpochs.length} collectable rounds found — one transaction can only carry so many. Press again for the remaining ${plan.remaining}.`
-                : incomplete
-                  ? `Collect the ${plan.batch.length} collectable round${plan.batch.length === 1 ? '' : 's'} found so far — part of your history has not been searched yet, so there may be more`
-                  : `Collect all ${plan.batch.length} collectable round${plan.batch.length === 1 ? '' : 's'}, including any older than the rows shown below`
+              ? t(lang, ui.positions.nothingFoundTitle)
+              : t(
+                  lang,
+                  ui.claimAllTitle({
+                    batch: plan.batch.length,
+                    collectable: collectableEpochs.length,
+                    remaining: plan.remaining,
+                    complete: !incomplete,
+                  }),
+                )
           }
         >
-          {busyKey === 'claim-all' ? 'Claiming…' : preparing === 'claim-all' ? 'Checking…' : label}
+          {busyKey === 'claim-all'
+            ? t(lang, ui.positions.claiming)
+            : preparing === 'claim-all'
+              ? t(lang, ui.positions.checking)
+              : t(lang, label)}
         </button>
       </div>
 
       <div className="p-5">
         {!isConnected ? (
-          <p className="text-sm text-slate-600 dark:text-slate-300">Connect your wallet to see your positions.</p>
+          <p className="text-sm text-slate-600 dark:text-slate-300">{t(lang, ui.positions.connect)}</p>
         ) : isLoading ? (
           <SkeletonRows rows={3} />
         ) : positions.length === 0 ? (
-          <p className="text-sm text-slate-600 dark:text-slate-300">
-            No positions in this market yet. Place a bet on the round above and it will show up here.
-          </p>
+          <p className="text-sm text-slate-600 dark:text-slate-300">{t(lang, ui.positions.empty)}</p>
         ) : (
           <div className="-mx-5 overflow-x-auto px-5">
             <table className="w-full min-w-[560px] text-sm">
               <caption className="sr-only">
-                {positions.length} of your {total.toString()} rounds in this market, newest first
+                {t(lang, ui.positionsCaption(positions.length, total.toString()))}
               </caption>
               <thead>
                 <tr className="border-b border-slate-200 text-left dark:border-slate-800">
                   <th scope="col" className="label py-2 pr-3 font-medium">
-                    Round
+                    {t(lang, ui.positions.colRound)}
                   </th>
                   <th scope="col" className="label py-2 pr-3 font-medium">
-                    Side
+                    {t(lang, ui.positions.colSide)}
                   </th>
                   <th scope="col" className="label py-2 pr-3 text-right font-medium">
-                    Stake
+                    {t(lang, ui.positions.colStake)}
                   </th>
                   <th scope="col" className="label py-2 pr-3 font-medium">
-                    Result
+                    {t(lang, ui.positions.colResult)}
                   </th>
                   <th scope="col" className="label py-2 pr-3 text-right font-medium">
-                    Payout
+                    {t(lang, ui.positions.colPayout)}
                   </th>
                   <th scope="col" className="label py-2 text-right font-medium">
-                    <span className="sr-only">Collect</span>
+                    <span className="sr-only">{t(lang, ui.positions.colCollect)}</span>
                   </th>
                 </tr>
               </thead>
               <tbody>
                 {positions.map((p) => {
                   const stake = p.bet.upAmount + p.bet.downAmount
-                  const chip = STATUS_CHIP[p.status]
                   const key = `claim-${p.epoch}`
                   return (
                     <tr key={p.epoch.toString()} className="border-b border-slate-100 last:border-0 dark:border-slate-800/60">
                       <td className="py-2.5 pr-3">
-                        <span className="num font-semibold">#{p.epoch.toString()}</span>
+                        <span className="num font-semibold">{ui.roundNo(p.epoch, lang)}</span>
                         <span className="block text-[11px] text-slate-500 dark:text-slate-400">
-                          {formatDateTime(p.round?.lockTs)}
+                          {formatDateTime(p.round?.lockTs, lang)}
                         </span>
                       </td>
                       <td className="py-2.5 pr-3">
-                        <SideBadge position={p} />
+                        <SideBadge position={p} lang={lang} />
                       </td>
                       <td className="num py-2.5 pr-3 text-right font-semibold">
                         {formatAmountWithSymbol(stake, token.decimals, token.symbol)}
                       </td>
                       <td className="py-2.5 pr-3">
-                        <span className={`chip ${chip.className}`}>{chip.text}</span>
+                        <span className={`chip ${STATUS_CLASS[p.status]}`}>{t(lang, ui.positionStatus[p.status])}</span>
                       </td>
                       <td className="num py-2.5 pr-3 text-right font-semibold">
                         {/*
@@ -250,11 +268,10 @@ export function PositionsPanel({
                         {p.status === 'lost' || p.status === 'pending' ? (
                           <span
                             className="text-slate-400 dark:text-slate-500"
-                            title={
-                              p.status === 'pending'
-                                ? 'Not decided yet — this round has not resolved.'
-                                : 'The other side won this round, so there is nothing to collect.'
-                            }
+                            title={t(
+                              lang,
+                              p.status === 'pending' ? ui.positions.payoutPending : ui.positions.payoutLost,
+                            )}
                           >
                             —
                           </span>
@@ -268,9 +285,9 @@ export function PositionsPanel({
                             type="button"
                             className="btn-secondary !px-3 !py-1.5 text-xs"
                             disabled={busy !== null}
-                            onClick={() => void claim([p.epoch], key, `Claim round #${p.epoch}`)}
+                            onClick={() => void claim([p.epoch], key, ui.claimRoundTx(p.epoch, lang))}
                           >
-                            {busy === key ? '…' : 'Collect'}
+                            {busy === key ? '…' : t(lang, ui.positions.collect)}
                           </button>
                         ) : null}
                       </td>
@@ -285,11 +302,11 @@ export function PositionsPanel({
         {isConnected && positions.length > 0 ? (
           <div className="mt-4 flex flex-wrap items-center gap-3">
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Showing {positions.length} of {total.toString()} round{total === 1n ? '' : 's'}.
+              {t(lang, ui.showingRounds(positions.length, total))}
             </p>
             {hasMore ? (
               <button type="button" className="btn-secondary !px-3 !py-1.5 text-xs" onClick={loadMore}>
-                Load older rounds
+                {t(lang, ui.positions.loadOlder)}
               </button>
             ) : null}
           </div>
@@ -298,43 +315,33 @@ export function PositionsPanel({
         {isConnected && olderUnscanned > 0n ? (
           <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 dark:border-amber-500/40 dark:bg-amber-950/30">
             <p className="text-[11px] leading-relaxed text-amber-800 dark:text-amber-300">
-              <strong>{olderUnscanned.toString()}</strong> {olderRoundsPhrase(olderUnscanned)} not been searched for
-              unclaimed winnings yet, so nothing from them is in the amount above. Whatever they hold stays on chain and
-              stays claimable — keep searching until this notice is gone.
+              {t(lang, notice.before)}
+              <strong>{olderUnscanned.toString()}</strong>
+              {t(lang, notice.after)}
             </p>
             <button type="button" className="btn-secondary ml-auto !px-3 !py-1.5 text-xs" onClick={scanMore}>
-              Search older rounds
+              {t(lang, ui.positions.searchOlder)}
             </button>
           </div>
         ) : isConnected && incomplete ? (
           <p className="mt-3 text-[11px] leading-relaxed text-amber-700 dark:text-amber-400">
-            Part of your history could not be read just now, so a collectable round may be missing from the count above.
-            Reload before assuming there is nothing left to collect — your stake stays on chain and stays claimable
-            either way.
+            {t(lang, ui.positions.incompleteNote)}
           </p>
         ) : null}
 
         <p className="mt-4 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
           {olderUnscanned > 0n ? (
-            <>
-              The button above collects the rounds found <strong>so far</strong> — not your whole history, because part
-              of it has not been searched yet.
-            </>
+            t(lang, ui.positions.footerUnscanned)
           ) : incomplete ? (
-            <>
-              The button above collects the rounds found <strong>so far</strong> — part of your history could not be
-              read just now, so there may be more.
-            </>
+            t(lang, ui.positions.footerIncomplete)
           ) : (
             <>
-              <strong>Claim all</strong> covers every collectable round in this market, including ones older than the
-              rows shown here.
+              <strong>{t(lang, ui.positions.footerCompleteBold)}</strong>
+              {t(lang, ui.positions.footerComplete)}
             </>
-          )}{' '}
-          When there are more than one transaction can carry, the button says exactly how many it is sending, and each
-          batch is re-checked on chain the moment you press it. Collecting is a pull payment: nothing is ever pushed to
-          you during settlement, and claiming is never pausable. A refunded round returns your full stake with no fee
-          taken.
+          )}
+          {t(lang, ui.join.sentence)}
+          {t(lang, ui.positions.footerTail)}
         </p>
       </div>
     </section>

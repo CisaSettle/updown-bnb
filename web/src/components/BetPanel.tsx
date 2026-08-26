@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { erc20Abi, parseEther } from 'viem'
 import { upDownMarketERC20Abi, upDownMarketNativeAbi } from '../abi'
-import { activeChain } from '../config/chains'
+import * as ui from '../content/ui'
+import { activeChain, chainLabel } from '../config/chains'
 import type { Address } from '../config/deployment'
 import { useActiveChain } from '../hooks/useActiveChain'
 import type { MarketConfig } from '../hooks/useMarketConfig'
@@ -9,6 +10,7 @@ import type { SettlementToken } from '../hooks/useSettlementToken'
 import { useTxRunner } from '../hooks/useTxRunner'
 import { allowanceFor, validateBetInput, type AllowanceMode, type Side } from '../lib/bet'
 import { formatAmount, formatAmountWithSymbol, formatMultiple, toInputValue } from '../lib/format'
+import { t, useLang, type Text } from '../lib/i18n'
 import { quotePayout, roundPhase, type Round } from '../lib/market'
 import { pushToast } from '../lib/toast'
 
@@ -37,6 +39,7 @@ export function BetPanel({
   now: number
   onDone: () => void
 }) {
+  const lang = useLang()
   const { isConnected, wrongChain, isSwitching, switchToActiveChain } = useActiveChain()
   const { writeContractAsync, run, busyKey } = useTxRunner()
 
@@ -79,7 +82,7 @@ export function BetPanel({
         inLockGrace,
         isConnected,
         wrongChain,
-        chainName: activeChain.name,
+        chainName: chainLabel(lang),
         tokenReady: token.ready,
         isNative: token.isNative,
         decimals: token.decimals,
@@ -100,6 +103,7 @@ export function BetPanel({
       inLockGrace,
       isConnected,
       wrongChain,
+      lang,
       token.ready,
       token.isNative,
       token.decimals,
@@ -125,10 +129,7 @@ export function BetPanel({
 
   const needsApproval = !token.isNative && amount !== null && amount > 0n && token.allowance < amount
 
-  const hint =
-    validation.ok && quote?.refundOnly
-      ? 'You are first in this round — if nobody takes the other side, you are refunded in full.'
-      : undefined
+  const hint: Text | undefined = validation.ok && quote?.refundOnly ? ui.bet.firstIn : undefined
 
   const busy = busyKey !== null
 
@@ -137,7 +138,7 @@ export function BetPanel({
     const allowanceTarget = allowanceFor(allowanceMode, amount)
     await run(
       'approve',
-      `Approve ${token.symbol}`,
+      ui.approveTitle(token.symbol),
       () =>
         writeContractAsync({
           chainId: activeChain.id,
@@ -154,11 +155,10 @@ export function BetPanel({
     if (!validation.ok || amount === null) return
     if (round === undefined) return
     const epoch = config.currentEpoch
-    const label = side === 'up' ? 'Bet Up' : 'Bet Down'
 
     const ok = await run(
       'bet',
-      label,
+      ui.betTxTitle(side),
       () =>
         token.isNative
           ? writeContractAsync({
@@ -185,22 +185,23 @@ export function BetPanel({
     if (ok) {
       pushToast({
         kind: 'info',
-        title: 'Position open',
-        body: 'Odds keep moving until this round locks. Your payout is settled from the final book.',
+        title: t(lang, ui.bet.openedTitle),
+        body: t(lang, ui.bet.openedBody),
       })
     }
   }
 
-  const percentButtons: Array<{ label: string; value: bigint }> = [
-    { label: '25%', value: quickMax / 4n },
-    { label: '50%', value: quickMax / 2n },
-    { label: '75%', value: (quickMax * 3n) / 4n },
-    { label: 'Max', value: quickMax },
+  // The three percentages are numerals in both languages; only "Max" is a word.
+  const percentButtons: Array<{ key: string; label: string; value: bigint }> = [
+    { key: '25', label: '25%', value: quickMax / 4n },
+    { key: '50', label: '50%', value: quickMax / 2n },
+    { key: '75', label: '75%', value: (quickMax * 3n) / 4n },
+    { key: 'max', label: t(lang, ui.bet.max), value: quickMax },
   ]
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Bet direction">
+      <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label={t(lang, ui.bet.direction)}>
         {(['up', 'down'] as const).map((s) => {
           const active = side === s
           const isUp = s === 'up'
@@ -219,7 +220,7 @@ export function BetPanel({
                   : 'border-slate-200 bg-white text-slate-700 hover:border-slate-400 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-600'
               }`}
             >
-              {isUp ? '▲ Up' : '▼ Down'}
+              {t(lang, ui.betSideButton(s))}
             </button>
           )
         })}
@@ -228,10 +229,10 @@ export function BetPanel({
       <div>
         <div className="flex items-baseline justify-between">
           <label htmlFor="bet-amount" className="label">
-            Amount
+            {t(lang, ui.bet.amount)}
           </label>
           <span className="text-[11px] text-slate-500 dark:text-slate-400">
-            Balance:{' '}
+            {t(lang, ui.bet.balance)}{' '}
             <span className="num font-semibold">
               {token.isLoading ? '…' : formatAmountWithSymbol(token.balance, token.decimals, token.symbol)}
             </span>
@@ -256,7 +257,7 @@ export function BetPanel({
         <div className="mt-2 grid grid-cols-4 gap-1.5">
           {percentButtons.map((p) => (
             <button
-              key={p.label}
+              key={p.key}
               type="button"
               className="btn-secondary !px-2 !py-1.5 text-xs"
               disabled={!bettingOpen || quickMax === 0n}
@@ -268,26 +269,43 @@ export function BetPanel({
         </div>
 
         <p id="bet-limits" className="mt-2 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-          Min <span className="num">{formatAmount(config.minBet, token.decimals)}</span> · max{' '}
-          <span className="num">{formatAmount(config.maxBet, token.decimals)}</span> per bet · side cap{' '}
-          <span className="num">{formatAmount(config.maxSide, token.decimals, { compact: true })}</span> {token.symbol} (
-          <span className="num">{formatAmount(sideRemaining, token.decimals, { compact: true })}</span> left on {side})
+          {ui
+            .betLimits({
+              min: formatAmount(config.minBet, token.decimals),
+              max: formatAmount(config.maxBet, token.decimals),
+              sideCap: formatAmount(config.maxSide, token.decimals, { compact: true }),
+              symbol: token.symbol,
+              left: formatAmount(sideRemaining, token.decimals, { compact: true }),
+              side,
+            })
+            [lang].map((seg, i) =>
+              typeof seg === 'string' ? (
+                <Fragment key={i}>{seg}</Fragment>
+              ) : (
+                <span key={i} className="num">
+                  {seg.num}
+                </span>
+              ),
+            )}
         </p>
       </div>
 
       {quote && amount ? (
         <div className="card-muted p-3">
           <div className="flex items-baseline justify-between">
-            <span className="label">If {side} wins</span>
+            <span className="label">{t(lang, ui.ifSideWins(side))}</span>
             <span className="num text-lg font-black text-slate-900 dark:text-slate-100">
               {formatAmountWithSymbol(quote.payout, token.decimals, token.symbol)}
             </span>
           </div>
           <div className="mt-1 flex items-baseline justify-between text-xs text-slate-600 dark:text-slate-300">
             <span>
-              {quote.refundOnly
-                ? 'no counterparty yet'
-                : `profit ${formatAmountWithSymbol(quote.profit, token.decimals, token.symbol)}`}
+              {t(
+                lang,
+                quote.refundOnly
+                  ? ui.bet.noCounterparty
+                  : ui.profitLine(formatAmountWithSymbol(quote.profit, token.decimals, token.symbol)),
+              )}
             </span>
             <span className="num font-semibold">
               {quote.refundOnly
@@ -296,23 +314,28 @@ export function BetPanel({
             </span>
           </div>
           <p className="mt-2 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-            Quoted at the book as it stands right now, including your own stake.{' '}
-            <strong>Odds keep moving until the round locks</strong> — the payout is computed from the final book.
+            {t(lang, ui.bet.quoteNoteBefore)}
+            <strong>{t(lang, ui.bet.quoteNoteBold)}</strong>
+            {t(lang, ui.bet.quoteNoteAfter)}
           </p>
         </div>
       ) : null}
 
       {!wrongChain && needsApproval && validation.ok && amount !== null ? (
         <div className="card-muted p-3">
-          <p className="label">Approval</p>
-          <div className="mt-1.5 grid grid-cols-2 gap-2" role="radiogroup" aria-label="Approval size">
+          <p className="label">{t(lang, ui.bet.approval)}</p>
+          <div className="mt-1.5 grid grid-cols-2 gap-2" role="radiogroup" aria-label={t(lang, ui.bet.approvalSize)}>
             {[
               {
                 mode: 'exact' as const,
-                title: 'This bet only',
+                title: t(lang, ui.bet.approvalExact),
                 body: formatAmountWithSymbol(amount, token.decimals, token.symbol),
               },
-              { mode: 'unlimited' as const, title: 'Unlimited', body: 'no approval again' },
+              {
+                mode: 'unlimited' as const,
+                title: t(lang, ui.bet.approvalUnlimited),
+                body: t(lang, ui.bet.approvalUnlimitedBody),
+              },
             ].map((opt) => {
               const active = allowanceMode === opt.mode
               return (
@@ -336,9 +359,12 @@ export function BetPanel({
             })}
           </div>
           <p className="mt-2 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-            {allowanceMode === 'exact'
-              ? `Approves exactly this stake, so the market can never move more than ${formatAmountWithSymbol(amount, token.decimals, token.symbol)} — you approve again for the next bet.`
-              : `The market can move any amount of your ${token.symbol} until you revoke it, and you never approve again. Revoke by approving 0 in your wallet or any allowance manager.`}
+            {t(
+              lang,
+              allowanceMode === 'exact'
+                ? ui.approvalNote('exact', formatAmountWithSymbol(amount, token.decimals, token.symbol))
+                : ui.approvalNote('unlimited', token.symbol),
+            )}
           </p>
         </div>
       ) : null}
@@ -350,11 +376,11 @@ export function BetPanel({
           disabled={isSwitching}
           onClick={switchToActiveChain}
         >
-          {isSwitching ? 'Switching…' : `Switch to ${activeChain.name}`}
+          {t(lang, isSwitching ? ui.connect.switching : ui.switchNetwork(lang))}
         </button>
       ) : needsApproval && validation.ok ? (
         <button type="button" className="btn-primary w-full" disabled={busy} onClick={() => void onApprove()}>
-          {busyKey === 'approve' ? 'Approving…' : `Approve ${token.symbol}`}
+          {t(lang, busyKey === 'approve' ? ui.bet.approving : ui.approveTitle(token.symbol))}
         </button>
       ) : (
         <button
@@ -363,20 +389,18 @@ export function BetPanel({
           disabled={!validation.ok || busy}
           onClick={() => void onBet()}
         >
-          {busyKey === 'bet'
-            ? 'Placing bet…'
-            : side === 'up'
-              ? '▲ Bet Up'
-              : '▼ Bet Down'}
+          {t(lang, busyKey === 'bet' ? ui.bet.placing : side === 'up' ? ui.bet.betUp : ui.bet.betDown)}
         </button>
       )}
 
       {!validation.ok && validation.reason ? (
         <p role="status" className="text-xs font-medium text-amber-700 dark:text-amber-400">
-          {validation.reason}
+          {t(lang, validation.reason)}
         </p>
       ) : null}
-      {validation.ok && hint ? <p className="text-xs text-slate-500 dark:text-slate-400">{hint}</p> : null}
+      {validation.ok && hint ? (
+        <p className="text-xs text-slate-500 dark:text-slate-400">{t(lang, hint)}</p>
+      ) : null}
     </div>
   )
 }

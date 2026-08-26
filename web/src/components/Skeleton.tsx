@@ -1,3 +1,6 @@
+import * as ui from '../content/ui'
+import { t, useLang } from '../lib/i18n'
+
 interface SkeletonProps {
   className?: string
 }
@@ -7,8 +10,9 @@ export function Skeleton({ className = 'h-4 w-24' }: SkeletonProps) {
 }
 
 export function SkeletonCard() {
+  const lang = useLang()
   return (
-    <div className="card space-y-4 p-5" aria-busy="true" aria-label="Loading round">
+    <div className="card space-y-4 p-5" aria-busy="true" aria-label={t(lang, ui.app.loadingRound)}>
       <div className="flex items-center justify-between">
         <Skeleton className="h-5 w-32" />
         <Skeleton className="h-5 w-20" />

@@ -1,4 +1,5 @@
 import { useId, useState } from 'react'
+import { join } from '../content/ui'
 import { useRoundProof, type RoundProofState } from '../hooks/useRoundProof'
 import { explorerUrl, rpcUrl } from '../config/chains'
 import type { Address } from '../config/deployment'
@@ -31,10 +32,13 @@ const CHECK_CLASS: Record<CheckStatus, string> = {
   unknown: 'text-amber-600 dark:text-amber-400',
 }
 
+// The tick or cross is `aria-hidden`, so this label is the whole verdict for a screen reader. It
+// carries its own colon: 中文 punctuates with the full-width one, and a Latin `:` in an otherwise
+// Chinese string is the last untranslated character on the page.
 const CHECK_LABEL: Record<CheckStatus, Text> = {
-  pass: { en: 'Passed', zh: '通过' },
-  fail: { en: 'Failed', zh: '未通过' },
-  unknown: { en: 'Not checked', zh: '未核验' },
+  pass: { en: 'Passed: ', zh: '通过：' },
+  fail: { en: 'Failed: ', zh: '未通过：' },
+  unknown: { en: 'Not checked: ', zh: '未核验：' },
 }
 
 /**
@@ -140,7 +144,7 @@ function BoundaryCard({
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <h4 className="text-sm font-bold">{t(lang, BOUNDARY_TITLE[report.kind])}</h4>
         <span className="num text-[11px] text-slate-500 dark:text-slate-400">
-          {t(lang, { en: 'boundary', zh: '边界时刻' })} {formatTime(report.boundaryTs)}
+          {t(lang, { en: 'boundary', zh: '边界时刻' })} {formatTime(report.boundaryTs, lang)}
         </span>
       </div>
 
@@ -189,7 +193,7 @@ function BoundaryCard({
             <span aria-hidden="true" className={`num mt-px shrink-0 text-sm font-bold ${CHECK_CLASS[check.status]}`}>
               {CHECK_MARK[check.status]}
             </span>
-            <span className="sr-only">{t(lang, CHECK_LABEL[check.status])}: </span>
+            <span className="sr-only">{t(lang, CHECK_LABEL[check.status])}</span>
             <span className="min-w-0 text-xs leading-relaxed">
               <span className="font-medium text-slate-800 dark:text-slate-100">{t(lang, check.title)}</span>
               <span className="block text-slate-600 dark:text-slate-300">{t(lang, check.detail)}</span>
@@ -204,7 +208,8 @@ function BoundaryCard({
             {t(lang, {
               en: 'Redo it without this page:',
               zh: '不依赖本页面，自己复查：',
-            })}{' '}
+            })}
+            {t(lang, join.sentence)}
             <a className="link num" href={`${explorerUrl}/address/${feed}#readcontract`} target="_blank" rel="noreferrer">
               {t(lang, { en: 'feed', zh: '喂价合约' })} {shortAddress(feed)}
             </a>{' '}
@@ -271,7 +276,7 @@ export function RoundProofView({
         </span>
         {state.checkedAt !== undefined && state.status !== 'loading' ? (
           <span className="num text-[11px] text-slate-500 dark:text-slate-400">
-            {t(lang, { en: 'read at', zh: '读取时间' })} {formatTime(Math.floor(state.checkedAt / 1000))}
+            {t(lang, { en: 'read at', zh: '读取时间' })} {formatTime(Math.floor(state.checkedAt / 1000), lang)}
           </span>
         ) : null}
         {state.isFetching && state.status !== 'loading' ? (

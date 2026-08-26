@@ -11,7 +11,7 @@ import {
   collectableSelection,
   dropClaimed,
   epochPages,
-  olderRoundsPhrase,
+  olderRoundsNotice,
   orderNewestFirst,
   scanDepth,
   splitLoaded,
@@ -391,8 +391,9 @@ describe('a history longer than one scan window still gives up all of its money'
 
     // …so the button may not claim to have covered everything. This is the copy the finding is
     // about: a user reading "Claim all" here would believe #3 does not exist.
-    expect(first.label).toBe('Claim 1 found')
-    expect(first.label).not.toContain('all')
+    expect(first.label.en).toBe('Claim 1 found')
+    expect(first.label.en).not.toContain('all')
+    expect(first.label.zh).not.toContain('全部')
   })
 
   it('reaches the oldest unclaimed win by searching further, and only then says "all"', () => {
@@ -410,7 +411,8 @@ describe('a history longer than one scan window still gives up all of its money'
     expect(state.selection.total).toBe(200n)
     expect(claimPlan(state.selection.epochs).batch).toEqual([130n, 3n])
     expect(state.incomplete).toBe(false)
-    expect(state.label).toBe('Claim all (2)')
+    expect(state.label.en).toBe('Claim all (2)')
+    expect(state.label.zh).toBe('全部领取（2）')
   })
 
   it('grows the window monotonically, with no epoch skipped or double-counted', () => {
@@ -436,8 +438,8 @@ describe('a history longer than one scan window still gives up all of its money'
 
 describe('claimAllLabel — the button may never overstate what it covers', () => {
   it('says "all" only when the whole history has been searched', () => {
-    expect(claimAllLabel({ batch: 2, collectable: 2, complete: true })).toBe('Claim all (2)')
-    expect(claimAllLabel({ batch: 0, collectable: 0, complete: true })).toBe('Claim all')
+    expect(claimAllLabel({ batch: 2, collectable: 2, complete: true }).en).toBe('Claim all (2)')
+    expect(claimAllLabel({ batch: 0, collectable: 0, complete: true }).en).toBe('Claim all')
   })
 
   it('never says "all" while any epoch is unsearched or unread', () => {
@@ -446,18 +448,38 @@ describe('claimAllLabel — the button may never overstate what it covers', () =
       { batch: 1, collectable: 1, complete: false },
       { batch: 0, collectable: 0, complete: false },
     ]) {
-      expect(claimAllLabel(args)).not.toContain('all')
+      expect(claimAllLabel(args).en).not.toContain('all')
     }
-    expect(claimAllLabel({ batch: 2, collectable: 2, complete: false })).toBe('Claim 2 found')
-    expect(claimAllLabel({ batch: 0, collectable: 0, complete: false })).toBe('Nothing found yet')
+    expect(claimAllLabel({ batch: 2, collectable: 2, complete: false }).en).toBe('Claim 2 found')
+    expect(claimAllLabel({ batch: 0, collectable: 0, complete: false }).en).toBe('Nothing found yet')
+  })
+
+  it('holds 全部 to exactly the same rule as "all"', () => {
+    // 全部 is the same promise in 中文, so it may only appear where the search is finished — a
+    // reader who trusts it on a partial scan reads a claimed-out balance off a partial count.
+    expect(claimAllLabel({ batch: 2, collectable: 2, complete: true }).zh).toBe('全部领取（2）')
+    expect(claimAllLabel({ batch: 0, collectable: 0, complete: true }).zh).toBe('全部领取')
+    for (const args of [
+      { batch: 2, collectable: 2, complete: false },
+      { batch: 1, collectable: 1, complete: false },
+      { batch: 0, collectable: 0, complete: false },
+      { batch: MAX_CLAIM_BATCH, collectable: 57, complete: true },
+    ]) {
+      expect(claimAllLabel(args).zh).not.toContain('全部')
+    }
+    expect(claimAllLabel({ batch: 2, collectable: 2, complete: false }).zh).toBe('领取已找到的 2 个')
+    expect(claimAllLabel({ batch: 0, collectable: 0, complete: false }).zh).toBe('暂未找到')
   })
 
   it('counts the batch, not the backlog, when one transaction cannot carry them all', () => {
-    expect(claimAllLabel({ batch: MAX_CLAIM_BATCH, collectable: 57, complete: true })).toBe(
+    expect(claimAllLabel({ batch: MAX_CLAIM_BATCH, collectable: 57, complete: true }).en).toBe(
       `Claim ${MAX_CLAIM_BATCH} of 57`,
     )
-    expect(claimAllLabel({ batch: MAX_CLAIM_BATCH, collectable: 57, complete: false })).toBe(
+    expect(claimAllLabel({ batch: MAX_CLAIM_BATCH, collectable: 57, complete: false }).en).toBe(
       `Claim ${MAX_CLAIM_BATCH} of 57`,
+    )
+    expect(claimAllLabel({ batch: MAX_CLAIM_BATCH, collectable: 57, complete: true }).zh).toBe(
+      `领取 ${MAX_CLAIM_BATCH}/57`,
     )
   })
 })
@@ -536,12 +558,26 @@ describe('unreadClaims — "we could not ask" is not "already collected"', () =>
   })
 })
 
-describe('olderRoundsPhrase — the unsearched-history notice counts in agreement', () => {
-  it('agrees with its own number', () => {
-    expect(`1 ${olderRoundsPhrase(1n)} not been searched`).toBe('1 older round has not been searched')
-    expect(`2 ${olderRoundsPhrase(2n)} not been searched`).toBe('2 older rounds have not been searched')
+describe('olderRoundsNotice — the unsearched-history notice counts in agreement', () => {
+  /** The sentence as it reaches the screen: prose, the bold number, prose. */
+  const sentence = (older: bigint, lang: 'en' | 'zh') => {
+    const n = olderRoundsNotice(older)
+    return `${n.before[lang]}${older.toString()}${n.after[lang]}`
+  }
+
+  it('agrees with its own number in English', () => {
+    expect(sentence(1n, 'en')).toContain('1 older round has not been searched')
+    expect(sentence(2n, 'en')).toContain('2 older rounds have not been searched')
     // 5,001 positions with a 5,000-epoch scan step leaves exactly one — the singular is reachable.
-    expect(olderRoundsPhrase(epochPages(BigInt(EPOCH_SCAN_STEP) + 1n).older)).toBe('older round has')
-    expect(olderRoundsPhrase(15_000n)).toBe('older rounds have')
+    expect(sentence(epochPages(BigInt(EPOCH_SCAN_STEP) + 1n).older, 'en')).toContain('1 older round has')
+    expect(sentence(15_000n, 'en')).toContain('15000 older rounds have')
+  })
+
+  it('counts with a measure word in 中文, which does not inflect', () => {
+    expect(sentence(1n, 'zh')).toContain('还有 1 个更早的轮次')
+    expect(sentence(2n, 'zh')).toContain('还有 2 个更早的轮次')
+    // The promise the notice exists to make: the money is still there and still collectable.
+    expect(sentence(2n, 'zh')).toContain('一直在链上')
+    expect(sentence(2n, 'zh')).toContain('一直可以领')
   })
 })

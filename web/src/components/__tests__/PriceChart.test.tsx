@@ -1,11 +1,16 @@
-import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { PriceChart } from '../PriceChart'
 import { chartFrame } from '../../lib/chart'
+import type { Lang } from '../../lib/i18n'
 import type { Round } from '../../lib/market'
 import type { HistoryLimit } from '../../lib/oracleHistory'
 import type { OraclePrint } from '../../lib/settlement'
-import { round, START } from './fixtures'
+import { renderIn, round, START } from './fixtures'
+
+const FEED = {
+  en: 'plotted from the market’s own relay feed, the series it settles on — not an exchange price',
+  zh: '画的是这个市场自己的中继喂价，也就是它结算所依据的那条序列——不是交易所价格',
+}
 
 const INTERVAL = 300
 const STRIKE = 84_000n * 100_000_000n
@@ -34,11 +39,13 @@ function render(args: {
   prints?: OraclePrint[]
   now?: number
   limit?: HistoryLimit
+  lang?: Lang
 }) {
   const now = args.now ?? START + 120
   const frame = chartFrame({ live: args.live, bettable: args.bettable, now, interval: INTERVAL })
   if (!frame) throw new Error('no frame')
-  return renderToStaticMarkup(
+  return renderIn(
+    args.lang ?? 'en',
     <PriceChart
       frame={frame}
       prints={args.prints ?? []}
@@ -46,7 +53,7 @@ function render(args: {
       now={now}
       interval={INTERVAL}
       limit={args.limit ?? 'feed-start'}
-      feedName="the market’s own relay feed"
+      feedName={FEED}
     />,
   )
 }
@@ -230,5 +237,51 @@ describe('PriceChart — candles only where the data supports them', () => {
     const half = densePrints().slice(0, 20)
     const html = render({ live: liveRound(), prints: half })
     expect(html).toContain('left empty rather than filled with a made-up candle')
+  })
+})
+
+describe('PriceChart in 中文', () => {
+  it('names the two regions and the boundaries on the axis', () => {
+    const html = render({ live: liveRound(), prints: sparsePrints(), lang: 'zh' })
+    expect(html).toContain('▲ 这一侧 UP 赢')
+    expect(html).toContain('▼ 这一侧 DOWN 赢')
+    expect(html).toContain('>行权价<')
+    expect(html).toContain('>已锁定<')
+    expect(html).toContain('>结算<')
+    // Prices and the ticker stay exactly as they are.
+    expect(html).toContain('$84,000.00')
+  })
+
+  it('describes itself to a screen reader without repeating a word', () => {
+    const html = render({ live: liveRound(), prints: sparsePrints(), lang: 'zh' })
+    expect(html).toContain('预言机价格')
+    expect(html).toContain('行权价 $84,000.00')
+    expect(html).not.toContain('price price')
+  })
+
+  it('admits there is no strike yet rather than implying a winner', () => {
+    const html = render({
+      bettable: round({ startTs: BigInt(START - 60), lockTs: BigInt(START + 240), closeTs: BigInt(START + 540) }),
+      prints: sparsePrints(),
+      lang: 'zh',
+    })
+    expect(html).toContain('还没有行权价')
+    expect(html).toContain('谈不上哪一边输赢')
+    expect(html).not.toContain('这一侧 UP 赢')
+  })
+
+  it('says an absent print is absent, not merely stale', () => {
+    const html = render({ live: liveRound(), prints: sparsePrints(), now: START + 200, lang: 'zh' })
+    expect(html).toContain('不是价格滞后，而是压根没有')
+    expect(html).toContain('全额退回')
+    expect(html).toContain('不收手续费')
+    // The budget keeps its own mono span in 中文 too.
+    expect(html).toContain('<span class="num">150 秒</span>')
+  })
+
+  it('ages the latest print in 中文 units', () => {
+    const html = render({ live: liveRound(), prints: sparsePrints(), now: START + 92, lang: 'zh' })
+    expect(html).toContain('1 分 32 秒前')
+    expect(html).not.toContain('1m 32s ago')
   })
 })

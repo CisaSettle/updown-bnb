@@ -1,4 +1,6 @@
+import * as ui from '../content/ui'
 import { formatInterval } from '../lib/format'
+import { t, useLang } from '../lib/i18n'
 import type { Market } from '../hooks/useMarkets'
 import { Skeleton } from './Skeleton'
 
@@ -17,6 +19,8 @@ export function MarketPicker({
   onSelect: (m: Market) => void
   isLoading: boolean
 }) {
+  const lang = useLang()
+
   if (isLoading) {
     return (
       <div className="flex gap-2 overflow-x-auto pb-1">
@@ -30,7 +34,7 @@ export function MarketPicker({
   if (markets.length === 0) {
     return (
       <div className="card-muted p-4 text-sm text-slate-600 dark:text-slate-300">
-        No enabled markets found in the registry.
+        {t(lang, ui.marketPicker.empty)}
       </div>
     )
   }
@@ -39,7 +43,7 @@ export function MarketPicker({
     <div
       className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1"
       role="tablist"
-      aria-label="Markets"
+      aria-label={t(lang, ui.marketPicker.tablist)}
     >
       {markets.map((m) => {
         const active = selected?.address === m.address
@@ -58,7 +62,7 @@ export function MarketPicker({
           >
             <span className="block text-sm font-bold">{m.label}</span>
             <span className={`mt-0.5 block text-xs ${active ? 'opacity-80' : 'text-slate-500 dark:text-slate-400'}`}>
-              {formatInterval(m.interval)} rounds · settles in {assetLabel(m)}
+              {t(lang, ui.marketSubtitle(formatInterval(m.interval, lang), assetLabel(m)))}
             </span>
           </button>
         )

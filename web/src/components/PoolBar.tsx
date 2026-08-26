@@ -1,4 +1,6 @@
+import * as ui from '../content/ui'
 import { formatAmount, sharePercent } from '../lib/format'
+import { t, useLang } from '../lib/i18n'
 
 /**
  * The two pools, and — when there are none — an honest empty state.
@@ -29,6 +31,7 @@ export function PoolBar({
    */
   known?: boolean
 }) {
+  const lang = useLang()
   const total = up + down
   const upPct = sharePercent(up, total)
   const downPct = 100 - upPct
@@ -39,14 +42,14 @@ export function PoolBar({
     <div>
       <div className="flex items-end justify-between gap-3 text-sm">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">Up pool</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">{t(lang, ui.pool.up)}</p>
           <p className="num mt-0.5 font-bold">
             {known ? formatAmount(up, decimals, { maxFrac: 2, compact: true }) : '—'}{' '}
             <span className="text-xs font-medium">{symbol}</span>
           </p>
         </div>
         <div className="text-right">
-          <p className="text-xs font-semibold uppercase tracking-wide text-rose-700 dark:text-rose-400">Down pool</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-rose-700 dark:text-rose-400">{t(lang, ui.pool.down)}</p>
           <p className="num mt-0.5 font-bold">
             {known ? formatAmount(down, decimals, { maxFrac: 2, compact: true }) : '—'}{' '}
             <span className="text-xs font-medium">{symbol}</span>
@@ -59,14 +62,14 @@ export function PoolBar({
       ) : empty ? (
         <div className="mt-2 rounded-full border border-dashed border-slate-300 py-1 text-center dark:border-slate-700">
           <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">
-            {live ? 'Nobody bet on this round' : 'No bets yet — the first one opens the book'}
+            {t(lang, live ? ui.pool.emptyLive : ui.pool.emptyOpen)}
           </span>
         </div>
       ) : (
         <div
           className="mt-2 flex h-3 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800"
           role="img"
-          aria-label={`Up holds ${upPct.toFixed(1)} percent of the book, down holds ${downPct.toFixed(1)} percent`}
+          aria-label={t(lang, ui.poolShareAria(upPct.toFixed(1), downPct.toFixed(1)))}
         >
           <div className="h-full bg-emerald-500 transition-[width] duration-500" style={{ width: `${upPct}%` }} />
           <div className="h-full bg-rose-500 transition-[width] duration-500" style={{ width: `${downPct}%` }} />
@@ -75,21 +78,15 @@ export function PoolBar({
 
       <div className="mt-1.5 flex justify-between text-xs text-slate-500 dark:text-slate-400">
         {!known ? (
-          <span>Reading the book…</span>
+          <span>{t(lang, ui.pool.reading)}</span>
         ) : empty ? (
-          <span className="leading-relaxed">
-            {live
-              ? 'Both pools are empty, so there was nobody to win from: this round is refunded in full, with no fee taken.'
-              : 'Both pools are empty. There is no house and no market maker here — the pools are the other traders, so the book is 0 until somebody bets.'}
-          </span>
+          <span className="leading-relaxed">{t(lang, live ? ui.pool.emptyLiveNote : ui.pool.emptyOpenNote)}</span>
         ) : (
           <>
             <span className="num">{`${upPct.toFixed(1)}%`}</span>
             {oneSided ? (
               <span className="px-2 text-center leading-relaxed">
-                {live
-                  ? 'One-sided: there is nobody to win from, so every stake is refunded in full, no fee taken.'
-                  : 'One side only. If the round locks like this, every stake is refunded in full with no fee.'}
+                {t(lang, live ? ui.pool.oneSidedLive : ui.pool.oneSidedOpen)}
               </span>
             ) : null}
             <span className="num">{`${downPct.toFixed(1)}%`}</span>

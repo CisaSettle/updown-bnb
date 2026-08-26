@@ -1,4 +1,7 @@
+import type { ReactElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import type { SettlementToken } from '../../hooks/useSettlementToken'
+import { DEFAULT_LANG, setLang, type Lang } from '../../lib/i18n'
 import type { Round } from '../../lib/market'
 
 export const ONE = 10n ** 18n
@@ -41,5 +44,22 @@ export function round(overrides: Partial<Round> = {}): Round {
     rewardBaseAmount: 0n,
     rewardPoolAmount: 0n,
     ...overrides,
+  }
+}
+
+/**
+ * Render a component in one language and put the store back.
+ *
+ * The language is a module-scope value settled before the first render — that is what stops a
+ * 中文 reader from seeing a frame of English — so a test picks it the same way the app does,
+ * rather than through a prop the components do not have. Restoring afterwards keeps one test from
+ * deciding what the next one renders in.
+ */
+export function renderIn(lang: Lang, node: ReactElement): string {
+  setLang(lang)
+  try {
+    return renderToStaticMarkup(node)
+  } finally {
+    setLang(DEFAULT_LANG)
   }
 }

@@ -2,7 +2,10 @@ import { useCallback } from 'react'
 import { useAccount, useSwitchChain } from 'wagmi'
 import { activeChain } from '../config/chains'
 import { humanizeError } from '../lib/errors'
+import { t, useLang } from '../lib/i18n'
 import { pushToast } from '../lib/toast'
+
+const SWITCH_FAILED = { en: 'Could not switch network', zh: '没能切换网络' }
 
 /**
  * Whether the connected wallet is actually on the chain this build talks to.
@@ -15,6 +18,7 @@ import { pushToast } from '../lib/toast'
  * `useAccount().chainId` is the connection's real chain id.
  */
 export function useActiveChain() {
+  const lang = useLang()
   const { isConnected, chainId } = useAccount()
   const { switchChain, isPending } = useSwitchChain()
 
@@ -25,10 +29,14 @@ export function useActiveChain() {
       { chainId: activeChain.id },
       {
         onError: (err) =>
-          pushToast({ kind: 'error', title: 'Could not switch network', body: humanizeError(err) }),
+          pushToast({
+            kind: 'error',
+            title: t(lang, SWITCH_FAILED),
+            body: humanizeError(err, lang),
+          }),
       },
     )
-  }, [switchChain])
+  }, [switchChain, lang])
 
   return { isConnected, chainId, wrongChain, isSwitching: isPending, switchToActiveChain }
 }

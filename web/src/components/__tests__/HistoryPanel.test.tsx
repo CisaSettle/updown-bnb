@@ -1,10 +1,15 @@
-import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import type { Lang } from '../../lib/i18n'
 import { HistoryPanel } from '../HistoryPanel'
-import { FEED, MARKET, ONE, START, round, usdt } from './fixtures'
+import { FEED, MARKET, ONE, START, renderIn, round, usdt } from './fixtures'
 
-function render(rows: Array<{ epoch: bigint; round: ReturnType<typeof round> }>, now: number) {
-  return renderToStaticMarkup(
+function render(
+  rows: Array<{ epoch: bigint; round: ReturnType<typeof round> }>,
+  now: number,
+  lang: Lang = 'en',
+) {
+  return renderIn(
+    lang,
     <HistoryPanel
       rows={rows}
       market={MARKET}
@@ -73,5 +78,41 @@ describe('HistoryPanel', () => {
 
   it('says so when there is nothing to show', () => {
     expect(render([], START)).toContain('No completed rounds yet')
+  })
+})
+
+describe('HistoryPanel in 中文', () => {
+  it('calls a refund a refund, never a failure', () => {
+    const html = render([{ epoch: 41n, round: stranded }], START + 600 + 121, 'zh')
+    expect(html).toContain('>全额退回<')
+    // A void is a defined, correct outcome. 失败 / 出错 / 异常 would all read as a bug.
+    expect(html).not.toContain('失败')
+    expect(html).not.toContain('出错')
+    expect(html).not.toContain('异常')
+    expect(html).toContain('1.00x')
+  })
+
+  it('distinguishes a voided round from one whose window simply elapsed', () => {
+    const voided = render([{ epoch: 40n, round: round({ voided: true, settled: true }) }], START + 10_000, 'zh')
+    expect(voided).toContain('在链上被作废了')
+    const elapsed = render([{ epoch: 41n, round: stranded }], START + 600 + 121, 'zh')
+    expect(elapsed).toContain('结算时限')
+    expect(elapsed).toContain('现在都可以全额退回')
+  })
+
+  it('says 未结算 while the keeper can still settle', () => {
+    const html = render([{ epoch: 41n, round: stranded }], START + 600 + 120, 'zh')
+    expect(html).toContain('>未结算<')
+    expect(html).not.toContain('处理中')
+    expect(html).not.toContain('>全额退回<')
+  })
+
+  it('translates the column headers and the legend', () => {
+    const html = render([{ epoch: 41n, round: stranded }], START + 600 + 120, 'zh')
+    for (const header of ['轮次', '行权价', '结算价', '涨跌', '结果', '实付倍数', '核验']) {
+      expect(html).toContain(header)
+    }
+    expect(html).toContain('平局、单边池')
+    expect(html).toContain('第 41 轮')
   })
 })

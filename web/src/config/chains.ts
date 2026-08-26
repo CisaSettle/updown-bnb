@@ -1,4 +1,5 @@
 import { bsc, bscTestnet } from 'wagmi/chains'
+import type { Lang } from '../lib/i18n'
 import { deployment } from './deployment'
 
 export const BSC_MAINNET_RPC = 'https://bsc-dataseed1.bnbchain.org'
@@ -17,6 +18,16 @@ export const explorerUrl =
   (isTestnet ? 'https://testnet.bscscan.com' : 'https://bscscan.com')
 
 export const nativeSymbol = activeChain.nativeCurrency.symbol
+
+/**
+ * The chain's name as a reader says it. wagmi ships the English one; 中文 has its own settled name
+ * for this chain — the FAQ already calls it BNB 智能链 — and leaving it in Latin inside a Chinese
+ * sentence would be the one untranslated noun on the page.
+ */
+export function chainLabel(lang: Lang): string {
+  if (lang !== 'zh') return activeChain.name
+  return isTestnet ? 'BNB 智能链测试网' : 'BNB 智能链'
+}
 
 export function txUrl(hash: `0x${string}`): string {
   return `${explorerUrl}/tx/${hash}`

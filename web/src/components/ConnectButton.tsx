@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAccount, useConnect, useDisconnect } from 'wagmi'
-import { activeChain, addressUrl } from '../config/chains'
+import * as ui from '../content/ui'
+import { addressUrl } from '../config/chains'
 import { useActiveChain } from '../hooks/useActiveChain'
 import { humanizeError } from '../lib/errors'
 import { shortAddress } from '../lib/format'
+import { t, useLang } from '../lib/i18n'
 import { pushToast } from '../lib/toast'
 
 function hasInjectedProvider(): boolean {
@@ -12,6 +14,7 @@ function hasInjectedProvider(): boolean {
 }
 
 export function ConnectButton() {
+  const lang = useLang()
   const { address, isConnected } = useAccount()
   const { wrongChain, isSwitching, switchToActiveChain } = useActiveChain()
   const { connectors, connect, isPending } = useConnect()
@@ -43,7 +46,7 @@ export function ConnectButton() {
         disabled={isSwitching}
         onClick={switchToActiveChain}
       >
-        {isSwitching ? 'Switching…' : `Switch to ${activeChain.name}`}
+        {t(lang, isSwitching ? ui.connect.switching : ui.switchNetwork(lang))}
       </button>
     )
   }
@@ -74,7 +77,7 @@ export function ConnectButton() {
               className="block px-4 py-3 text-sm hover:bg-slate-100 dark:hover:bg-slate-800"
               onClick={() => setOpen(false)}
             >
-              View on explorer ↗
+              {t(lang, ui.connect.explorer)}
             </a>
             <button
               role="menuitem"
@@ -85,7 +88,7 @@ export function ConnectButton() {
                 setOpen(false)
               }}
             >
-              Disconnect
+              {t(lang, ui.connect.disconnect)}
             </button>
           </div>
         ) : null}
@@ -99,7 +102,7 @@ export function ConnectButton() {
   if (usable.length === 0) {
     return (
       <a className="btn-primary" href="https://metamask.io/download/" target="_blank" rel="noreferrer">
-        Install a wallet
+        {t(lang, ui.connect.installWallet)}
       </a>
     )
   }
@@ -115,11 +118,14 @@ export function ConnectButton() {
         onClick={() =>
           connect(
             { connector: only },
-            { onError: (err) => pushToast({ kind: 'error', title: 'Could not connect', body: humanizeError(err) }) },
+            {
+              onError: (err) =>
+                pushToast({ kind: 'error', title: t(lang, ui.connect.failed), body: humanizeError(err, lang) }),
+            },
           )
         }
       >
-        {isPending ? 'Connecting…' : 'Connect wallet'}
+        {t(lang, isPending ? ui.connect.connecting : ui.connect.connect)}
       </button>
     )
   }
@@ -134,7 +140,7 @@ export function ConnectButton() {
         aria-expanded={open}
         disabled={isPending}
       >
-        {isPending ? 'Connecting…' : 'Connect wallet'}
+        {t(lang, isPending ? ui.connect.connecting : ui.connect.connect)}
       </button>
       {open ? (
         <div
@@ -151,7 +157,10 @@ export function ConnectButton() {
                 setOpen(false)
                 connect(
                   { connector: c },
-                  { onError: (err) => pushToast({ kind: 'error', title: 'Could not connect', body: humanizeError(err) }) },
+                  {
+                    onError: (err) =>
+                      pushToast({ kind: 'error', title: t(lang, ui.connect.failed), body: humanizeError(err, lang) }),
+                  },
                 )
               }}
             >

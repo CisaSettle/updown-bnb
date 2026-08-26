@@ -1,4 +1,6 @@
+import * as ui from '../content/ui'
 import { formatAmountWithSymbol, formatBreakEven, formatMultiple, overroundPoints } from '../lib/format'
+import { t, useLang, type Lang } from '../lib/i18n'
 import { balancedMultipleBps, computeOdds } from '../lib/market'
 
 /**
@@ -19,6 +21,7 @@ function Side({
   balancedBps,
   symbol,
   decimals,
+  lang,
 }: {
   side: 'up' | 'down'
   multipleBps: bigint | undefined
@@ -31,6 +34,7 @@ function Side({
   balancedBps: bigint
   symbol: string
   decimals: number
+  lang: Lang
 }) {
   const isUp = side === 'up'
 
@@ -47,7 +51,7 @@ function Side({
           isUp ? 'text-emerald-800 dark:text-emerald-300' : 'text-rose-800 dark:text-rose-300'
         }`}
       >
-        {isUp ? '▲ Up' : '▼ Down'}
+        {t(lang, ui.betSideButton(side))}
       </p>
 
       {state === 'priced' ? (
@@ -60,7 +64,9 @@ function Side({
           >
             {formatMultiple(multipleBps)}
           </p>
-          <p className="mt-0.5 text-[11px] font-medium text-slate-600 dark:text-slate-400">payout on a win</p>
+          <p className="mt-0.5 text-[11px] font-medium text-slate-600 dark:text-slate-400">
+            {t(lang, ui.odds.payoutOnWin)}
+          </p>
 
           {/*
             NOT an implied probability. `1/multiple` is the win rate at which this bet's expected
@@ -70,12 +76,12 @@ function Side({
             statement about where the money is, not about how likely the move is.
           */}
           <p className="num mt-2 text-sm font-bold text-slate-800 dark:text-slate-200">{formatBreakEven(multipleBps)}</p>
-          <p className="text-[11px] font-medium text-slate-600 dark:text-slate-400">break-even win rate</p>
+          <p className="text-[11px] font-medium text-slate-600 dark:text-slate-400">{t(lang, ui.odds.breakEven)}</p>
         </>
       ) : state === 'unknown' ? (
         <>
           <p className="skeleton mt-1 h-7 w-20" />
-          <p className="mt-2 text-[11px] font-medium text-slate-600 dark:text-slate-400">reading the book…</p>
+          <p className="mt-2 text-[11px] font-medium text-slate-600 dark:text-slate-400">{t(lang, ui.odds.reading)}</p>
         </>
       ) : (
         <>
@@ -88,17 +94,17 @@ function Side({
             {formatMultiple(balancedBps)}
           </p>
           <p className="mt-0.5 text-[11px] font-medium text-slate-600 dark:text-slate-400">
-            {state === 'waiting' ? 'if you match the other side' : 'if the book ends even'}
+            {t(lang, state === 'waiting' ? ui.odds.ifYouMatch : ui.odds.ifEven)}
           </p>
           <p className="mt-2 text-[11px] leading-snug font-medium text-slate-600 dark:text-slate-400">
-            {state === 'empty-book'
-              ? 'No bets yet on either side, so there is no price. Your bet is the first half of it.'
-              : state === 'alone'
-                ? 'Only this side has money. Nobody to win from yet — if it locks like this, every stake comes back in full.'
-                : `Nothing here yet. ${formatAmountWithSymbol(otherStake, decimals, symbol, {
-                    maxFrac: 2,
-                    compact: true,
-                  })} is waiting on the other side.`}
+            {t(
+              lang,
+              state === 'empty-book'
+                ? ui.odds.emptyBook
+                : state === 'alone'
+                  ? ui.odds.alone
+                  : ui.oddsWaiting(formatAmountWithSymbol(otherStake, decimals, symbol, { maxFrac: 2, compact: true })),
+            )}
           </p>
         </>
       )}
@@ -129,6 +135,7 @@ export function OddsPanel({
   /** False while the round has not been read: say nothing rather than assert an empty book. */
   known?: boolean
 }) {
+  const lang = useLang()
   // `odds()` comes back `undefined` when that sub-call could not be read, and `0n` when the
   // contract genuinely has no price to give. Treating the two alike would tell a trader with money
   // on both sides that nobody has bet. `computeOdds` is the tested, exact mirror of `odds()`, so
@@ -151,9 +158,9 @@ export function OddsPanel({
   return (
     <div>
       <div className="flex items-baseline justify-between">
-        <p className="label">Odds</p>
+        <p className="label">{t(lang, ui.odds.heading)}</p>
         <p className="text-[11px] text-slate-500 dark:text-slate-400">
-          {(feeBps / 100).toFixed(feeBps % 100 === 0 ? 0 : 2)}% fee, charged on the losing pool only
+          {t(lang, ui.feeNote((feeBps / 100).toFixed(feeBps % 100 === 0 ? 0 : 2)))}
         </p>
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2">
@@ -165,6 +172,7 @@ export function OddsPanel({
           balancedBps={balancedBps}
           symbol={symbol}
           decimals={decimals}
+          lang={lang}
         />
         <Side
           side="down"
@@ -174,35 +182,37 @@ export function OddsPanel({
           balancedBps={balancedBps}
           symbol={symbol}
           decimals={decimals}
+          lang={lang}
         />
       </div>
       <p className="mt-2 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
         {!known ? (
-          'The book for this round has not been read yet.'
+          t(lang, ui.odds.unread)
         ) : !priced ? (
           <>
-            A parimutuel price is one pool divided by the other, so the contract&rsquo;s{' '}
-            <span className="num">odds()</span> returns nothing at all until <strong>both</strong> sides hold money —
-            the greyed <span className="num">{formatMultiple(balancedBps)}</span> above is what an evenly matched book
-            pays at this round&rsquo;s fee, not a quote.{' '}
-            {live
-              ? 'This round locked without a counterparty, so every stake in it is refunded in full, with zero fee.'
-              : 'A round that locks one-sided is refunded in full, with zero fee — nobody can lose money for want of an opponent.'}
+            {t(lang, ui.oddsUnpriced.before)}
+            <span className="num">odds()</span>
+            {t(lang, ui.oddsUnpriced.middle)}
+            <strong>{t(lang, ui.oddsUnpriced.bold)}</strong>
+            {t(lang, ui.oddsUnpriced.afterBold)}
+            <span className="num">{formatMultiple(balancedBps)}</span>
+            {t(lang, ui.oddsUnpriced.after)}
+            {t(lang, live ? ui.odds.oneSidedLive : ui.odds.oneSidedOpen)}
           </>
-        ) : live ? (
-          'These are the final odds for this round — the book is locked.'
         ) : (
-          'Odds move with every bet and are only final at lock. The number you see is the multiple the contract itself would use.'
+          t(lang, live ? ui.odds.finalLive : ui.odds.movingOpen)
         )}
       </p>
 
       {priced && overround !== undefined ? (
         <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-          A <strong>break-even win rate</strong> is what a side has to win to leave you level at that payout — not a
-          forecast. The two add up to <span className="num">{(100 + overround).toFixed(1)}%</span>, and the{' '}
-          <span className="num">{overround.toFixed(1)}</span> points above 100 are the fee sitting inside both
-          multiples, so they are not probabilities and cannot be read as a pair of them. A pool price says where the
-          money is; on a short coin-flip window that is not the same thing as how likely the move is.
+          {t(lang, ui.oddsOverround.lead)}
+          <strong>{t(lang, ui.oddsOverround.leadBold)}</strong>
+          {t(lang, ui.oddsOverround.afterLead)}
+          <span className="num">{(100 + overround).toFixed(1)}%</span>
+          {t(lang, ui.oddsOverround.afterTotal)}
+          <span className="num">{overround.toFixed(1)}</span>
+          {t(lang, ui.oddsOverround.afterPoints)}
         </p>
       ) : null}
     </div>

@@ -7,9 +7,11 @@ import {
   chooseBucketSeconds,
   feedHealth,
   formatAgo,
+  formatAgoPhrase,
   linearScale,
   medianGapSeconds,
   niceTicks,
+  plateWidth,
   priceDomain,
   staleBudgetSeconds,
   stepSegments,
@@ -382,12 +384,57 @@ describe('feed staleness', () => {
 
 describe('formatAgo', () => {
   it('reads as an age, not a clock', () => {
-    expect(formatAgo(0)).toBe('0s')
-    expect(formatAgo(59)).toBe('59s')
-    expect(formatAgo(60)).toBe('1m')
-    expect(formatAgo(92)).toBe('1m 32s')
-    expect(formatAgo(3_600)).toBe('1h')
-    expect(formatAgo(3_780)).toBe('1h 3m')
-    expect(formatAgo(undefined)).toBe('—')
+    expect(formatAgo(0, 'en')).toBe('0s')
+    expect(formatAgo(59, 'en')).toBe('59s')
+    expect(formatAgo(60, 'en')).toBe('1m')
+    expect(formatAgo(92, 'en')).toBe('1m 32s')
+    expect(formatAgo(3_600, 'en')).toBe('1h')
+    expect(formatAgo(3_780, 'en')).toBe('1h 3m')
+    expect(formatAgo(undefined, 'en')).toBe('—')
+  })
+
+  it('spans the same units in 中文', () => {
+    expect(formatAgo(0, 'zh')).toBe('0 秒')
+    expect(formatAgo(59, 'zh')).toBe('59 秒')
+    // 分钟 standing alone, 分 inside a compound: `1 分前` is not something anyone says, and this
+    // string is read out as the age of the feed.
+    expect(formatAgo(60, 'zh')).toBe('1 分钟')
+    expect(formatAgo(120, 'zh')).toBe('2 分钟')
+    expect(formatAgo(92, 'zh')).toBe('1 分 32 秒')
+    expect(formatAgo(3_600, 'zh')).toBe('1 小时')
+    expect(formatAgo(3_780, 'zh')).toBe('1 小时 3 分')
+    expect(formatAgo(undefined, 'zh')).toBe('—')
+  })
+
+  it('puts "ago" where each language puts it', () => {
+    expect(formatAgoPhrase(92, 'en')).toBe('1m 32s ago')
+    expect(formatAgoPhrase(92, 'zh')).toBe('1 分 32 秒前')
+    expect(formatAgoPhrase(120, 'zh')).toBe('2 分钟前')
+    // An em dash is not an age, so nothing is appended to it in either language.
+    expect(formatAgoPhrase(undefined, 'en')).toBe('—')
+    expect(formatAgoPhrase(undefined, 'zh')).toBe('—')
+  })
+})
+
+describe('plateWidth — the label has to fit its own plate in both scripts', () => {
+  it('leaves Latin on exactly the constant the chart was tuned with', () => {
+    // 4.3 units per character at font-size 9, plus 6 of padding: unchanged, so no English label
+    // moves by a pixel.
+    expect(plateWidth('▲ UP wins here')).toBeCloseTo('▲ UP wins here'.length * 4.3 + 6, 6)
+  })
+
+  it('gives a CJK glyph a full em, so 中文 cannot run out of the plate', () => {
+    const zh = '▲ 这一侧 UP 赢'
+    const naive = zh.length * 4.3 + 6
+    expect(plateWidth(zh)).toBeGreaterThan(naive)
+    // Four wide glyphs at font-size 9 are 36 units the old estimate charged 17.2 for.
+    expect(plateWidth(zh)).toBeCloseTo(6 * 4.3 + 4 * 9 + 6, 6)
+  })
+
+  it('still fits inside the plot for the longest label either language has', () => {
+    for (const label of ['▲ UP wins here', '▼ DOWN wins here', '▲ 这一侧 UP 赢', '▼ 这一侧 DOWN 赢']) {
+      // The plate is right-anchored at x = 422 and the plot starts at x = 2.
+      expect(plateWidth(label)).toBeLessThan(420)
+    }
   })
 })

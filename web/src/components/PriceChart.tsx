@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
+import * as ui from '../content/ui'
 import { formatPrice, formatPriceNumber, formatTime } from '../lib/format'
+import { t, useLang, type Text } from '../lib/i18n'
 import {
   buildSeries,
   bucketCandles,
@@ -7,8 +9,10 @@ import {
   chooseBucketSeconds,
   feedHealth,
   formatAgo,
+  formatAgoPhrase,
   linearScale,
   niceTicks,
+  plateWidth,
   priceDomain,
   staleBudgetSeconds,
   stepSegments,
@@ -56,8 +60,8 @@ export interface PriceChartProps {
   /** Why the readable history stops where it does. */
   limit: HistoryLimit
   isLoading?: boolean
-  /** What the feed is, in words: "keeper relay feed (testnet)" or "Chainlink". */
-  feedName: string
+  /** What the feed is, in words: a relay feed on testnet, Chainlink on mainnet. */
+  feedName: Text
 }
 
 /**
@@ -111,8 +115,10 @@ function PlateLabel({
   className: string
 }) {
   // No text measurement is available in an SVG rendered on the server, and none is worth a layout
-  // pass here: 4.3 units per character at font-size 9 is a close enough upper bound.
-  const width = text.length * 4.3 + 6
+  // pass here — but the bound has to hold in both scripts: a CJK glyph is about twice a Latin one
+  // at the same font-size, and the old per-character constant would have let 中文 run out of its
+  // own plate and sit unreadable on the series line.
+  const width = plateWidth(text)
   return (
     <g>
       <rect x={x - width} y={y - 8} width={width} height={11} rx={2} className="fill-white/75 dark:fill-slate-900/75" />
@@ -178,6 +184,7 @@ export function PriceChart({
   isLoading = false,
   feedName,
 }: PriceChartProps) {
+  const lang = useLang()
   const [choice, setChoice] = useState<'auto' | 'candles' | 'line'>('auto')
 
   const model = useMemo(() => {
@@ -243,12 +250,14 @@ export function PriceChart({
     (tick) => strikeY === undefined || Math.abs(y(tick) - strikeY) > 9,
   )
 
+  const budgetText = ui.budgetSpan(budget, lang)
+
   return (
     <div>
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
         <div className="flex items-baseline gap-2">
-          <p className="label">Oracle price</p>
-          <span className="text-[11px] text-slate-500 dark:text-slate-400">the series this round settles on</span>
+          <p className="label">{t(lang, ui.chart.heading)}</p>
+          <span className="text-[11px] text-slate-500 dark:text-slate-400">{t(lang, ui.chart.subheading)}</span>
         </div>
         <div className="flex items-center gap-2">
           {series.latest ? (
@@ -260,17 +269,17 @@ export function PriceChart({
                     ? 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200'
                     : 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
               }`}
-              title={
-                health === 'stale'
-                  ? `The last print is older than this round’s ${budget}s oracle budget: a boundary now could not be priced, and the round would refund in full.`
-                  : `Age of the newest print. Past ${budget}s a boundary cannot be priced and the round refunds.`
-              }
+              title={t(lang, ui.feedAgeBadgeTitle(budget, health === 'stale'))}
             >
               <span className="num">{formatPrice(series.latest.value, decimals)}</span>
-              <span className="num font-normal">· {formatAgo(ageSeconds)} ago</span>
+              <span className="num font-normal">· {formatAgoPhrase(ageSeconds, lang)}</span>
             </span>
           ) : null}
-          <div className="flex rounded-lg border border-slate-300 p-0.5 dark:border-slate-700" role="group" aria-label="Chart style">
+          <div
+            className="flex rounded-lg border border-slate-300 p-0.5 dark:border-slate-700"
+            role="group"
+            aria-label={t(lang, ui.chart.style)}
+          >
             <button
               type="button"
               onClick={() => setChoice('line')}
@@ -281,25 +290,21 @@ export function PriceChart({
                   : 'text-slate-600 dark:text-slate-300'
               }`}
             >
-              Line
+              {t(lang, ui.chart.line)}
             </button>
             <button
               type="button"
               onClick={() => setChoice('candles')}
               disabled={!readiness.ok}
               aria-pressed={view === 'candles'}
-              title={
-                readiness.ok
-                  ? `OHLC of the oracle prints in each ${bucketSec}s bucket`
-                  : 'This feed has not printed often enough for candles to have bodies — see the note below.'
-              }
+              title={t(lang, readiness.ok ? ui.candlesTitle(bucketSec) : ui.chart.candlesUnavailable)}
               className={`rounded px-2 py-0.5 text-[11px] font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${
                 view === 'candles'
                   ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
                   : 'text-slate-600 dark:text-slate-300'
               }`}
             >
-              Candles
+              {t(lang, ui.chart.candles)}
             </button>
           </div>
         </div>
@@ -310,9 +315,15 @@ export function PriceChart({
           viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
           className="mt-2 h-auto w-full"
           role="img"
-          aria-label={`${feedName} price between ${formatTime(frame.startTs)} and ${formatTime(frame.endTs)}${
-            frame.strike !== undefined ? `, strike ${formatPrice(frame.strike, decimals)}` : ', no strike yet'
-          }`}
+          aria-label={t(
+            lang,
+            ui.chartAria({
+              from: formatTime(frame.startTs, lang),
+              to: formatTime(frame.endTs, lang),
+              strike: frame.strike !== undefined ? formatPrice(frame.strike, decimals) : undefined,
+              feed: t(lang, feedName),
+            }),
+          )}
         >
           {/* ── the two regions: above the strike UP wins, below it DOWN wins ───────────── */}
           {strikeY !== undefined ? (
@@ -335,7 +346,7 @@ export function PriceChart({
                 <PlateLabel
                   x={PLOT.x1 - 2}
                   y={PLOT.y0 + 10}
-                  text="▲ UP wins here"
+                  text={t(lang, ui.chart.upWinsHere)}
                   className="fill-emerald-700 dark:fill-emerald-400"
                 />
               ) : null}
@@ -343,7 +354,7 @@ export function PriceChart({
                 <PlateLabel
                   x={PLOT.x1 - 2}
                   y={PLOT.y1 - 4}
-                  text="▼ DOWN wins here"
+                  text={t(lang, ui.chart.downWinsHere)}
                   className="fill-rose-700 dark:fill-rose-400"
                 />
               ) : null}
@@ -442,7 +453,7 @@ export function PriceChart({
                 {formatPrice(frame.strike, decimals)}
               </text>
               <text x={PLOT.x0 + 3} y={strikeY - 3} fontSize={9} className="fill-slate-900 font-bold dark:fill-slate-100">
-                strike
+                {t(lang, ui.chart.axisStrike)}
               </text>
             </>
           ) : null}
@@ -464,7 +475,14 @@ export function PriceChart({
             textAnchor={frame.lockTs >= frame.endTs ? 'end' : 'middle'}
             className="fill-slate-500 dark:fill-slate-400"
           >
-            {frame.strikeState === 'set' ? 'locked' : frame.strikeState === 'pending' ? 'strike here' : 'lock'}
+            {t(
+              lang,
+              frame.strikeState === 'set'
+                ? ui.chart.axisLocked
+                : frame.strikeState === 'pending'
+                  ? ui.chart.axisStrikeHere
+                  : ui.chart.axisLock,
+            )}
           </text>
           <text
             x={x(frame.lockTs)}
@@ -473,7 +491,7 @@ export function PriceChart({
             textAnchor={frame.lockTs >= frame.endTs ? 'end' : 'middle'}
             className="fill-slate-400 font-mono dark:fill-slate-500"
           >
-            {formatTime(frame.lockTs)}
+            {formatTime(frame.lockTs, lang)}
           </text>
 
           {frame.closeTs !== undefined ? (
@@ -494,7 +512,7 @@ export function PriceChart({
                 textAnchor={frame.closeTs >= frame.endTs ? 'end' : 'middle'}
                 className="fill-slate-500 dark:fill-slate-400"
               >
-                settles
+                {t(lang, ui.chart.axisSettles)}
               </text>
               <text
                 x={x(frame.closeTs)}
@@ -503,7 +521,7 @@ export function PriceChart({
                 textAnchor={frame.closeTs >= frame.endTs ? 'end' : 'middle'}
                 className="fill-slate-400 font-mono dark:fill-slate-500"
               >
-                {formatTime(frame.closeTs)}
+                {formatTime(frame.closeTs, lang)}
               </text>
             </>
           ) : null}
@@ -522,17 +540,20 @@ export function PriceChart({
           />
 
           <text x={PLOT.x0} y={PLOT.y1 + 10} fontSize={8} className="fill-slate-400 font-mono dark:fill-slate-500">
-            {formatTime(frame.startTs)}
+            {formatTime(frame.startTs, lang)}
           </text>
         </svg>
       ) : (
         <div className="card-muted mt-2 p-4 text-center">
           <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-            {isLoading
-              ? 'Reading the feed’s history…'
-              : series.latest
-                ? 'No print inside this round’s window'
-                : 'This feed has not printed yet'}
+            {t(
+              lang,
+              isLoading
+                ? ui.chart.loadingHistory
+                : series.latest
+                  ? ui.chart.noPrintInWindow
+                  : ui.chart.neverPrinted,
+            )}
           </p>
           {isLoading ? null : series.latest ? (
             // The feed HAS printed — the badge above is quoting one — just not between this window's
@@ -546,24 +567,28 @@ export function PriceChart({
             // boundary may simply be older than the walk goes. `historyLimit` is what tells the two
             // apart, and only `feed-start` supports the stronger claim.
             <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-              Every print read here is newer than this window: the oldest is from{' '}
-              <span className="num">{formatTime(series.oldest?.ts ?? series.latest.ts)}</span>, and the window closes at{' '}
-              <span className="num">{formatTime(frame.endTs)}</span>.{' '}
-              {limit === 'feed-start'
-                ? // Only here has the walk actually reached the beginning of the feed, so only here
-                  // is "no print exists at or before the boundary" a fact rather than a gap in what
-                  // was read. Even so the refund is future tense: `executeRound` reverts on a bad
-                  // proof for as long as the round is inside its own buffer, and `refundable()`
-                  // stays false until `_isExpired` — the round is not claimable yet.
-                  'That is the whole history this feed has, and it begins after this round’s boundary — so no print exists at or before it. A boundary with no usable print cannot be settled, and the round will be refunded in full, with no fee taken, once its settlement window elapses.'
-                : limit === 'phase-start'
-                  ? 'History here stops at an aggregator phase change: any print that priced this round belongs to the previous phase of the feed and is not read here.'
-                  : 'The chart reads only the most recent prints, so it cannot say from here whether an older print priced this round.'}
+              {t(lang, ui.noPrintExplain.before)}
+              <span className="num">{formatTime(series.oldest?.ts ?? series.latest.ts, lang)}</span>
+              {t(lang, ui.noPrintExplain.middle)}
+              <span className="num">{formatTime(frame.endTs, lang)}</span>
+              {t(lang, ui.noPrintExplain.after)}
+              {t(
+                lang,
+                // Only `feed-start` has the walk actually reached the beginning of the feed, so
+                // only there is "no print exists at or before the boundary" a fact rather than a
+                // gap in what was read. Even so the refund is future tense: `executeRound` reverts
+                // on a bad proof for as long as the round is inside its own buffer, and
+                // `refundable()` stays false until `_isExpired` — the round is not claimable yet.
+                limit === 'feed-start'
+                  ? ui.chart.limitFeedStart
+                  : limit === 'phase-start'
+                    ? ui.chart.limitPhaseStart
+                    : ui.chart.limitReadCap,
+              )}
             </p>
           ) : (
             <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-              There is nothing to plot until the oracle publishes an answer. Until then no round can be priced, and any
-              round whose boundary passes without a print is refunded in full with no fee taken.
+              {t(lang, ui.chart.nothingToPlot)}
             </p>
           )}
         </div>
@@ -572,35 +597,42 @@ export function PriceChart({
       <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
         {frame.strikeState === 'set' ? (
           hasSomething ? (
-          <>
-              Above the dashed line UP wins, below it DOWN wins. {feedName}; the value between prints is the last
-              print — exactly how the contract reads it, so the line is drawn as steps, and it stops after{' '}
-              <span className="num">{budget}s</span> because past that a boundary has no usable price at all.
+            <>
+              {t(lang, ui.strikeSetNote.before)}
+              {t(lang, feedName)}
+              {t(lang, ui.strikeSetNote.middle)}
+              <span className="num">{budgetText}</span>
+              {t(lang, ui.strikeSetNote.after)}
             </>
           ) : (
             <>
-              This round&rsquo;s strike is <span className="num">{formatPrice(frame.strike, decimals)}</span>, and{' '}
-              {feedName}.
+              {t(lang, ui.strikeOnlyNote.before)}
+              <span className="num">{formatPrice(frame.strike, decimals)}</span>
+              {t(lang, ui.strikeOnlyNote.after)}
+              {t(lang, feedName)}
+              {t(lang, ui.strikeOnlyNote.end)}
             </>
           )
         ) : frame.strikeState === 'pending' ? (
           <>
-            <strong>No strike yet.</strong> This round is still taking bets — its strike is the feed print at or before{' '}
-            <span className="num">{formatTime(frame.lockTs)}</span>, so there is no line to draw until then, and no side
-            is winning or losing yet.
+            <strong>{t(lang, ui.chart.noStrikeBold)}</strong>
+            {t(lang, ui.noStrikeNote.before)}
+            <span className="num">{formatTime(frame.lockTs, lang)}</span>
+            {t(lang, ui.noStrikeNote.after)}
           </>
         ) : frame.strikeState === 'awaiting' ? (
           <>
-            <strong>Not locked yet.</strong> This round&rsquo;s strike is already decided — it is the feed print at or
-            before <span className="num">{formatTime(frame.lockTs)}</span>, and that set of prints is frozen — but no
-            <span> </span>
-            <span className="num">executeRound</span> call has recorded it on chain, so there is nothing to draw against
-            yet. Anyone may make that call, and being late cannot change the price it records.
+            <strong>{t(lang, ui.chart.notLockedBold)}</strong>
+            {t(lang, ui.awaitingStrikeNote.before)}
+            <span className="num">{formatTime(frame.lockTs, lang)}</span>
+            {t(lang, ui.awaitingStrikeNote.middle)}
+            <span className="num">executeRound</span>
+            {t(lang, ui.awaitingStrikeNote.after)}
           </>
         ) : (
           <>
-            <strong>This round never locked.</strong> Its settlement window elapsed with no strike recorded, so there is
-            no reference line: the round can only be refunded in full, with no fee taken.
+            <strong>{t(lang, ui.chart.neverLockedBold)}</strong>
+            {t(lang, ui.chart.neverLocked)}
           </>
         )}
       </p>
@@ -611,39 +643,37 @@ export function PriceChart({
             health === 'stale' ? 'text-rose-700 dark:text-rose-400' : 'text-slate-500 dark:text-slate-400'
           }`}
         >
-          The <strong>dashed</strong> stretches are where the feed had gone quiet for longer than this round&rsquo;s{' '}
-          <span className="num">{budget}s</span> oracle budget. A boundary landing in one of them cannot be priced at
-          all — not stale, but absent — so that round is refunded in full with no fee.
-          {health === 'stale' && series.latest
-            ? ` The feed is in that state right now: nothing has printed for ${formatAgo(ageSeconds)}.`
-            : ''}
+          {t(lang, ui.dashedNote.before)}
+          <strong>{t(lang, ui.chart.dashedBold)}</strong>
+          {t(lang, ui.dashedNote.middle)}
+          <span className="num">{budgetText}</span>
+          {t(lang, ui.dashedNote.after)}
+          {health === 'stale' && series.latest ? t(lang, ui.feedQuietNow(formatAgo(ageSeconds, lang))) : ''}
         </p>
       ) : null}
 
       {view === 'candles' ? (
         <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-          Candles are the real open / high / low / close of the oracle prints inside each{' '}
-          <span className="num">{bucketSec}s</span> bucket — {readiness.printsPerBucket.toFixed(1)} prints per bucket on
-          average. A bucket the feed did not print in is left empty rather than filled with a made-up candle.
+          {t(lang, ui.candlesNote(bucketSec, readiness.printsPerBucket.toFixed(1)))}
         </p>
       ) : readiness.reason === 'too-few' || readiness.reason === 'too-sparse' ? (
         <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-          Candles are off because this feed is too sparse for them: an oracle print is a point in time, not an OHLC bar,
-          so a candle here can only be the open/high/low/close of the prints inside a bucket — and at{' '}
-          {readiness.printsPerBucket.toFixed(1)} prints per bucket almost every candle would be a bodyless doji. That
-          would look like a flat market when the truth is a quiet feed.
+          {t(lang, ui.candlesOffNote(readiness.printsPerBucket.toFixed(1)))}
         </p>
       ) : null}
 
       {!series.coversStart && series.points.length > 0 ? (
         <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-          {limit === 'phase-start'
-            ? 'History stops at an aggregator phase change: older prints belong to the previous phase of this feed and are not read here.'
-            : limit === 'feed-start'
-              ? 'This is the whole history the feed has — it starts here.'
-              : limit === 'read-cap'
-                ? 'History is capped at the most recent prints, so the window is only partly filled.'
-                : 'Earlier prints are still loading.'}
+          {t(
+            lang,
+            limit === 'phase-start'
+              ? ui.chart.coversPhaseStart
+              : limit === 'feed-start'
+                ? ui.chart.coversFeedStart
+                : limit === 'read-cap'
+                  ? ui.chart.coversReadCap
+                  : ui.chart.coversLoading,
+          )}
         </p>
       ) : null}
     </div>

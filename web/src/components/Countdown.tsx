@@ -1,4 +1,6 @@
-import { formatCountdown } from '../lib/format'
+import * as ui from '../content/ui'
+import { formatCountdown, formatDurationWords } from '../lib/format'
+import { t, useLang, type Text } from '../lib/i18n'
 
 /**
  * The single biggest number on the page. `tone` maps to what the clock means:
@@ -12,10 +14,16 @@ export function Countdown({
 }: {
   secondsLeft: number
   total: number
-  label: string
+  label: Text
   tone: 'betting' | 'live' | 'idle'
 }) {
+  const lang = useLang()
+  const text = t(lang, label)
   const clamped = Math.max(0, secondsLeft)
+  // `04:59` is a picture, not a sentence. This is what a screen reader reads instead, so it spells
+  // the units out — pluralised in English, where "1 seconds" would be a number read aloud wrong to
+  // the one reader who cannot see the digits, and composed as 剩余 4 分 12 秒 in 中文.
+  const spoken = t(lang, ui.remaining(formatDurationWords(clamped, lang)))
   const pct = total > 0 ? Math.min(100, Math.max(0, (clamped / total) * 100)) : 0
   const urgent = tone === 'betting' && clamped <= 15
 
@@ -33,11 +41,11 @@ export function Countdown({
 
   return (
     <div>
-      <p className="label">{label}</p>
+      <p className="label">{text}</p>
       <p
         className={`num mt-1 text-5xl font-black leading-none sm:text-6xl ${color}`}
         aria-live="off"
-        title={`${clamped} seconds remaining`}
+        title={spoken}
       >
         {formatCountdown(clamped)}
       </p>
@@ -49,7 +57,7 @@ export function Countdown({
           aria-valuenow={Math.round(pct)}
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-label={label}
+          aria-label={text}
         />
       </div>
     </div>

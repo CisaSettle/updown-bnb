@@ -1,3 +1,5 @@
+import * as ui from '../content/ui'
+import { t, useLang, type Text } from '../lib/i18n'
 import { dismissToast, useToasts, type ToastKind } from '../lib/toast'
 
 const STYLES: Record<ToastKind, string> = {
@@ -15,14 +17,18 @@ const ICONS: Record<ToastKind, string> = {
 }
 
 export function Toaster() {
+  const lang = useLang()
   const toasts = useToasts()
+  // The rows below bind each toast to `t`, which shadows the translator, so resolve through a name
+  // that survives the loop rather than renaming the toast everywhere.
+  const label = (text: Text) => t(lang, text)
   if (toasts.length === 0) return null
 
   return (
     <div
       className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex flex-col items-center gap-2 p-4 sm:items-end sm:p-6"
       role="region"
-      aria-label="Notifications"
+      aria-label={t(lang, ui.toast.region)}
     >
       {toasts.map((t) => (
         <div
@@ -45,7 +51,7 @@ export function Toaster() {
               {t.body ? <p className="mt-0.5 break-words text-xs opacity-90">{t.body}</p> : null}
               {t.href ? (
                 <a href={t.href} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs font-semibold underline">
-                  {t.hrefLabel ?? 'View transaction'} ↗
+                  {t.hrefLabel ?? label(ui.toast.viewTx)} ↗
                 </a>
               ) : null}
             </div>
@@ -53,7 +59,7 @@ export function Toaster() {
               type="button"
               onClick={() => dismissToast(t.id)}
               className="-mr-1 rounded p-1 text-lg leading-none opacity-60 hover:opacity-100"
-              aria-label="Dismiss notification"
+              aria-label={label(ui.toast.dismiss)}
             >
               ×
             </button>

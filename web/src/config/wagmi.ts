@@ -3,6 +3,8 @@ import { bsc, bscTestnet } from 'wagmi/chains'
 import { injected, walletConnect } from 'wagmi/connectors'
 import type { CreateConnectorFn } from 'wagmi'
 import { CHAIN_ID, BSC_MAINNET_RPC, BSC_TESTNET_RPC, rpcUrl } from './chains'
+import { meta } from '../content/ui'
+import { getLang, t } from '../lib/i18n'
 
 /**
  * WalletConnect is strictly opt-in: without `VITE_WALLETCONNECT_PROJECT_ID` the app ships with the
@@ -20,9 +22,13 @@ if (wcProjectId) {
     walletConnect({
       projectId: wcProjectId,
       showQrModal: true,
+      // The wallet shows this on its own approval screen, so it is the one string of ours a
+      // 中文 reader meets before the app has painted anything. Resolved once, at module scope,
+      // from the same store `index.html` has already settled — the same copy as the page's
+      // <meta name="description">.
       metadata: {
         name: 'UpDown Protocol',
-        description: 'Non-custodial parimutuel binary options on BNB Smart Chain',
+        description: t(getLang(), meta.description),
         url: typeof window === 'undefined' ? 'https://updown.local' : window.location.origin,
         icons: [],
       },

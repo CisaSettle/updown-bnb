@@ -2,8 +2,9 @@ import { useState } from 'react'
 import type { Address } from '../config/deployment'
 import type { HistoryRow } from '../hooks/useHistory'
 import type { SettlementToken } from '../hooks/useSettlementToken'
+import * as ui from '../content/ui'
 import { formatAmount, formatMultiple, formatPrice, formatPriceDelta, formatDateTime } from '../lib/format'
-import { t, useLang } from '../lib/i18n'
+import { t, useLang, type Lang } from '../lib/i18n'
 import { roundOutcome, type Outcome, type Round } from '../lib/market'
 import { proofBoundaries } from '../lib/proof'
 import { RoundProofBody } from './RoundProof'
@@ -21,28 +22,32 @@ import { SkeletonRows } from './Skeleton'
  * `roundOutcome` is the same helper the positions table resolves through, so the two panels
  * cannot drift apart again.
  */
-function winnerChip(round: Round, outcome: Outcome) {
+function winnerChip(round: Round, outcome: Outcome, lang: Lang) {
   if (outcome === 'refund') {
     return (
       <span
         className="chip bg-violet-100 text-violet-900 dark:bg-violet-950 dark:text-violet-200"
-        title={
-          round.voided
-            ? 'This round was voided on chain — every stake comes back in full, with no fee.'
-            : 'This round’s settlement window elapsed without a settlement, so every stake in it is refundable in full right now.'
-        }
+        title={t(lang, round.voided ? ui.history.refundedVoidedTitle : ui.history.refundedWindowTitle)}
       >
-        Refunded
+        {t(lang, ui.history.refunded)}
       </span>
     )
   }
   if (outcome === 'pending') {
-    return <span className="chip bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300">Pending</span>
+    return (
+      <span className="chip bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+        {t(lang, ui.history.pending)}
+      </span>
+    )
   }
   return outcome === 'up' ? (
-    <span className="chip bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">▲ Up</span>
+    <span className="chip bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">
+      {t(lang, ui.betSideButton('up'))}
+    </span>
   ) : (
-    <span className="chip bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-200">▼ Down</span>
+    <span className="chip bg-rose-100 text-rose-900 dark:bg-rose-950 dark:text-rose-200">
+      {t(lang, ui.betSideButton('down'))}
+    </span>
   )
 }
 
@@ -82,35 +87,35 @@ export function HistoryPanel({
   const openRow = rows.find((r) => r.epoch.toString() === openEpoch)
 
   return (
-    <section className="card" aria-label="Recent rounds">
+    <section className="card" aria-label={t(lang, ui.history.heading)}>
       <div className="flex items-center justify-between border-b border-slate-200 px-5 py-3 dark:border-slate-800">
-        <h2 className="text-base font-bold">Recent rounds</h2>
-        <span className="text-xs text-slate-500 dark:text-slate-400">last {rows.length || '—'} rounds</span>
+        <h2 className="text-base font-bold">{t(lang, ui.history.heading)}</h2>
+        <span className="text-xs text-slate-500 dark:text-slate-400">
+          {t(lang, ui.lastNRounds(rows.length || '—'))}
+        </span>
       </div>
 
       <div className="p-5">
         {isLoading && rows.length === 0 ? (
           <SkeletonRows rows={5} />
         ) : rows.length === 0 ? (
-          <p className="text-sm text-slate-600 dark:text-slate-300">
-            No completed rounds yet. The first result appears one interval after the market opens.
-          </p>
+          <p className="text-sm text-slate-600 dark:text-slate-300">{t(lang, ui.history.empty)}</p>
         ) : (
           <div className="-mx-5 overflow-x-auto px-5">
             <table className="w-full min-w-[760px] text-sm">
-              <caption className="sr-only">The most recent resolved rounds in this market</caption>
+              <caption className="sr-only">{t(lang, ui.history.caption)}</caption>
               <thead>
                 <tr className="border-b border-slate-200 text-left dark:border-slate-800">
-                  <th scope="col" className="label py-2 pr-3 font-medium">Round</th>
-                  <th scope="col" className="label py-2 pr-3 text-right font-medium">Strike</th>
-                  <th scope="col" className="label py-2 pr-3 text-right font-medium">Settlement</th>
-                  <th scope="col" className="label py-2 pr-3 text-right font-medium">Move</th>
-                  <th scope="col" className="label py-2 pr-3 font-medium">Winner</th>
-                  <th scope="col" className="label py-2 pr-3 text-right font-medium">Paid</th>
-                  <th scope="col" className="label py-2 pr-3 text-right font-medium">Pools (up / down)</th>
-                  <th scope="col" className="label py-2 text-right font-medium">
-                    {t(lang, { en: 'Verify', zh: '核验' })}
+                  <th scope="col" className="label py-2 pr-3 font-medium">{t(lang, ui.history.colRound)}</th>
+                  <th scope="col" className="label py-2 pr-3 text-right font-medium">{t(lang, ui.history.colStrike)}</th>
+                  <th scope="col" className="label py-2 pr-3 text-right font-medium">
+                    {t(lang, ui.history.colSettlement)}
                   </th>
+                  <th scope="col" className="label py-2 pr-3 text-right font-medium">{t(lang, ui.history.colMove)}</th>
+                  <th scope="col" className="label py-2 pr-3 font-medium">{t(lang, ui.history.colWinner)}</th>
+                  <th scope="col" className="label py-2 pr-3 text-right font-medium">{t(lang, ui.history.colPaid)}</th>
+                  <th scope="col" className="label py-2 pr-3 text-right font-medium">{t(lang, ui.history.colPools)}</th>
+                  <th scope="col" className="label py-2 text-right font-medium">{t(lang, ui.history.verify)}</th>
                 </tr>
               </thead>
               <tbody>
@@ -138,9 +143,9 @@ export function HistoryPanel({
                       }`}
                     >
                       <td className="py-2.5 pr-3">
-                        <span className="num font-semibold">#{epoch.toString()}</span>
+                        <span className="num font-semibold">{ui.roundNo(epoch, lang)}</span>
                         <span className="block text-[11px] text-slate-500 dark:text-slate-400">
-                          {formatDateTime(round.closeTs)}
+                          {formatDateTime(round.closeTs, lang)}
                         </span>
                       </td>
                       <td className="num py-2.5 pr-3 text-right">
@@ -152,7 +157,7 @@ export function HistoryPanel({
                       <td className={`num py-2.5 pr-3 text-right font-semibold ${deltaColor}`}>
                         {delta === undefined ? '—' : formatPriceDelta(delta, priceDecimals)}
                       </td>
-                      <td className="py-2.5 pr-3">{winnerChip(round, outcome)}</td>
+                      <td className="py-2.5 pr-3">{winnerChip(round, outcome, lang)}</td>
                       <td className="num py-2.5 pr-3 text-right font-semibold">
                         {multiple ? (
                           formatMultiple(multiple)
@@ -176,9 +181,7 @@ export function HistoryPanel({
                             aria-controls={PROOF_PANEL_ID}
                             onClick={() => setOpenEpoch(open ? undefined : key)}
                           >
-                            {open
-                              ? t(lang, { en: 'Hide', zh: '收起' })
-                              : t(lang, { en: 'Check', zh: '核验' })}
+                            {t(lang, open ? ui.history.hide : ui.history.check)}
                           </button>
                         ) : (
                           <span className="text-slate-400 dark:text-slate-500">—</span>
@@ -203,20 +206,17 @@ export function HistoryPanel({
             <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50/60 p-4 dark:border-sky-900 dark:bg-sky-950/30">
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                 <h3 className="num text-sm font-bold">
-                  {t(lang, { en: 'Round', zh: '轮次' })} #{openRow.epoch.toString()}
+                  {lang === 'zh' ? ui.roundNo(openRow.epoch, lang) : `Round #${openRow.epoch.toString()}`}
                 </h3>
                 <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                  {t(lang, {
-                    en: 'read back from the feed, in your browser',
-                    zh: '在你的浏览器里从喂价合约读回',
-                  })}
+                  {t(lang, ui.history.readBack)}
                 </span>
                 <button
                   type="button"
                   className="btn-secondary ml-auto h-7 px-2.5 py-0 text-[11px]"
                   onClick={() => setOpenEpoch(undefined)}
                 >
-                  {t(lang, { en: 'Close', zh: '关闭' })}
+                  {t(lang, ui.history.close)}
                 </button>
               </div>
               <div className="mt-3">
@@ -235,9 +235,7 @@ export function HistoryPanel({
         </div>
 
         <p className="mt-4 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-          &ldquo;Refunded&rdquo; covers a tie, a one-sided book, an unusable oracle print, a missed settlement window or a
-          pause — in all of those every stake is returned in full and no fee is charged. &ldquo;Paid&rdquo; is the
-          multiple the winning side actually received.
+          {t(lang, ui.history.footer)}
         </p>
       </div>
     </section>

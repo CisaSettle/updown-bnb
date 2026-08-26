@@ -1,12 +1,13 @@
-import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import type { Lang } from '../../lib/i18n'
 import { computeOdds } from '../../lib/market'
 import { OddsPanel } from '../OddsPanel'
-import { ONE } from './fixtures'
+import { ONE, renderIn } from './fixtures'
 
-function render(up: bigint, down: bigint, feeBps: number, live = false) {
+function render(up: bigint, down: bigint, feeBps: number, live = false, lang: Lang = 'en') {
   const [upBps, downBps] = computeOdds(up, down, feeBps)
-  return renderToStaticMarkup(
+  return renderIn(
+    lang,
     <OddsPanel
       upBps={upBps}
       downBps={downBps}
@@ -82,7 +83,8 @@ describe('OddsPanel', () => {
   it('does not claim an empty book while the round has not been read', () => {
     // "No bets yet" is a claim about the chain. A multicall still in flight is not evidence for it,
     // and a busy market would otherwise be told its book was empty for as long as the read took.
-    const html = renderToStaticMarkup(
+    const html = renderIn(
+      'en',
       <OddsPanel
         upBps={undefined}
         downBps={undefined}
@@ -103,7 +105,8 @@ describe('OddsPanel', () => {
   it('prices a book the contract could not be asked about, instead of calling it empty', () => {
     // `odds()` undefined is a failed sub-call; `0n` is the contract saying there is no price. Both
     // pools hold money here, so telling each side it is the only funded one would be nonsense.
-    const html = renderToStaticMarkup(
+    const html = renderIn(
+      'en',
       <OddsPanel
         upBps={undefined}
         downBps={undefined}
@@ -123,5 +126,43 @@ describe('OddsPanel', () => {
 
   it('states the fee is charged on the losing pool only', () => {
     expect(render(100n * ONE, 100n * ONE, 300)).toContain('3% fee, charged on the losing pool only')
+  })
+})
+
+describe('OddsPanel in 中文', () => {
+  it('calls the figure a break-even rate, not a probability', () => {
+    const html = render(100n * ONE, 100n * ONE, 300, false, 'zh')
+    expect(html).toContain('保本胜率')
+    expect(html).toContain('101.6%')
+    // The pair overrounds, so it is never presented as a pair of probabilities.
+    expect(html).toContain('不是概率')
+    expect(html).not.toContain('隐含概率')
+    expect(html).toContain('手续费')
+  })
+
+  it('explains an unpriced book instead of leaving an em dash', () => {
+    const html = render(0n, 100n * ONE, 300, false, 'zh')
+    expect(html).toContain('odds()')
+    expect(html).toContain('两边')
+    expect(html).toContain('都有钱才行')
+    // The two sides are in different situations and must not read identically.
+    expect(html).toContain('只有这一边有钱')
+    expect(html).toContain('在等对手')
+    expect(html).toContain('全额退回')
+    expect(html).not.toContain('保本胜率')
+  })
+
+  it('keeps the pool and fee vocabulary the glossary fixes', () => {
+    const html = render(100n * ONE, 300n * ONE, 300, false, 'zh')
+    expect(html).toContain('赔率')
+    expect(html).toContain('只从输的那一边的池子里收')
+    expect(html).toContain('3.91x')
+    // Numerals stay numerals.
+    expect(html).not.toContain('百分之')
+  })
+
+  it('says the odds are final only once the book is locked', () => {
+    expect(render(100n * ONE, 100n * ONE, 300, true, 'zh')).toContain('最终赔率')
+    expect(render(100n * ONE, 100n * ONE, 300, false, 'zh')).toContain('只有到锁定那一刻才最终确定')
   })
 })

@@ -7,9 +7,16 @@
     <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
     <meta name="theme-color" content="#0b0e14" media="(prefers-color-scheme: dark)" />
     <meta
+      id="meta-description"
       name="description"
       content="UpDown Protocol — non-custodial parimutuel binary options on BNB Smart Chain. Ties and one-sided books are refunded in full, zero fee."
     />
+    <!--
+      The title is the product's name and is the same sentence in both languages; only the
+      description is prose, and it is swapped below before anything paints. Kept in sync by hand
+      with `meta.description` in `src/content/ui.ts`, which is where the same copy lives for any
+      code that needs it — this file cannot import TypeScript.
+    -->
     <title>UpDown Protocol</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23f0b90b'/%3E%3Cpath d='M9 20l5-7 4 4 5-8' stroke='%23111' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
     <script>
@@ -24,6 +31,15 @@
       try {
         var lang = localStorage.getItem('updown.lang')
         document.documentElement.lang = lang === 'en' ? 'en' : 'zh-Hans'
+        if (lang !== 'en') {
+          var desc = document.getElementById('meta-description')
+          if (desc) {
+            desc.setAttribute(
+              'content',
+              'UpDown Protocol —— BNB 智能链上的非托管平价池二元期权。平局和单边池全额退回，零手续费。',
+            )
+          }
+        }
       } catch (e) {}
     </script>
   </head>

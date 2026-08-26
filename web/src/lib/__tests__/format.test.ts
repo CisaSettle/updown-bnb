@@ -6,6 +6,7 @@ import {
   formatBreakEven,
   formatCountdown,
   formatDateTime,
+  formatDurationWords,
   formatInterval,
   formatMultiple,
   formatPctDelta,
@@ -308,19 +309,76 @@ describe('time and address formatting', () => {
   })
 
   it('formats intervals', () => {
-    expect(formatInterval(300)).toBe('5m')
-    expect(formatInterval(3600)).toBe('1h')
-    expect(formatInterval(86_400)).toBe('24h')
-    expect(formatInterval(45)).toBe('45s')
+    expect(formatInterval(300, 'en')).toBe('5m')
+    expect(formatInterval(3600, 'en')).toBe('1h')
+    expect(formatInterval(86_400, 'en')).toBe('24h')
+    expect(formatInterval(45, 'en')).toBe('45s')
+  })
+
+  it('names an interval as a unit in 中文, and keeps the numeral a numeral', () => {
+    expect(formatInterval(300, 'zh')).toBe('5 分钟')
+    expect(formatInterval(3600, 'zh')).toBe('1 小时')
+    expect(formatInterval(86_400, 'zh')).toBe('24 小时')
+    expect(formatInterval(45, 'zh')).toBe('45 秒')
+    // 五分钟 would be the same fact written the way this product never writes numbers.
+    expect(formatInterval(300, 'zh')).not.toContain('五')
   })
 
   it('shows an em dash for a missing timestamp', () => {
-    expect(formatTime(undefined)).toBe('—')
-    expect(formatTime(0n)).toBe('—')
-    expect(formatDateTime(undefined)).toBe('—')
-    expect(formatDateTime(0n)).toBe('—')
-    expect(formatTime(1_700_000_000)).not.toBe('—')
-    expect(formatDateTime(1_700_000_000n)).not.toBe('—')
+    for (const lang of ['en', 'zh'] as const) {
+      expect(formatTime(undefined, lang)).toBe('—')
+      expect(formatTime(0n, lang)).toBe('—')
+      expect(formatDateTime(undefined, lang)).toBe('—')
+      expect(formatDateTime(0n, lang)).toBe('—')
+      expect(formatTime(1_700_000_000, lang)).not.toBe('—')
+      expect(formatDateTime(1_700_000_000n, lang)).not.toBe('—')
+    }
+  })
+
+  it('dates a row in 中文 rather than abbreviating the month in English', () => {
+    // The failure this pins: a 中文 reader on an en-US browser getting "Nov 14, 02:13 PM" in the
+    // middle of an otherwise Chinese table, because the locale came from the OS and not the page.
+    const zh = formatDateTime(1_700_000_000n, 'zh')
+    expect(zh).toMatch(/月/)
+    expect(zh).toMatch(/日/)
+    expect(zh).not.toMatch(/[A-Za-z]/)
+    // The clock is 24-hour in zh-CN, so no AM/PM ever appears next to Chinese text.
+    expect(formatTime(1_700_000_000, 'zh')).not.toMatch(/[A-Za-z]/)
+  })
+
+  describe('formatDurationWords — what a screen reader says instead of 04:59', () => {
+    it('pluralises English, so "1 seconds" is never read aloud', () => {
+      expect(formatDurationWords(1, 'en')).toBe('1 second')
+      expect(formatDurationWords(2, 'en')).toBe('2 seconds')
+      expect(formatDurationWords(60, 'en')).toBe('1 minute')
+      expect(formatDurationWords(120, 'en')).toBe('2 minutes')
+      expect(formatDurationWords(3_600, 'en')).toBe('1 hour')
+      expect(formatDurationWords(7_200, 'en')).toBe('2 hours')
+      expect(formatDurationWords(252, 'en')).toBe('4 minutes 12 seconds')
+      expect(formatDurationWords(3_661, 'en')).toBe('1 hour 1 minute 1 second')
+    })
+
+    it('composes 中文 out of the same units the clock face shows', () => {
+      expect(formatDurationWords(252, 'zh')).toBe('4 分 12 秒')
+      expect(formatDurationWords(45, 'zh')).toBe('45 秒')
+      expect(formatDurationWords(4_210, 'zh')).toBe('1 小时 10 分 10 秒')
+      expect(formatDurationWords(3_660, 'zh')).toBe('1 小时 1 分')
+      // 分 only ever appears in a compound. On its own it is not a length of time in 中文 — a
+      // bare `2 分` is an unfinished phrase, and at exactly a whole minute this string is the
+      // only thing a screen reader gets instead of the digits.
+      expect(formatDurationWords(120, 'zh')).toBe('2 分钟')
+      expect(formatDurationWords(60, 'zh')).toBe('1 分钟')
+      for (const secs of [45, 252, 4_210, 3_660]) {
+        expect(formatDurationWords(secs, 'zh'), String(secs)).not.toContain('分钟')
+      }
+    })
+
+    it('says zero rather than nothing at all, in both languages', () => {
+      expect(formatDurationWords(0, 'en')).toBe('0 seconds')
+      expect(formatDurationWords(0, 'zh')).toBe('0 秒')
+      expect(formatDurationWords(-5, 'en')).toBe('0 seconds')
+      expect(formatDurationWords(-5, 'zh')).toBe('0 秒')
+    })
   })
 
   it('shortens addresses', () => {

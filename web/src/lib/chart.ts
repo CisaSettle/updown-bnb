@@ -15,6 +15,7 @@
  * so and draws the line instead. A candle is never manufactured from a bucket with no print in it.
  */
 import { formatUnits } from 'viem'
+import type { Lang } from './i18n'
 import { isExpired, type Round } from './market'
 import type { OraclePrint } from './settlement'
 
@@ -513,13 +514,57 @@ export function feedHealth(ageSeconds: number, budgetSeconds: number): FeedHealt
   return 'fresh'
 }
 
-/** `92` → `"1m 32s"`. Used for the age of the latest print, where a stale feed is a real state. */
-export function formatAgo(seconds: number | undefined): string {
+/**
+ * `92` → `"1m 32s"` / `"1 分 32 秒"`. The age of the latest print, where a stale feed is a real state.
+ *
+ * A bare span, with no "ago" attached: 中文 puts that word at the end (`33 秒前`) and English in the
+ * middle of a sentence (`nothing has printed for 33s`), so the two are composed separately —
+ * see `formatAgoPhrase`.
+ */
+export function formatAgo(seconds: number | undefined, lang: Lang): string {
   if (seconds === undefined || !Number.isFinite(seconds)) return '—'
   const s = Math.max(0, Math.floor(seconds))
+  if (lang === 'zh') {
+    if (s < 60) return `${s} 秒`
+    const m = Math.floor(s / 60)
+    // 分钟 when the minutes stand alone, 分 inside a compound — same rule as
+    // `formatDurationWords`, and for the same reason: `2 分前` is not a thing anyone says.
+    if (m < 60) return s % 60 === 0 ? `${m} 分钟` : `${m} 分 ${s % 60} 秒`
+    const h = Math.floor(m / 60)
+    return m % 60 === 0 ? `${h} 小时` : `${h} 小时 ${m % 60} 分`
+  }
   if (s < 60) return `${s}s`
   const m = Math.floor(s / 60)
   if (m < 60) return s % 60 === 0 ? `${m}m` : `${m}m ${s % 60}s`
   const h = Math.floor(m / 60)
   return m % 60 === 0 ? `${h}h` : `${h}h ${m % 60}m`
+}
+
+/** The same span as a standalone "how long ago": `33s ago` / `33 秒前`. */
+export function formatAgoPhrase(seconds: number | undefined, lang: Lang): string {
+  const span = formatAgo(seconds, lang)
+  if (span === '—') return span
+  return lang === 'zh' ? `${span}前` : `${span} ago`
+}
+
+/**
+ * Characters an SVG renders at roughly one em rather than at Latin width: CJK ideographs, kana,
+ * hangul and the fullwidth punctuation that comes with them.
+ */
+const WIDE_GLYPH =
+  /[\u1100-\u115F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DBF\u4E00-\u9FFF\uA000-\uA4CF\uA960-\uA97F\uAC00-\uD7A3\uF900-\uFAFF\uFE10-\uFE19\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]/
+
+/**
+ * How wide the plate behind an in-plot chart label has to be.
+ *
+ * There is no text measurement available in an SVG rendered on the server, so this is an upper
+ * bound rather than a metric — but it has to be an upper bound in **both** languages. The old
+ * `text.length * 4.3` is the right estimate for Latin at `font-size: 9` and roughly half of what a
+ * CJK glyph actually occupies, so a 中文 label would have run straight out of its own plate and sat
+ * unreadable on the series line. Latin is left on exactly its previous constant.
+ */
+export function plateWidth(text: string, fontSize = 9): number {
+  let ems = 0
+  for (const ch of text) ems += WIDE_GLYPH.test(ch) ? 1 : 4.3 / 9
+  return ems * fontSize + 6
 }

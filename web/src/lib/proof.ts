@@ -173,8 +173,8 @@ function usableCheck(
       status: 'unknown',
       title,
       detail: {
-        en: `Round ${id} is stamped ${formatTime(candidate.updatedAt)}, ahead of our view of the chain clock (${formatTime(Math.floor(nowSeconds))}). Cannot judge it from here yet.`,
-        zh: `轮次 ${id} 的时间戳为 ${formatTime(candidate.updatedAt)}，超前于我们看到的链上时钟（${formatTime(Math.floor(nowSeconds))}）。此刻还无法判定。`,
+        en: `Round ${id} is stamped ${formatTime(candidate.updatedAt, 'en')}, ahead of our view of the chain clock (${formatTime(Math.floor(nowSeconds), 'en')}). Cannot judge it from here yet.`,
+        zh: `轮次 ${id} 的时间戳为 ${formatTime(candidate.updatedAt, 'zh')}，超前于我们看到的链上时钟（${formatTime(Math.floor(nowSeconds), 'zh')}）。此刻还无法判定。`,
       },
     }
   }
@@ -183,8 +183,8 @@ function usableCheck(
     status: 'pass',
     title,
     detail: {
-      en: `Round ${id} came back as round ${id}, priced ${formatPrice(candidate.answer, priceDecimals)} at ${formatTime(candidate.updatedAt)}.`,
-      zh: `轮次 ${id} 返回的正是轮次 ${id}，价格 ${formatPrice(candidate.answer, priceDecimals)}，时间 ${formatTime(candidate.updatedAt)}。`,
+      en: `Round ${id} came back as round ${id}, priced ${formatPrice(candidate.answer, priceDecimals)} at ${formatTime(candidate.updatedAt, 'en')}.`,
+      zh: `轮次 ${id} 返回的正是轮次 ${id}，价格 ${formatPrice(candidate.answer, priceDecimals)}，时间 ${formatTime(candidate.updatedAt, 'zh')}。`,
     },
   }
 }
@@ -238,24 +238,26 @@ function atOrBeforeCheck(spec: BoundarySpec, candidate: OraclePrint | undefined,
     en: 'The print is at or before the boundary',
     zh: '该报价发生在边界时刻或之前',
   }
-  const at = formatTime(spec.boundaryTs)
+  const atEn = formatTime(spec.boundaryTs, 'en')
+  const atZh = formatTime(spec.boundaryTs, 'zh')
   if (!candidate || lead === undefined) {
     return {
       key: 'at-or-before',
       status: 'unknown',
       title,
-      detail: { en: `Boundary is ${at}. No print to place against it yet.`, zh: `边界时刻为 ${at}。目前还没有可比对的报价。` },
+      detail: { en: `Boundary is ${atEn}. No print to place against it yet.`, zh: `边界时刻为 ${atZh}。目前还没有可比对的报价。` },
     }
   }
-  const printedAt = formatTime(candidate.updatedAt)
+  const printedAtEn = formatTime(candidate.updatedAt, 'en')
+  const printedAtZh = formatTime(candidate.updatedAt, 'zh')
   if (lead < 0n) {
     return {
       key: 'at-or-before',
       status: 'fail',
       title,
       detail: {
-        en: `Printed ${printedAt}, which is ${secs(-lead)}s AFTER the ${at} boundary.`,
-        zh: `报价时间 ${printedAt}，比边界 ${at} 晚了 ${secs(-lead)} 秒。`,
+        en: `Printed ${printedAtEn}, which is ${secs(-lead)}s AFTER the ${atEn} boundary.`,
+        zh: `报价时间 ${printedAtZh}，比边界 ${atZh} 晚了 ${secs(-lead)} 秒。`,
       },
     }
   }
@@ -264,7 +266,7 @@ function atOrBeforeCheck(spec: BoundarySpec, candidate: OraclePrint | undefined,
       key: 'at-or-before',
       status: 'pass',
       title,
-      detail: { en: `Printed exactly on the ${at} boundary.`, zh: `报价时间恰好落在边界 ${at} 上。` },
+      detail: { en: `Printed exactly on the ${atEn} boundary.`, zh: `报价时间恰好落在边界 ${atZh} 上。` },
     }
   }
   return {
@@ -272,8 +274,8 @@ function atOrBeforeCheck(spec: BoundarySpec, candidate: OraclePrint | undefined,
     status: 'pass',
     title,
     detail: {
-      en: `Printed ${printedAt}, ${secs(lead)}s before the ${at} boundary.`,
-      zh: `报价时间 ${printedAt}，比边界 ${at} 早 ${secs(lead)} 秒。`,
+      en: `Printed ${printedAtEn}, ${secs(lead)}s before the ${atEn} boundary.`,
+      zh: `报价时间 ${printedAtZh}，比边界 ${atZh} 早 ${secs(lead)} 秒。`,
     },
   }
 }
@@ -338,7 +340,8 @@ function lastCheck(
     zh: '它是符合条件的最后一笔——紧接着的下一笔已经越过边界',
   }
   const id = spec.oracleId.toString()
-  const at = formatTime(spec.boundaryTs)
+  const atEn = formatTime(spec.boundaryTs, 'en')
+  const atZh = formatTime(spec.boundaryTs, 'zh')
   if (latestRoundId === undefined) {
     return {
       check: {
@@ -362,8 +365,8 @@ function lastCheck(
           status: 'pass',
           title,
           detail: {
-            en: `Round ${id} is the feed’s newest print and nothing follows it, so it is trivially the last one at or before ${at}.`,
-            zh: `轮次 ${id} 就是喂价的最新一笔、其后没有任何报价，因此它必然是 ${at} 之前（含）的最后一笔。`,
+            en: `Round ${id} is the feed’s newest print and nothing follows it, so it is trivially the last one at or before ${atEn}.`,
+            zh: `轮次 ${id} 就是喂价的最新一笔、其后没有任何报价，因此它必然是 ${atZh} 之前（含）的最后一笔。`,
           },
         },
       }
@@ -384,7 +387,8 @@ function lastCheck(
     }
   }
 
-  const nextAt = formatTime(successor.updatedAt)
+  const nextAtEn = formatTime(successor.updatedAt, 'en')
+  const nextAtZh = formatTime(successor.updatedAt, 'zh')
   const nextId = successor.roundId.toString()
   const gap = BigInt(successor.updatedAt) - spec.boundaryTs
   if (gap <= 0n) {
@@ -395,8 +399,8 @@ function lastCheck(
         status: 'fail',
         title,
         detail: {
-          en: `Round ${nextId} printed ${nextAt}, still at or before the ${at} boundary — so round ${id} was not the last qualifying print.`,
-          zh: `轮次 ${nextId} 的报价时间为 ${nextAt}，仍在边界 ${at} 之前（含）——因此轮次 ${id} 并不是符合条件的最后一笔。`,
+          en: `Round ${nextId} printed ${nextAtEn}, still at or before the ${atEn} boundary — so round ${id} was not the last qualifying print.`,
+          zh: `轮次 ${nextId} 的报价时间为 ${nextAtZh}，仍在边界 ${atZh} 之前（含）——因此轮次 ${id} 并不是符合条件的最后一笔。`,
         },
       },
     }
@@ -408,8 +412,8 @@ function lastCheck(
       status: 'pass',
       title,
       detail: {
-        en: `The next print, round ${nextId}, landed ${nextAt} — ${secs(gap)}s past the ${at} boundary.`,
-        zh: `下一笔报价是轮次 ${nextId}，时间 ${nextAt}——比边界 ${at} 晚 ${secs(gap)} 秒。`,
+        en: `The next print, round ${nextId}, landed ${nextAtEn} — ${secs(gap)}s past the ${atEn} boundary.`,
+        zh: `下一笔报价是轮次 ${nextId}，时间 ${nextAtZh}——比边界 ${atZh} 晚 ${secs(gap)} 秒。`,
       },
     },
   }

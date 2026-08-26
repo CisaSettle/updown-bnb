@@ -12,6 +12,7 @@
  *    walks the history newest-first in windows, and whatever it has not reached yet is counted,
  *    disclosed and one press away — never silently dropped.
  */
+import type { Text } from './i18n'
 import { asBigInt, pick } from './read'
 
 /** How many rows the table shows before "Load older rounds". */
@@ -202,26 +203,40 @@ export function claimPlan(
 }
 
 /**
+ * How the unsearched-history notice reads around its own count. The number itself is rendered
+ * separately (in bold), so each language wraps it the way its own grammar does: English agrees the
+ * verb with it — "1 older rounds have not been searched" is a number on screen the user is being
+ * asked to act on, written wrong — and 中文 puts a measure word and the noun after it instead.
+ */
+export function olderRoundsNotice(older: bigint): { before: Text; after: Text } {
+  return {
+    before: { en: '', zh: '还有 ' },
+    after: {
+      en: ` older round${older === 1n ? '' : 's'} ha${older === 1n ? 's' : 've'} not been searched for unclaimed winnings yet, so nothing from them is in the amount above. Whatever they hold stays on chain and stays claimable — keep searching until this notice is gone.`,
+      zh: ' 个更早的轮次还没有搜过有没有未领取的奖金，所以上面那个金额里不包括它们。它们里面的钱一直在链上，也一直可以领——继续搜，直到这条提示消失。',
+    },
+  }
+}
+
+/**
  * The Claim-all button's copy.
  *
  * The one thing it may never do is say "all" when the scan has not covered the whole history or a
  * probe went unread: the user would read a claimed-out balance off a button that only ever looked
- * at part of their positions. Say what is actually being sent instead.
+ * at part of their positions. 全部 carries exactly the same promise in 中文, so it is held to the
+ * same rule — 领取已找到的 N 个 where the search is not finished.
  */
-/**
- * How the unsearched-history notice names its own count. The number itself is rendered separately
- * (in bold), so the verb has to agree with it here — "1 older rounds have not been searched" is a
- * number on screen the user is being asked to act on, written wrong.
- */
-export function olderRoundsPhrase(older: bigint): string {
-  return older === 1n ? 'older round has' : 'older rounds have'
-}
-
-export function claimAllLabel(args: { batch: number; collectable: number; complete: boolean }): string {
+export function claimAllLabel(args: { batch: number; collectable: number; complete: boolean }): Text {
   const { batch, collectable, complete } = args
-  if (batch === 0) return complete ? 'Claim all' : 'Nothing found yet'
-  if (batch < collectable) return `Claim ${batch} of ${collectable}`
-  return complete ? `Claim all (${batch})` : `Claim ${batch} found`
+  if (batch === 0) {
+    return complete ? { en: 'Claim all', zh: '全部领取' } : { en: 'Nothing found yet', zh: '暂未找到' }
+  }
+  if (batch < collectable) {
+    return { en: `Claim ${batch} of ${collectable}`, zh: `领取 ${batch}/${collectable}` }
+  }
+  return complete
+    ? { en: `Claim all (${batch})`, zh: `全部领取（${batch}）` }
+    : { en: `Claim ${batch} found`, zh: `领取已找到的 ${batch} 个` }
 }
 
 /**

@@ -13,6 +13,7 @@
  * proxy ids are `phaseId << 64 | aggregatorRoundId`, so the successor of a phase's last round is
  * the first round of the next phase, not `roundId + 1`.
  */
+import type { Text } from './i18n'
 import { isExpired, type Round } from './market'
 import { asBigInt, asNumber, pick } from './read'
 
@@ -261,6 +262,23 @@ export type RefundReason =
   | 'window' // the round's own settlement window elapsed (`_isExpired`)
   | 'voided' // voided on chain for a reason the round's storage does not distinguish
 
+/**
+ * The column headings, which are a claim in themselves.
+ *
+ * `settlement` is the price the chain has recorded; `settling` is the price it *will* settle on but
+ * has not written down yet, and the 中文 has to keep that gap open — 将用于结算的价格, not 结算价 —
+ * because a reader who reads the second as the first is reading a decided round where there is
+ * none. `moveAtClose` names the boundary, not "now": past `closeTs` the move being shown is the one
+ * at the boundary and nowhere else.
+ */
+export const PRICE_LABEL = {
+  live: { en: 'Live price', zh: '实时价格' },
+  settlement: { en: 'Settlement price', zh: '结算价' },
+  settling: { en: 'Settling price', zh: '将用于结算的价格' },
+  move: { en: 'Move', zh: '涨跌' },
+  moveAtClose: { en: 'Move at close', zh: '边界时刻的涨跌' },
+} satisfies Record<string, Text>
+
 export interface PriceView {
   kind: PriceViewKind
   price?: bigint
@@ -268,8 +286,8 @@ export interface PriceView {
   showMove: boolean
   /** True only when that move — or that refund — is what the chain has already committed to. */
   committed: boolean
-  label: string
-  moveLabel: string
+  label: Text
+  moveLabel: Text
   /** Set whenever `kind` is `'refund'`. */
   refundReason?: RefundReason
 }
@@ -308,7 +326,7 @@ export function priceView(args: {
   const { round, nowSeconds, livePrice, boundary } = args
 
   if (!round || round.startTs === 0n) {
-    return { kind: 'none', showMove: false, committed: false, label: 'Live price', moveLabel: 'Move' }
+    return { kind: 'none', showMove: false, committed: false, label: PRICE_LABEL.live, moveLabel: PRICE_LABEL.move }
   }
 
   if (round.settled && !round.voided) {
@@ -317,8 +335,8 @@ export function priceView(args: {
       price: round.closePrice,
       showMove: true,
       committed: true,
-      label: 'Settlement price',
-      moveLabel: 'Move',
+      label: PRICE_LABEL.settlement,
+      moveLabel: PRICE_LABEL.move,
     }
   }
 
@@ -330,14 +348,21 @@ export function priceView(args: {
       price: round.settled ? round.closePrice : undefined,
       showMove: false,
       committed: true,
-      label: 'Settlement price',
-      moveLabel: 'Move',
+      label: PRICE_LABEL.settlement,
+      moveLabel: PRICE_LABEL.move,
       refundReason: refundReasonFor(round, nowSeconds),
     }
   }
 
   if (BigInt(Math.floor(nowSeconds)) < round.closeTs) {
-    return { kind: 'live', price: livePrice, showMove: true, committed: false, label: 'Live price', moveLabel: 'Move' }
+    return {
+      kind: 'live',
+      price: livePrice,
+      showMove: true,
+      committed: false,
+      label: PRICE_LABEL.live,
+      moveLabel: PRICE_LABEL.move,
+    }
   }
 
   // Past close, not yet executed. `livePrice` is now a number the contract will not settle on.
@@ -353,8 +378,8 @@ export function priceView(args: {
         price: boundary.price,
         showMove: false,
         committed: false,
-        label: 'Settling price',
-        moveLabel: 'Move at close',
+        label: PRICE_LABEL.settling,
+        moveLabel: PRICE_LABEL.moveAtClose,
         refundReason: oneSided ? 'one-sided' : 'tie',
       }
     }
@@ -363,8 +388,8 @@ export function priceView(args: {
       price: boundary.price,
       showMove: true,
       committed: false,
-      label: 'Settling price',
-      moveLabel: 'Move at close',
+      label: PRICE_LABEL.settling,
+      moveLabel: PRICE_LABEL.moveAtClose,
     }
   }
   if (boundary?.status === 'stale') {
@@ -374,12 +399,18 @@ export function priceView(args: {
       // The refund is certain — the prints at or before a passed boundary are frozen — but the
       // chain has not marked it yet, and `refundable()` stays false until the window elapses.
       committed: false,
-      label: 'Settling price',
-      moveLabel: 'Move at close',
+      label: PRICE_LABEL.settling,
+      moveLabel: PRICE_LABEL.moveAtClose,
       refundReason: 'no-print',
     }
   }
-  return { kind: 'pending', showMove: false, committed: false, label: 'Settling price', moveLabel: 'Move at close' }
+  return {
+    kind: 'pending',
+    showMove: false,
+    committed: false,
+    label: PRICE_LABEL.settling,
+    moveLabel: PRICE_LABEL.moveAtClose,
+  }
 }
 
 /** True while the boundary price is worth resolving on chain: past close, still unresolved. */
