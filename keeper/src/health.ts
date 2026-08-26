@@ -190,8 +190,14 @@ export type BalanceState =
  *
  * `txCostWei` is the cost of one keeper transaction at the gas price the retry ladder is allowed to
  * reach — the price it will actually pay on a busy chain, which is exactly when a round must not be
- * missed. The unfunded line is capped at the operator's own floor so a deliberately low floor is
- * never overruled, and is at least 1 wei so an empty account can never read as healthy.
+ * missed. It is the hard floor, always, and it is at least 1 wei so an empty account can never read
+ * as healthy.
+ *
+ * `minBalanceWei` is the operator's own line, and it can only ever make the keeper unhealthy
+ * **earlier** — never later. Letting a configured floor *below* the cost of one transaction replace
+ * that cost was the bug: at high gas a balance above `MIN_BALANCE_BNB` but below what a transaction
+ * actually costs reported healthy while the keeper could neither relay nor settle a single round.
+ * An account that cannot fund one transaction is unfunded whatever the configuration says.
  */
 export function balanceVerdict(
   balanceWei: bigint | null,
@@ -199,9 +205,7 @@ export function balanceVerdict(
   txCostWei: bigint,
 ): BalanceState {
   if (balanceWei === null) return 'unknown';
-  const cost = txCostWei > 0n ? txCostWei : 1n;
-  let hardFloor = minBalanceWei > 0n && minBalanceWei < cost ? minBalanceWei : cost;
-  if (hardFloor < 1n) hardFloor = 1n;
+  const hardFloor = txCostWei > 0n ? txCostWei : 1n;
   if (balanceWei < hardFloor) return 'unfunded';
   if (balanceWei < minBalanceWei) return 'low';
   return 'ok';

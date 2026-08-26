@@ -14,6 +14,7 @@
  * the first round of the next phase, not `roundId + 1`.
  */
 import { isExpired, type Round } from './market'
+import { asBigInt, asNumber, pick } from './read'
 
 /** `roundId = phaseId << PHASE_SHIFT | aggregatorRoundId`. */
 export const PHASE_SHIFT = 64n
@@ -45,6 +46,51 @@ export function isUsablePrint(print: OraclePrint | undefined, nowSeconds: number
   if (print.answer <= 0n) return false
   if (print.updatedAt === 0) return false
   return print.updatedAt <= Math.floor(nowSeconds)
+}
+
+/** One raw `getRoundData` / `latestRoundData` tuple, as viem decodes it. */
+export function toPrint(raw: unknown): OraclePrint | undefined {
+  const arr = Array.isArray(raw) ? raw : undefined
+  const roundId = asBigInt(arr?.[0])
+  const answer = asBigInt(arr?.[1])
+  const updatedAt = asNumber(arr?.[3])
+  if (roundId === undefined || answer === undefined || updatedAt === undefined) return undefined
+  return { roundId, answer, updatedAt }
+}
+
+/**
+ * Mirror of `_tryLatestRoundId`: the feed's latest round id, and only when the latest print is
+ * itself usable — `answer > 0` and `updatedAt != 0`.
+ *
+ * Taking `latestRoundData()[0]` on its own is not the same thing. `_priceAt` bails the moment
+ * `_tryLatestRoundId` fails, so against an unusable latest print the chain can prove *no* boundary
+ * round id at all: every `executeRound` reverts with `InvalidBoundaryProof` until the feed prints
+ * again. A mirror that kept the id would go on "proving" a settling price the chain refuses —
+ * exactly the assertion this file exists to prevent.
+ *
+ * Deliberately narrower than `_tryRound`: no `updatedAt <= block.timestamp` test and no id
+ * round-trip check, because the Solidity does not make them here either. A stricter mirror rejects
+ * boundaries the chain would settle, which is the same bug pointed the other way.
+ */
+export function latestUsableRoundId(raw: unknown): bigint | undefined {
+  return usableLatestPrint(raw)?.roundId
+}
+
+/**
+ * The whole latest print, under the same `_tryLatestRoundId` rule — `answer > 0` and
+ * `updatedAt != 0` — for the places that need the price rather than the id.
+ *
+ * A print the chain calls unusable is not "the price is $0.00"; it is "there is no price". Both
+ * `_tryRound` and `_tryLatestRoundId` throw such a print away, and `executeRound` will not settle
+ * on one, so rendering it would draw a strike-relative move — a winner — off a number the contract
+ * refuses to use. One rule, one place, so the id path and the price path can never drift apart.
+ */
+export function usableLatestPrint(raw: unknown): OraclePrint | undefined {
+  const print = toPrint(raw)
+  if (!print) return undefined
+  if (print.answer <= 0n) return undefined
+  if (print.updatedAt === 0) return undefined
+  return print
 }
 
 /**
@@ -133,6 +179,47 @@ export function proveBoundaryPrice(args: {
   if (next === undefined) return { status: 'unresolved' }
   if (BigInt(next) <= targetTs) return { status: 'unresolved' } // candidate is not the last print
   return proven
+}
+
+/**
+ * Every `getRoundData` id the mirror has to read: the candidate `findRoundIdAt` returned, plus
+ * every id `_successorUpdatedAt` would consult, in its order.
+ *
+ * An empty list means the proof cannot even be attempted — either the chain could not name a
+ * candidate, or `_tryLatestRoundId` fails, in which case `_priceAt` returns false for every id and
+ * there is nothing to read.
+ */
+export function boundaryReadIds(candidateId: bigint | undefined, latestRoundId: bigint | undefined): bigint[] {
+  if (candidateId === undefined || latestRoundId === undefined) return []
+  if (candidateId === latestRoundId) return [candidateId] // no successor check needed
+  return [candidateId, ...successorCandidates(candidateId, latestRoundId)]
+}
+
+/**
+ * `proveBoundaryPrice` driven straight from the raw multicall results for `boundaryReadIds`, so
+ * the hook is a wagmi wrapper and the decision itself is testable against the Solidity.
+ */
+export function boundaryProofFromReads(args: {
+  targetTs: bigint
+  oracleMaxAge: number
+  nowSeconds: number
+  candidateId?: bigint
+  /** Already through `latestUsableRoundId`; undefined means `_tryLatestRoundId` would fail. */
+  latestRoundId?: bigint
+  ids: readonly bigint[]
+  /** Raw `useReadContracts` entries, positionally matching `ids`. */
+  results?: readonly unknown[]
+}): BoundaryProof {
+  const { targetTs, oracleMaxAge, nowSeconds, candidateId, latestRoundId, ids, results } = args
+  const prints = new Map<string, OraclePrint>()
+  ids.forEach((id, i) => {
+    const print = toPrint(pick(results, i))
+    // `_tryRound` rejects an answer returned for a different id than the one asked about.
+    if (print && print.roundId === id) prints.set(id.toString(), print)
+  })
+
+  const candidate = candidateId === undefined ? undefined : prints.get(candidateId.toString())
+  return proveBoundaryPrice({ targetTs, oracleMaxAge, nowSeconds, candidate, latestRoundId, prints })
 }
 
 /** What the card renders opposite the strike. */

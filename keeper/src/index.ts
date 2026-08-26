@@ -70,6 +70,23 @@ async function main(): Promise<void> {
     return;
   }
 
+  // An RPC that answered the chain-id check and then failed every market read leaves every market
+  // unbootstrapped. The keeper stays up by default, reporting unhealthy and retrying, because the
+  // markets come back on their own the moment the reads succeed. Handing the problem to a supervisor
+  // instead is a deliberate configuration, not the side effect of an exception thrown before the
+  // retry timer existed. (An RPC that is unreachable outright fails `keeper.start()` above, at the
+  // chain-id check, and is handled by the catch there.)
+  if (keeper.totalBootstrapFailure !== null && config.exitOnTotalBootstrapFailure) {
+    logger.error('no market could be bootstrapped; exiting for the supervisor to restart', {
+      detail: keeper.totalBootstrapFailure,
+      exitOnTotalBootstrapFailure: true,
+    });
+    await keeper.stop();
+    await server?.close();
+    process.exitCode = 1;
+    return;
+  }
+
   let shuttingDown = false;
   const shutdown = (signal: string): void => {
     if (shuttingDown) return;

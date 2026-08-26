@@ -126,15 +126,58 @@ function clampDelay(raw: number, options: WakeOptions): { delayMs: number; cappe
 }
 
 /**
- * A relay print is only usable for a boundary when `boundaryTs - updatedAt <= oracleMaxAge`, so the
- * relay must never be scheduled further ahead of the boundary than that budget. Half the budget
- * leaves room for the tx to be mined a little late and still qualify.
+ * Margin held back from the oracle staleness budget when scheduling a relay.
+ *
+ * `_priceAt` accepts a print whose age at the boundary is anything up to `oracleMaxAge`, so the lead
+ * may spend that **whole** budget. Capping it at half the budget was an arbitrary safety factor that
+ * cost the schedule half its relay capacity: with six 20s relays on a 150s feed the wake was only
+ * 75s early, the later relays dequeued after `lockTs`, and their rounds voided into refunds.
+ *
+ * What genuinely has to be held back is small and concrete. The wake is timed off the keeper's
+ * *local* clock while the budget is measured against the *chain* clock, and a print's `updatedAt` is
+ * the timestamp of whichever block it lands in — so a couple of BSC blocks of block-time granularity
+ * plus a few seconds of tolerable clock drift. That is the whole of it: the real backstop is the
+ * send-time guard in `market.ts`, which defers a relay whose print would already be older than
+ * `oracleMaxAge` measured against the chain clock itself. This margin only keeps the schedule from
+ * walking into that deferral.
  */
-export function clampRelayLead(relayLeadMs: number, oracleMaxAgeSec: number): number {
+export const RELAY_LEAD_SAFETY_MS = 10_000;
+
+/**
+ * A relay print is only usable for a boundary when `boundaryTs - updatedAt <= oracleMaxAge`, so the
+ * relay must never be scheduled further ahead of the boundary than that budget — minus
+ * `RELAY_LEAD_SAFETY_MS` for block time and clock skew, and no more.
+ */
+export function clampRelayLead(
+  relayLeadMs: number,
+  oracleMaxAgeSec: number,
+  safetyMs: number = RELAY_LEAD_SAFETY_MS,
+): number {
   const budgetMs = Math.max(0, oracleMaxAgeSec) * 1000;
-  const safeMs = Math.floor(budgetMs / 2);
+  if (budgetMs <= 0) return 0;
+  const margin = Math.max(0, safetyMs);
+  // A feed whose entire budget is narrower than the margin has nothing to hold back; half of a tiny
+  // budget still beats refusing to lead at all.
+  const safeMs = budgetMs > margin ? budgetMs - margin : Math.floor(budgetMs / 2);
   if (safeMs <= 0) return 0;
   return Math.max(1_000, Math.min(relayLeadMs, safeMs));
+}
+
+/**
+ * How many relays a single boundary can genuinely serve, one key and therefore one queue.
+ *
+ * This is the number the feed count has to be checked against: past it the staleness budget runs out
+ * before the queue does, so the last relays cannot land at or before `lockTs` however early the
+ * keeper wakes, and those markets' rounds void. Never less than 1.
+ */
+export function relayCapacity(
+  perRelayLeadMs: number,
+  oracleMaxAgeSec: number,
+  safetyMs: number = RELAY_LEAD_SAFETY_MS,
+): number {
+  const per = Number.isFinite(perRelayLeadMs) ? Math.max(1, Math.floor(perRelayLeadMs)) : 1;
+  const maxLead = clampRelayLead(Number.MAX_SAFE_INTEGER, oracleMaxAgeSec, safetyMs);
+  return Math.max(1, Math.floor(maxLead / per));
 }
 
 /**
@@ -145,7 +188,9 @@ export function clampRelayLead(relayLeadMs: number, oracleMaxAgeSec: number): nu
  * makes that true without ever sending two transactions from one key at once.
  *
  * Still clamped by the oracle staleness budget: a print that lands too far before the boundary is
- * rejected by `_priceAt` just as surely as one that lands after it.
+ * rejected by `_priceAt` just as surely as one that lands after it. The clamp is the whole budget
+ * less `RELAY_LEAD_SAFETY_MS`, which is what the contract actually permits — see `relayCapacity`
+ * for how many relays that buys.
  */
 export function computeRelayLeadMs(perRelayLeadMs: number, relaySlots: number, oracleMaxAgeSec: number): number {
   const slots = Number.isFinite(relaySlots) ? Math.max(1, Math.floor(relaySlots)) : 1;

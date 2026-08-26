@@ -1,18 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { zeroAddress } from 'viem'
-import { useReadContract, useReadContracts } from 'wagmi'
+import { useConfig, useReadContract, useReadContracts } from 'wagmi'
+import { readContracts } from 'wagmi/actions'
 import { marketViewAbi } from '../abi'
 import { CHAIN_ID } from '../config/chains'
 import type { Address } from '../config/deployment'
 import { positionStatus, settledPayout, toRound, type BetInfo, type PositionStatus, type Round } from '../lib/market'
 import {
   POSITION_PAGE,
+  claimableNow,
   collectabilityFromPayout,
   collectableSelection,
   dropClaimed,
   epochPages,
   orderNewestFirst,
+  scanDepth,
   splitLoaded,
+  unreadClaims,
   type Collectability,
 } from '../lib/positions'
 import { asBigInt, asBigIntArray, asBool, pick } from '../lib/read'
@@ -54,11 +58,29 @@ const DETAIL_READS_PER_EPOCH = 5
  *  - rendered rows: full detail, five reads per epoch, on the live cadence;
  *  - the older tail: one `pendingPayout` read per epoch, fetched once — those rounds resolved long
  *    ago and only change when the user collects them, which refetches anyway.
+ *
+ * The scan reaches `EPOCH_SCAN_STEP` epochs back and `scanMore()` takes it another step, with
+ * `olderUnscanned` naming exactly how many are still unprobed. There is no depth past which money
+ * stops being found: a history longer than one step is disclosed and reachable, never cut off.
+ *
+ * Those probes are minutes-stale by design, so `revalidateClaimable` re-reads `pendingPayout` for
+ * the exact epochs a claim is about to carry. Anything the chain no longer pays leaves the array
+ * before it is sent, because `claim` reverts all of it on one already-claimed epoch.
  */
+export interface RevalidatedClaim {
+  /** Epochs the chain still pays right now — exactly what may be sent to `claim`. */
+  epochs: bigint[]
+  /** Epochs whose fresh `pendingPayout` did not come back; dropped from the batch, never assumed. */
+  unread: number
+}
+
 export function usePositions(market: Address | undefined, user: Address | undefined, nowSeconds: number) {
   const enabled = Boolean(market) && Boolean(user)
 
+  const config = useConfig()
   const [visibleCount, setVisibleCount] = useState(POSITION_PAGE)
+  // How many `EPOCH_SCAN_STEP` windows of history the collectability scan currently covers.
+  const [scanSteps, setScanSteps] = useState(1)
   // Epochs a confirmed `claim` collected in this session. The chain reads still report them as
   // collectable until they refetch, and `claim` reverts the whole batch on an already-claimed
   // epoch — so they must leave the batch the moment the receipt lands, not when the reads catch up.
@@ -68,6 +90,7 @@ export function usePositions(market: Address | undefined, user: Address | undefi
   // account's collected rounds — for another.
   useEffect(() => {
     setVisibleCount(POSITION_PAGE)
+    setScanSteps(1)
     setClaimedThisSession(new Set())
   }, [market, user])
 
@@ -95,7 +118,9 @@ export function usePositions(market: Address | undefined, user: Address | undefi
     return asBigInt(raw?.[1])
   }, [totalQuery.data])
 
-  const { pages, truncated } = useMemo(() => epochPages(total ?? 0n), [total])
+  // Never shallower than the rendered rows, so a row on screen is always inside the scan.
+  const depth = useMemo(() => scanDepth(scanSteps, visibleCount), [scanSteps, visibleCount])
+  const { pages, older } = useMemo(() => epochPages(total ?? 0n, { scanned: depth }), [total, depth])
 
   const pagesQuery = useReadContracts({
     contracts: pages.map(
@@ -257,6 +282,47 @@ export function usePositions(market: Address | undefined, user: Address | undefi
 
   const loadMore = useCallback(() => setVisibleCount((n) => n + POSITION_PAGE), [])
 
+  /** Take the collectability scan another `EPOCH_SCAN_STEP` epochs back into the user's history. */
+  const scanMore = useCallback(() => setScanSteps((n) => n + 1), [])
+
+  /**
+   * Re-read `pendingPayout` for the epochs a claim is about to carry, and keep only the ones the
+   * chain still pays right now.
+   *
+   * The cached tail probes are deliberately long-lived, so they cannot see the same wallet
+   * claiming an epoch in another tab. `claim` reverts the WHOLE array on one already-claimed epoch
+   * (`AlreadyClaimed`), so the batch is rebuilt from a fresh read at send time rather than from
+   * anything cached. A read that throws propagates: refusing to send beats sending blind.
+   *
+   * `unread` is what separates "the chain says these are gone" from "we could not ask". They are
+   * indistinguishable in the epoch list — both leave it empty — and only one of them is something
+   * the UI is entitled to tell the user about their money.
+   */
+  const revalidateClaimable = useCallback(
+    async (candidates: readonly bigint[]): Promise<RevalidatedClaim> => {
+      // Nothing was read, so nothing is known: that is `unread`, never "already collected".
+      if (!market || !user || candidates.length === 0) {
+        return { epochs: [], unread: candidates.length }
+      }
+      const results = await readContracts(config, {
+        allowFailure: true,
+        contracts: candidates.map(
+          (epoch) =>
+            ({
+              chainId: CHAIN_ID,
+              address: market,
+              abi: marketViewAbi,
+              functionName: 'pendingPayout',
+              args: [epoch, user],
+            }) as const,
+        ),
+      })
+      const fresh = results as readonly unknown[]
+      return { epochs: claimableNow(candidates, fresh), unread: unreadClaims(candidates, fresh) }
+    },
+    [config, market, user],
+  )
+
   const refetch = useCallback(() => {
     void totalQuery.refetch()
     void pagesQuery.refetch()
@@ -270,15 +336,25 @@ export function usePositions(market: Address | undefined, user: Address | undefi
     collectableTotal: selection.total,
     total: total ?? 0n,
     /** More history exists than is rendered; one "Load older rounds" press away. */
-    hasMore: epochs.length > visible.length,
+    hasMore: epochs.length > visible.length || older > 0n,
     loadMore,
+    /** Epochs older than the current scan window — counted, shown, and one `scanMore()` away. */
+    olderUnscanned: older,
+    scanMore,
     /** Call with the epochs a `claim` transaction confirmed, so the next batch cannot re-send them. */
     markClaimed,
     /**
-     * True when the user's history is longer than we scan, or a page/probe did not come back.
-     * Either way some epoch's collectability is unknown, and the UI must not pretend otherwise.
+     * Rebuilds a claim array from a fresh on-chain read; call it immediately before sending.
+     * `unread` counts the epochs the read could not answer for — those are dropped from the batch,
+     * and they are the reason an empty result does not mean "already collected".
      */
-    incomplete: truncated || (!scanning && (missingPages > 0 || unscanned > 0)),
+    revalidateClaimable,
+    /**
+     * True when history older than the scan window is still unprobed, or a page/probe did not come
+     * back. Either way some epoch's collectability is unknown, and the UI must not pretend
+     * otherwise — least of all by calling a partial batch "Claim all".
+     */
+    incomplete: older > 0n || (!scanning && (missingPages > 0 || unscanned > 0)),
     isLoading: enabled && (totalQuery.isLoading || (total !== undefined && total > 0n && scanning)),
     error: totalQuery.error ?? pagesQuery.error ?? tailScan.error ?? detailQuery.error ?? undefined,
     refetch,

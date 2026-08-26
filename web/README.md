@@ -177,7 +177,14 @@ connected to the wrong network still shows correct data (with a "switch network"
   missed settlement window, or a pause. This is stated in plain language on the round card, in the
   positions table and in the history table.
 - **Claim all** batches only epochs where `claimable || refundable` is true, because `claim()`
-  reverts if any epoch in the array is not collectable.
+  reverts the **whole array** if any epoch in it is not collectable. Two consequences the UI holds
+  to: the batch is rebuilt from a fresh `pendingPayout` read taken at the moment you press it (the
+  cached scan cannot see the same wallet claiming in another tab), and the button never says "all"
+  while any part of the history is still unsearched or unread — it says how many it actually found.
+- **The search for collectable rounds has no ceiling.** `userEpochs` is paged, so the scan walks
+  the history newest-first in windows; whatever a window has not reached yet is counted, shown, and
+  one press away. An unclaimed win is never dropped for being old — the money is on chain either
+  way, and the UI must keep offering it.
 - BSC-USDT has **18 decimals**. Nothing in the UI hard-codes a decimal count — it reads
   `decimals()` from the settlement asset, and the bet button stays disabled until that read has
   actually landed, so an amount is never parsed against a guessed decimal count.

@@ -5,13 +5,13 @@ import { aggregatorV3Abi, marketViewAbi } from '../abi'
 import { CHAIN_ID } from '../config/chains'
 import type { Address } from '../config/deployment'
 import type { Round } from '../lib/market'
-import { asBigInt, asBool, asNumber, pick } from '../lib/read'
+import { asBigInt, asBool } from '../lib/read'
 import {
+  boundaryProofFromReads,
+  boundaryReadIds,
+  latestUsableRoundId,
   needsBoundaryPrice,
-  proveBoundaryPrice,
-  successorCandidates,
   type BoundaryProof,
-  type OraclePrint,
 } from '../lib/settlement'
 
 /**
@@ -19,15 +19,6 @@ import {
  * runs, so the answer is a handful of prints back; this is a safety rail, not a budget.
  */
 const FIND_MAX_STEPS = 256n
-
-function toPrint(raw: unknown): OraclePrint | undefined {
-  const arr = Array.isArray(raw) ? raw : undefined
-  const roundId = asBigInt(arr?.[0])
-  const answer = asBigInt(arr?.[1])
-  const updatedAt = asNumber(arr?.[3])
-  if (roundId === undefined || answer === undefined || updatedAt === undefined) return undefined
-  return { roundId, answer, updatedAt }
-}
 
 /**
  * Resolve the price the chain will settle `round.closeTs` on — the last feed print at or before
@@ -37,7 +28,7 @@ function toPrint(raw: unknown): OraclePrint | undefined {
  *   1. `findRoundIdAt(closeTs, 0, n)` on the market + `latestRoundData()` on the feed.
  *   2. `getRoundData` for the candidate and for every id `_successorUpdatedAt` would consult.
  *
- * Everything is then judged by `proveBoundaryPrice`, which is `_priceAt` line for line. If the
+ * Everything is then judged by `boundaryProofFromReads`, which is `_priceAt` line for line. If the
  * proof does not stand up the caller gets `unresolved` and the card says so instead of showing a
  * price the contract will not honour.
  */
@@ -79,17 +70,13 @@ export function useBoundaryPrice(
     return found ? id : undefined
   }, [findQuery.data])
 
-  const latestRoundId = useMemo(() => {
-    const arr = Array.isArray(latestQuery.data) ? latestQuery.data : undefined
-    return asBigInt(arr?.[0])
-  }, [latestQuery.data])
+  // `_tryLatestRoundId`, not `latestRoundData()[0]`: an unusable latest print (`answer <= 0` or
+  // `updatedAt == 0`) makes `_priceAt` fail for *every* round id, so the mirror can prove nothing
+  // and must fall back to the pending state rather than assert an outcome the chain would reject.
+  const latestRoundId = useMemo(() => latestUsableRoundId(latestQuery.data), [latestQuery.data])
 
   // The candidate plus every id the contract's own successor walk would look at, in its order.
-  const ids = useMemo(() => {
-    if (candidateId === undefined || latestRoundId === undefined) return []
-    if (candidateId === latestRoundId) return [candidateId] // no successor check needed
-    return [candidateId, ...successorCandidates(candidateId, latestRoundId)]
-  }, [candidateId, latestRoundId])
+  const ids = useMemo(() => boundaryReadIds(candidateId, latestRoundId), [candidateId, latestRoundId])
 
   const printsQuery = useReadContracts({
     contracts: ids.map(
@@ -108,22 +95,14 @@ export function useBoundaryPrice(
   return useMemo(() => {
     if (!wanted || boundaryTs === undefined) return { proof: undefined, isLoading: false }
 
-    const data = printsQuery.data as readonly unknown[] | undefined
-    const prints = new Map<string, OraclePrint>()
-    ids.forEach((id, i) => {
-      const print = toPrint(pick(data, i))
-      // `_tryRound` rejects an answer for a different id than the one asked about.
-      if (print && print.roundId === id) prints.set(id.toString(), print)
-    })
-
-    const candidate = candidateId === undefined ? undefined : prints.get(candidateId.toString())
-    const proof = proveBoundaryPrice({
+    const proof = boundaryProofFromReads({
       targetTs: boundaryTs,
       oracleMaxAge,
       nowSeconds,
-      candidate,
+      candidateId,
       latestRoundId,
-      prints,
+      ids,
+      results: printsQuery.data as readonly unknown[] | undefined,
     })
 
     const isLoading = findQuery.isLoading || latestQuery.isLoading || (ids.length > 0 && printsQuery.isLoading)

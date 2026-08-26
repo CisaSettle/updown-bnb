@@ -173,12 +173,30 @@ describe('balanceVerdict', () => {
     expect(balanceVerdict(FLOOR, FLOOR, ONE_TX)).toBe('ok');
   });
 
-  it('never overrules an operator who deliberately set a lower floor', () => {
-    // Floor 0.01 BNB with a 0.03 BNB worst-case transaction: the operator's line is the hard one,
-    // so a 0.02 BNB balance is not screamed about as unfunded.
+  it('lets a low configured floor warn earlier, never make the real floor later', () => {
+    // Floor 0.01 BNB with a 0.03 BNB worst-case transaction. A 0.02 BNB balance is above the
+    // operator's line and below the cost of one transaction: the keeper can neither relay nor
+    // settle, so it is unfunded. Letting the configured floor REPLACE the transaction cost reported
+    // that account healthy while every round it was due to settle voided.
     const lowFloor = 10_000_000_000_000_000n;
-    expect(balanceVerdict(20_000_000_000_000_000n, lowFloor, ONE_TX)).toBe('ok');
+    expect(balanceVerdict(20_000_000_000_000_000n, lowFloor, ONE_TX)).toBe('unfunded');
     expect(balanceVerdict(lowFloor - 1n, lowFloor, ONE_TX)).toBe('unfunded');
+    // Above the transaction cost the operator's floor is the only thing left to trip, and it is
+    // already below it — so nothing does.
+    expect(balanceVerdict(ONE_TX, lowFloor, ONE_TX)).toBe('ok');
+  });
+
+  it('makes a HIGH configured floor bite earlier, which is the direction that is allowed', () => {
+    // The operator's floor may only ever move the verdict earlier: above the transaction cost but
+    // below the floor is 'low' (warn), and the hard line stays where the chain put it.
+    expect(balanceVerdict(FLOOR - 1n, FLOOR, ONE_TX)).toBe('low');
+    expect(balanceVerdict(FLOOR, FLOOR, ONE_TX)).toBe('ok');
+  });
+
+  it('is unfunded below one transaction whatever the floor is set to', () => {
+    for (const floor of [0n, 1n, 10_000_000_000_000_000n, FLOOR, FLOOR * 100n]) {
+      expect(balanceVerdict(ONE_TX - 1n, floor, ONE_TX)).toBe('unfunded');
+    }
   });
 
   it('reports an unread balance as unknown rather than empty', () => {

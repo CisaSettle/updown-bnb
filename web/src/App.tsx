@@ -123,8 +123,11 @@ function MarketView({ market }: { market: Market }) {
         total={positions.total}
         hasMore={positions.hasMore}
         loadMore={positions.loadMore}
+        olderUnscanned={positions.olderUnscanned}
+        scanMore={positions.scanMore}
         incomplete={positions.incomplete}
         markClaimed={positions.markClaimed}
+        revalidateClaimable={positions.revalidateClaimable}
         token={token}
         isLoading={positions.isLoading}
         onClaimed={refreshAll}

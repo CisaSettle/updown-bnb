@@ -6,6 +6,7 @@ import {
   DEFAULT_BACKOFF,
   errorText,
   type BackoffOptions,
+  isContractRejection,
   isNonceError,
 } from '../src/backoff.js';
 
@@ -169,5 +170,42 @@ describe('isNonceError', () => {
     const inner = new Error('nonce too low');
     const outer = Object.assign(new Error('Transaction failed'), { cause: inner });
     expect(isNonceError(outer)).toBe(true);
+  });
+});
+
+describe('isContractRejection', () => {
+  it('recognises the contract itself refusing, which `_tryRound` reads as "no such print"', () => {
+    for (const text of [
+      'execution reverted',
+      'The contract function "getRoundData" reverted with the following reason: No data present.',
+      'No data present',
+      'The contract function "getRoundData" returned no data ("0x")',
+      'invalid opcode',
+    ]) {
+      expect(isContractRejection(new Error(text))).toBe(true);
+    }
+  });
+
+  it('does NOT call a failed read an absence, which is the whole point', () => {
+    // "We could not look" is not "there is nothing there". Reading these as absence is what let a
+    // transient RPC failure stand in for a phase that never existed and time a settleable round out.
+    for (const text of [
+      'HTTP request failed.',
+      'fetch failed',
+      'The request took too long to respond.',
+      'ETIMEDOUT',
+      '429 Too Many Requests',
+      '502 Bad Gateway',
+      'socket hang up',
+    ]) {
+      expect(isContractRejection(new Error(text))).toBe(false);
+    }
+    expect(isContractRejection(undefined)).toBe(false);
+  });
+
+  it('sees through a viem-shaped cause chain', () => {
+    const inner = new Error('execution reverted');
+    const outer = Object.assign(new Error('Contract call failed'), { cause: inner });
+    expect(isContractRejection(outer)).toBe(true);
   });
 });

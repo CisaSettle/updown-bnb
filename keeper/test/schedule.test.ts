@@ -7,9 +7,11 @@ import {
   isPastSettlementWindow,
   missedEpochs,
   relayCanStillLand,
+  relayCapacity,
   secondsUntilLockable,
   DEFAULT_RELAY_LEAD_MS,
   MAX_TIMEOUT_MS,
+  RELAY_LEAD_SAFETY_MS,
   RELAY_MIN_LANDING_MS,
   type RoundTiming,
   type WakeOptions,
@@ -127,11 +129,23 @@ describe('computeNextWake', () => {
       expect(plan.delayMs).toBe(75_000);
     });
 
+    it('serves six relays on a 150s feed instead of clamping half of them out of the window', () => {
+      // The regression this pins. Six 20s relays need 120s of lead; `_priceAt` accepts a print aged
+      // anything up to the full 150s `oracleMaxAge`, so 120s is well inside what the contract
+      // permits. Capping at half the budget woke the keeper only 75s early, the last three relays
+      // dequeued after `lockTs`, and their rounds voided into refunds.
+      const plan = computeNextWake(at(-300), round, { ...relay, relayLeadMs: 20_000, relaySlots: 6 });
+      expect(plan.action).toBe('relay');
+      expect(plan.targetMs).toBe((LOCK_TS - 120) * 1000);
+    });
+
     it('still refuses to lead further than the oracle staleness budget allows', () => {
-      // Six feeds would want 90s of lead, but a print older than half the 150s budget is refused by
-      // `_priceAt` just as surely as a late one, so the lead is clamped rather than the print wasted.
-      const plan = computeNextWake(at(-200), round, { ...relay, relaySlots: 6 });
-      expect(plan.targetMs).toBe((LOCK_TS - 75) * 1000);
+      // Twelve feeds would want 240s of lead on a 150s budget: a print that old at the boundary is
+      // refused by `_priceAt` just as surely as a late one, so the lead stops at the budget less the
+      // block-time/clock-skew margin — 140s, not an arbitrary fraction of it.
+      const plan = computeNextWake(at(-300), round, { ...relay, relayLeadMs: 20_000, relaySlots: 12 });
+      expect(plan.targetMs).toBe((LOCK_TS - 140) * 1000);
+      expect(round.oracleMaxAge * 1000 - 140_000).toBe(RELAY_LEAD_SAFETY_MS);
     });
   });
 });
@@ -147,8 +161,25 @@ describe('computeRelayLeadMs', () => {
     expect(computeRelayLeadMs(20_000, 3, 150)).toBe(60_000);
   });
 
-  it('never exceeds the staleness budget, however many relays share the boundary', () => {
-    expect(computeRelayLeadMs(20_000, 10, 150)).toBe(75_000);
+  it('spends the whole staleness budget, less the safety margin, before it clamps', () => {
+    // 150s budget minus the 10s block-time/clock-skew margin: six 20s relays fit, and the seventh is
+    // the first one the budget itself cannot serve. Half the budget would have stopped at three.
+    expect(computeRelayLeadMs(20_000, 6, 150)).toBe(120_000);
+    expect(computeRelayLeadMs(20_000, 7, 150)).toBe(140_000);
+    expect(computeRelayLeadMs(20_000, 10, 150)).toBe(140_000);
+  });
+
+  it('leads far enough for every relay the boundary can actually carry', () => {
+    // The property that matters is not the number but the relationship: at capacity, the lead must
+    // still be the full `slots * perRelay`, or the last relay dequeues after the boundary.
+    for (const [perRelayMs, ageSec] of [
+      [20_000, 150],
+      [15_000, 150],
+      [30_000, 900],
+    ] as const) {
+      const capacity = relayCapacity(perRelayMs, ageSec);
+      expect(computeRelayLeadMs(perRelayMs, capacity, ageSec)).toBe(capacity * perRelayMs);
+    }
   });
 
   it('treats a missing or nonsensical slot count as one relay', () => {
@@ -177,14 +208,34 @@ describe('relayCanStillLand', () => {
   });
 });
 
+describe('relayCapacity', () => {
+  it('reports how many relays the staleness budget can genuinely carry', () => {
+    // 150s budget, 10s margin, 20s per relay: seven. Half the budget only ever bought three, so a
+    // keeper on six testnet feeds silently voided the tail of every shared boundary.
+    expect(relayCapacity(20_000, 150)).toBe(7);
+    expect(relayCapacity(20_000, 150)).toBeGreaterThanOrEqual(6);
+    // The 1h market's 900s budget carries far more than it will ever be asked to.
+    expect(relayCapacity(20_000, 900)).toBe(44);
+  });
+
+  it('never claims capacity below the caller\'s own relay', () => {
+    expect(relayCapacity(20_000, 1)).toBe(1);
+    expect(relayCapacity(20_000, 0)).toBe(1);
+  });
+});
+
 describe('clampRelayLead', () => {
-  it('keeps a lead that fits inside half the oracle staleness budget', () => {
+  it('keeps a lead that fits inside the oracle staleness budget', () => {
     expect(clampRelayLead(15_000, 150)).toBe(15_000);
+    // The whole budget less the safety margin is allowed, not half of it.
+    expect(clampRelayLead(140_000, 150)).toBe(140_000);
   });
 
   it('shrinks a lead that would make the print too stale at the boundary', () => {
-    // 900s budget on the 1h market, so a 10-minute lead is fine; a 20-minute one is not.
-    expect(clampRelayLead(600_000, 900)).toBe(450_000);
+    // 900s budget on the 1h market: a 10-minute lead is comfortably inside it, a 20-minute one is
+    // not and is cut back to the budget less the block-time/clock-skew margin.
+    expect(clampRelayLead(600_000, 900)).toBe(600_000);
+    expect(clampRelayLead(1_200_000, 900)).toBe(890_000);
   });
 
   it('never returns less than a second of lead', () => {

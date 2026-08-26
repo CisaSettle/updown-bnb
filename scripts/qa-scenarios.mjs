@@ -103,6 +103,20 @@ async function until(ts, label, scenario) {
 }
 
 const read = (market, fn, args = []) => pub.readContract({ address: market, abi: MARKET, functionName: fn, args })
+const usdtOf = (who) => pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [who] })
+
+/**
+ * Claim `epoch` for both accounts and return what each actually received.
+ *
+ * Deltas across the claim itself, never absolute balances: these accounts pay gas and hold stakes
+ * in other rounds, so only the movement caused by this claim means anything.
+ */
+async function claimAndMeasure(market, epoch) {
+  const before = await Promise.all([usdtOf(RUNNER.address), usdtOf(BOB.address)])
+  await Promise.all([send(RUNNER, market, MARKET, 'claim', [[epoch]]), send(BOB, market, MARKET, 'claim', [[epoch]])])
+  const after = await Promise.all([usdtOf(RUNNER.address), usdtOf(BOB.address)])
+  return [after[0] - before[0], after[1] - before[1]]
+}
 /** Seconds of headroom for a relay to mine before the boundary. `oracleMaxAge` bounds it above. */
 const RELAY_LEAD = 20
 
@@ -165,8 +179,6 @@ async function scenarioTie() {
   const S = 'TIE', m = getAddress(qa.marketA), feed = getAddress(qa.feedA)
   const { epoch, r } = await start(m, feed, S)
   await until(Number(r.startTs), 'betting to open', S)
-  const a0 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [RUNNER.address] })
-  const b0 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [BOB.address] })
   const outstandingBefore = (await read(m, 'outstanding')) + 40n * 10n ** 18n
   const treasuryBefore = await read(m, 'treasuryAmount')
   await Promise.all([
@@ -192,11 +204,9 @@ async function scenarioTie() {
   record(S, 'no fee was taken on the tie', (await read(m, 'treasuryAmount')) === treasuryBefore, 'treasury unchanged')
   record(S, 'both sides refundable', (await read(m, 'refundable', [epoch, RUNNER.address])) && (await read(m, 'refundable', [epoch, BOB.address])))
   record(S, 'neither side is claimable as a winner', !(await read(m, 'claimable', [epoch, RUNNER.address])) && !(await read(m, 'claimable', [epoch, BOB.address])))
-  await Promise.all([send(RUNNER, m, MARKET, 'claim', [[epoch]]), send(BOB, m, MARKET, 'claim', [[epoch]])])
-  const a1 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [RUNNER.address] })
-  const b1 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [BOB.address] })
-  record(S, 'up side made exactly whole', a1 === a0, `${formatUnits(a0, 18)} -> ${formatUnits(a1, 18)}`)
-  record(S, 'down side made exactly whole', b1 === b0, `${formatUnits(b0, 18)} -> ${formatUnits(b1, 18)}`)
+  const [ra, rb] = await claimAndMeasure(m, epoch)
+  record(S, 'up side refunded exactly its stake', ra === 10n * 10n ** 18n, `+${formatUnits(ra, 18)} USDT`)
+  record(S, 'down side refunded exactly its stake', rb === 30n * 10n ** 18n, `+${formatUnits(rb, 18)} USDT`)
   record(S, 'the round no longer contributes to outstanding', (await read(m, 'outstanding')) === outstandingBefore - 40n * 10n ** 18n)
 }
 
@@ -208,8 +218,6 @@ async function scenarioStarvedAndGriefed() {
   const S = 'STARVE', m = getAddress(qa.marketB), feed = getAddress(qa.feedB)
   const { epoch, r } = await start(m, feed, S)
   await until(Number(r.startTs), 'betting to open', S)
-  const a0 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [RUNNER.address] })
-  const b0 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [BOB.address] })
   await Promise.all([
     send(RUNNER, m, MARKET, 'betUp', [epoch, 10n * 10n ** 18n]),
     send(BOB, m, MARKET, 'betDown', [epoch, 30n * 10n ** 18n]),
@@ -244,11 +252,9 @@ async function scenarioStarvedAndGriefed() {
   const g = await read(m, 'getRound', [epoch])
   record(S, 'timed-out round is voided', g.voided === true)
   record(S, 'no fee taken on a timeout', (await read(m, 'treasuryAmount')) === 0n, 'treasury still zero')
-  await Promise.all([send(RUNNER, m, MARKET, 'claim', [[epoch]]), send(BOB, m, MARKET, 'claim', [[epoch]])])
-  const a1 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [RUNNER.address] })
-  const b1 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [BOB.address] })
-  record(S, 'up side made exactly whole', a1 === a0)
-  record(S, 'down side made exactly whole', b1 === b0)
+  const [ra, rb] = await claimAndMeasure(m, epoch)
+  record(S, 'up side refunded exactly its stake', ra === 10n * 10n ** 18n, `+${formatUnits(ra, 18)} USDT`)
+  record(S, 'down side refunded exactly its stake', rb === 30n * 10n ** 18n, `+${formatUnits(rb, 18)} USDT`)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -282,7 +288,8 @@ async function scenarioOneSidedAndClaimTo() {
   const e = await expectRevert(RUNNER, bettor, BETTOR, 'call', [m, claimSelf])
   record(S, 'claim() to a contract that cannot receive BNB reverts', e === 'TransferFailed' || e === 'revert', e)
 
-  const sink = BOB.address
+  // never sends a transaction, so its balance moves only by the payout under test
+  const sink = '0x00000000000000000000000000000000DeaDBeef'
   const s0 = await pub.getBalance({ address: sink })
   await send(RUNNER, bettor, BETTOR, 'call', [m, encodeFunctionData({ abi: MARKET, functionName: 'claimTo', args: [[epoch], sink] })])
   const s1 = await pub.getBalance({ address: sink })
@@ -296,8 +303,6 @@ async function scenarioPermissionlessAndPause() {
   const S = 'ADMIN', m = getAddress(qa.marketD), feed = getAddress(qa.feedD)
   const { epoch, r } = await start(m, feed, S)
   await until(Number(r.startTs), 'betting to open', S)
-  const a0 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [RUNNER.address] })
-  const b0 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [BOB.address] })
   await Promise.all([
     send(RUNNER, m, MARKET, 'betUp', [epoch, 10n * 10n ** 18n]),
     send(BOB, m, MARKET, 'betDown', [epoch, 10n * 10n ** 18n]),
@@ -321,10 +326,8 @@ async function scenarioPermissionlessAndPause() {
 
   await until(Number(r.closeTs) + BUFFER + 2, 'the live round to time out under the pause', S)
   record(S, 'the paused live round becomes refundable on its own', (await read(m, 'refundable', [epoch, RUNNER.address])) === true)
-  await Promise.all([send(RUNNER, m, MARKET, 'claim', [[epoch]]), send(BOB, m, MARKET, 'claim', [[epoch]])])
-  const a1 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [RUNNER.address] })
-  const b1 = await pub.readContract({ address: qa.usdt, abi: ERC20, functionName: 'balanceOf', args: [BOB.address] })
-  record(S, 'claiming still works while the market is paused', a1 === a0 && b1 === b0)
+  const [ra, rb] = await claimAndMeasure(m, epoch)
+  record(S, 'claiming still works while the market is paused', ra === 10n * 10n ** 18n && rb === 10n * 10n ** 18n, `+${formatUnits(ra, 18)} / +${formatUnits(rb, 18)} USDT`)
   record(S, 'no fee taken from a paused round', (await read(m, 'treasuryAmount')) === 0n)
 
   // restart
@@ -356,7 +359,15 @@ async function main() {
     ['one-sided + claimTo', scenarioOneSidedAndClaimTo],
     ['permissionless + pause', scenarioPermissionlessAndPause],
   ]
-  const outcomes = await Promise.allSettled(scenarios.map(([, fn]) => fn()))
+  // Sequential on purpose. All four relay through the same key, so running them together makes
+  // them queue behind one another and land prints after their own boundaries — the very
+  // shared-queue capacity problem the keeper has its relay-lead arithmetic for. Serialising the
+  // suite keeps each scenario's evidence about the contract rather than about the harness.
+  const outcomes = []
+  for (const [name, fn] of scenarios) {
+    console.log(`\n\x1b[1m── ${name} ──\x1b[0m`)
+    outcomes.push(await fn().then((v) => ({ status: 'fulfilled', value: v }), (reason) => ({ status: 'rejected', reason })))
+  }
   outcomes.forEach((o, i) => {
     if (o.status === 'rejected') record(scenarios[i][0].toUpperCase(), 'scenario ran to completion', false, String(o.reason?.message ?? o.reason).slice(0, 160))
   })

@@ -110,6 +110,32 @@ export function isNonceError(error: unknown): boolean {
 }
 
 /**
+ * Errors that mean the **contract** answered and refused: the round does not exist, the proxy
+ * reverted, there is no code at the address. `_tryRound` catches exactly these on chain and reads
+ * them as "no such print", so an off-chain mirror may read them the same way.
+ *
+ * Everything else — a transport failure, a timeout, a rate limit, a node that lost the block — is
+ * "we could not look", which is emphatically not "there is nothing there". Collapsing the two is
+ * how a keeper runs a perfectly settleable round into a timeout, so the default below is the
+ * cautious one: an error that does not clearly come from the contract is NOT an absence.
+ */
+const CONTRACT_REJECTION_PATTERNS: readonly RegExp[] = [
+  /execution reverted/i,
+  /reverted with/i,
+  /\brevert(ed)?\b/i,
+  /no data present/i,
+  /invalid opcode/i,
+  /out of gas/i,
+  /returned no data/i,
+];
+
+/** True when `error` is the contract itself saying no, rather than the read failing to happen. */
+export function isContractRejection(error: unknown): boolean {
+  const text = errorText(error);
+  return CONTRACT_REJECTION_PATTERNS.some((re) => re.test(text));
+}
+
+/**
  * Classify a thrown error. Terminal patterns win over retryable ones, because a revert whose
  * message also mentions a timeout is still a revert.
  */

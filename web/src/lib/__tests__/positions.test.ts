@@ -1,16 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import {
   EPOCH_ID_CHUNK,
+  EPOCH_SCAN_STEP,
   MAX_CLAIM_BATCH,
-  MAX_SCANNED_EPOCHS,
   POSITION_PAGE,
+  claimAllLabel,
   claimPlan,
+  claimableNow,
   collectabilityFromPayout,
   collectableSelection,
   dropClaimed,
   epochPages,
+  olderRoundsPhrase,
   orderNewestFirst,
+  scanDepth,
   splitLoaded,
+  unreadClaims,
   type Collectability,
 } from '../positions'
 
@@ -24,9 +29,9 @@ function userEpochs(all: readonly bigint[], offset: bigint, limit: bigint): bigi
 }
 
 function readAll(history: readonly bigint[]) {
-  const { pages, truncated } = epochPages(BigInt(history.length))
+  const { pages, older } = epochPages(BigInt(history.length))
   const { epochs, missingPages } = orderNewestFirst(pages.map((p) => userEpochs(history, p.offset, p.limit)))
-  return { epochs, missingPages, truncated }
+  return { epochs, missingPages, older }
 }
 
 describe('epochPages', () => {
@@ -47,16 +52,61 @@ describe('epochPages', () => {
     }
   })
 
-  it('keeps the newest history and flags the truncation instead of hiding it', () => {
-    const { pages, truncated } = epochPages(BigInt(MAX_SCANNED_EPOCHS) + 1_000n)
-    expect(truncated).toBe(true)
-    expect(pages[0]!.offset).toBe(1_000n)
-    expect(epochPages(BigInt(MAX_SCANNED_EPOCHS)).truncated).toBe(false)
+  it('counts what one window has not reached instead of discarding it', () => {
+    // The regression this replaces: the old scan stopped dead at a fixed depth and reported the
+    // remainder as `truncated` with no way to go further, so an unclaimed win older than the
+    // ceiling was gone from the table and from Claim all while the money sat on chain.
+    const total = BigInt(EPOCH_SCAN_STEP) + 1_000n
+    const first = epochPages(total)
+    expect(first.scanned).toBe(BigInt(EPOCH_SCAN_STEP))
+    expect(first.older).toBe(1_000n) // named, not dropped
+    expect(first.pages[0]!.offset).toBe(1_000n)
+    expect(first.scanned + first.older).toBe(total)
+
+    // …and the very next window reaches all of it.
+    const second = epochPages(total, { scanned: scanDepth(2, 0) })
+    expect(second.older).toBe(0n)
+    expect(second.pages[0]!.offset).toBe(0n)
+    expect(second.scanned).toBe(total)
+  })
+
+  it('has no depth at which the search simply stops', () => {
+    const total = BigInt(EPOCH_SCAN_STEP) * 3n + 137n
+    let steps = 0
+    let older = total
+    while (older > 0n && steps < 20) {
+      steps += 1
+      older = epochPages(total, { scanned: scanDepth(steps, 0) }).older
+    }
+    expect(older).toBe(0n) // every epoch the user has is reachable in a finite number of presses
+    expect(steps).toBe(4)
+  })
+
+  it('never asks for a window wider than the history', () => {
+    const { pages, scanned, older } = epochPages(47n, { scanned: 10_000 })
+    expect(scanned).toBe(47n)
+    expect(older).toBe(0n)
+    expect(pages).toEqual([{ offset: 0n, limit: 47n }])
   })
 
   it('uses a sane default chunk', () => {
     expect(epochPages(1n).pages[0]!.limit).toBe(1n)
     expect(epochPages(BigInt(EPOCH_ID_CHUNK) * 2n).pages).toHaveLength(2)
+  })
+})
+
+describe('scanDepth', () => {
+  it('deepens a step at a time', () => {
+    expect(scanDepth(1, 0, 50)).toBe(50n)
+    expect(scanDepth(3, 0, 50)).toBe(150n)
+    expect(scanDepth(1, 0)).toBe(BigInt(EPOCH_SCAN_STEP))
+  })
+
+  it('is never shallower than the rows on screen', () => {
+    // A rendered row must always be inside the scan, or the table shows a round whose
+    // collectability nothing probed.
+    expect(scanDepth(1, 120, 50)).toBe(120n)
+    expect(scanDepth(1, 20, 50)).toBe(50n)
   })
 })
 
@@ -77,9 +127,9 @@ describe('reading a user history longer than one page', () => {
   const history = Array.from({ length: 47 }, (_, i) => BigInt(i + 1))
 
   it('reaches every epoch, not just the newest page', () => {
-    const { epochs, missingPages, truncated } = readAll(history)
+    const { epochs, missingPages, older } = readAll(history)
     expect(missingPages).toBe(0)
-    expect(truncated).toBe(false)
+    expect(older).toBe(0n)
     expect(epochs).toHaveLength(47)
     expect(epochs[0]).toBe(47n)
     expect(epochs.at(-1)).toBe(1n)
@@ -287,5 +337,211 @@ describe('splitLoaded', () => {
       const { loaded, tail } = splitLoaded(epochs, depth)
       expect([...loaded, ...tail]).toEqual(epochs)
     }
+  })
+})
+
+/**
+ * The scan the hook actually runs, at a history longer than one window.
+ *
+ * `step` stands in for `EPOCH_SCAN_STEP` so the case stays readable; the production default is
+ * pinned separately in the `epochPages` suite.
+ */
+function scanStep(history: readonly bigint[], steps: number, visibleCount: number, step: number) {
+  const total = BigInt(history.length)
+  const { pages, older } = epochPages(total, { scanned: scanDepth(steps, visibleCount, step) })
+  const { epochs } = orderNewestFirst(pages.map((p) => userEpochs(history, p.offset, p.limit)))
+  const { loaded, tail } = splitLoaded(epochs, visibleCount)
+
+  // One `pendingPayout` probe per scanned epoch; #3 and #130 are the unclaimed wins.
+  const pays = (e: bigint) => e === 3n || e === 130n
+  const view = new Map<string, Collectability>()
+  for (const epoch of [...tail, ...loaded]) {
+    const entry = collectabilityFromPayout(pays(epoch) ? 100n : 0n)
+    if (entry) view.set(epoch.toString(), entry)
+  }
+
+  const selection = collectableSelection(epochs, view)
+  const incomplete = older > 0n
+  return {
+    epochs,
+    older,
+    selection,
+    incomplete,
+    label: claimAllLabel({
+      batch: claimPlan(selection.epochs).batch.length,
+      collectable: selection.epochs.length,
+      complete: !incomplete,
+    }),
+  }
+}
+
+describe('a history longer than one scan window still gives up all of its money', () => {
+  const STEP = 50
+  // 137 rounds. #130 settled recently; #3 is an unclaimed win from the very start of the history,
+  // 134 rounds back — past the first window, exactly where the old fixed ceiling lost it.
+  const history = Array.from({ length: 137 }, (_, i) => BigInt(i + 1))
+
+  it('says so — and never says "Claim all" — while older rounds are still unsearched', () => {
+    const first = scanStep(history, 1, POSITION_PAGE, STEP)
+    expect(first.epochs).toHaveLength(STEP)
+    expect(first.older).toBe(87n) // counted and disclosed, not silently dropped
+    expect(first.incomplete).toBe(true)
+    expect(first.epochs).not.toContain(3n) // not reached yet…
+    expect(first.selection.epochs).toEqual([130n])
+
+    // …so the button may not claim to have covered everything. This is the copy the finding is
+    // about: a user reading "Claim all" here would believe #3 does not exist.
+    expect(first.label).toBe('Claim 1 found')
+    expect(first.label).not.toContain('all')
+  })
+
+  it('reaches the oldest unclaimed win by searching further, and only then says "all"', () => {
+    let step = 0
+    let state = scanStep(history, ++step, POSITION_PAGE, STEP)
+    while (state.older > 0n && step < 10) state = scanStep(history, ++step, POSITION_PAGE, STEP)
+
+    expect(step).toBe(3) // three presses, no ceiling in between
+    expect(state.older).toBe(0n)
+    expect(state.epochs).toHaveLength(137)
+    expect(state.epochs).toContain(3n)
+
+    // The money the old ceiling hid is now in the batch, and the copy is finally allowed to say so.
+    expect(state.selection.epochs).toEqual([130n, 3n])
+    expect(state.selection.total).toBe(200n)
+    expect(claimPlan(state.selection.epochs).batch).toEqual([130n, 3n])
+    expect(state.incomplete).toBe(false)
+    expect(state.label).toBe('Claim all (2)')
+  })
+
+  it('grows the window monotonically, with no epoch skipped or double-counted', () => {
+    let seen: bigint[] = []
+    for (const step of [1, 2, 3]) {
+      const state = scanStep(history, step, POSITION_PAGE, STEP)
+      expect(new Set(state.epochs).size).toBe(state.epochs.length) // no duplicates
+      expect(state.epochs).toEqual([...state.epochs].sort((a, b) => (a > b ? -1 : 1))) // newest first
+      expect(state.epochs.slice(0, seen.length)).toEqual(seen) // strictly extends the last window
+      expect(BigInt(state.epochs.length) + state.older).toBe(137n) // nothing falls between them
+      seen = state.epochs
+    }
+  })
+
+  it('keeps every rendered row inside the scan, however deep the table is loaded', () => {
+    // "Load older rounds" pressed well past the first window: the rows must never outrun the
+    // probes, or the table would show a round whose collectability nothing read.
+    const deep = scanStep(history, 1, 120, STEP)
+    expect(deep.epochs.length).toBeGreaterThanOrEqual(120)
+    expect(splitLoaded(deep.epochs, 120).loaded).toHaveLength(120)
+  })
+})
+
+describe('claimAllLabel — the button may never overstate what it covers', () => {
+  it('says "all" only when the whole history has been searched', () => {
+    expect(claimAllLabel({ batch: 2, collectable: 2, complete: true })).toBe('Claim all (2)')
+    expect(claimAllLabel({ batch: 0, collectable: 0, complete: true })).toBe('Claim all')
+  })
+
+  it('never says "all" while any epoch is unsearched or unread', () => {
+    for (const args of [
+      { batch: 2, collectable: 2, complete: false },
+      { batch: 1, collectable: 1, complete: false },
+      { batch: 0, collectable: 0, complete: false },
+    ]) {
+      expect(claimAllLabel(args)).not.toContain('all')
+    }
+    expect(claimAllLabel({ batch: 2, collectable: 2, complete: false })).toBe('Claim 2 found')
+    expect(claimAllLabel({ batch: 0, collectable: 0, complete: false })).toBe('Nothing found yet')
+  })
+
+  it('counts the batch, not the backlog, when one transaction cannot carry them all', () => {
+    expect(claimAllLabel({ batch: MAX_CLAIM_BATCH, collectable: 57, complete: true })).toBe(
+      `Claim ${MAX_CLAIM_BATCH} of 57`,
+    )
+    expect(claimAllLabel({ batch: MAX_CLAIM_BATCH, collectable: 57, complete: false })).toBe(
+      `Claim ${MAX_CLAIM_BATCH} of 57`,
+    )
+  })
+})
+
+describe('claimableNow — the batch is re-read on chain at send time', () => {
+  const epochs = [46n, 30n, 3n]
+  const ok = (payout: bigint) => ({ status: 'success', result: payout })
+  const reverted = { status: 'failure', error: new Error('call reverted') }
+
+  it('drops an epoch the same wallet already claimed somewhere else', () => {
+    // The cached tail probe never re-polls and stays fresh for minutes, so it still pays all three.
+    const cached = new Map<string, Collectability>([
+      ['46', { collectable: true, payout: 90n }],
+      ['30', { collectable: true, payout: 40n }],
+      ['3', { collectable: true, payout: 250n }],
+    ])
+    const stale = claimPlan(collectableSelection(epochs, cached).epochs)
+    expect(stale.batch).toEqual([46n, 30n, 3n]) // what the cache alone would have sent
+
+    // #30 was collected in another tab meanwhile: `pendingPayout` is 0 for it now. Sending the
+    // cached array reverts the WHOLE transaction with `AlreadyClaimed` and collects nothing —
+    // including the 250 owed on #3.
+    const fresh = claimableNow(stale.batch, [ok(90n), ok(0n), ok(250n)])
+    expect(fresh).toEqual([46n, 3n])
+    expect(claimPlan(fresh).batch).not.toContain(30n)
+  })
+
+  it('drops an epoch whose fresh read did not come back rather than risking the batch', () => {
+    expect(claimableNow(epochs, [ok(90n), reverted, ok(250n)])).toEqual([46n, 3n])
+    expect(claimableNow(epochs, [ok(90n)])).toEqual([46n]) // short result array
+    expect(claimableNow(epochs, undefined)).toEqual([]) // no read at all: send nothing
+  })
+
+  it('keeps display order and sends everything the chain still pays', () => {
+    expect(claimableNow(epochs, [ok(90n), ok(40n), ok(250n)])).toEqual(epochs)
+    expect(claimableNow([], [])).toEqual([])
+  })
+})
+
+describe('unreadClaims — "we could not ask" is not "already collected"', () => {
+  const epochs = [46n, 30n, 3n]
+  const ok = (payout: bigint) => ({ status: 'success', result: payout })
+  const reverted = { status: 'failure', error: new Error('HTTP request failed') }
+
+  it('separates a read that came back saying 0 from one that never came back', () => {
+    // Both leave `claimableNow` empty, and they mean opposite things.
+    const collected = [ok(0n), ok(0n), ok(0n)]
+    const dropped = [reverted, reverted, reverted]
+    expect(claimableNow(epochs, collected)).toEqual([])
+    expect(claimableNow(epochs, dropped)).toEqual([])
+
+    expect(unreadClaims(epochs, collected)).toBe(0) // the chain answered: nothing left here
+    expect(unreadClaims(epochs, dropped)).toBe(3) // nobody answered: we know nothing
+  })
+
+  it('counts a whole batch as unread when the multicall chunk itself failed', () => {
+    // `viem`'s multicall marks EVERY call in a chunk as a failure when the chunk's RPC call
+    // errors, so a single dropped request looks exactly like "the user already collected all of
+    // these" unless the two are counted apart.
+    expect(unreadClaims(epochs, undefined)).toBe(3)
+    expect(unreadClaims(epochs, [])).toBe(3)
+    expect(unreadClaims(epochs, [ok(90n)])).toBe(2) // short result array
+    expect(unreadClaims([], [])).toBe(0)
+  })
+
+  it('is the exact complement of what the chain answered, at every mix', () => {
+    const mixed = [ok(90n), reverted, ok(0n)]
+    const claimable = claimableNow(epochs, mixed)
+    const unread = unreadClaims(epochs, mixed)
+    const answeredZero = epochs.length - claimable.length - unread
+    expect(claimable).toEqual([46n])
+    expect(unread).toBe(1)
+    expect(answeredZero).toBe(1)
+    // No epoch may be both, and none may be neither: the panel branches on exactly this.
+    expect(claimable.length + unread + answeredZero).toBe(epochs.length)
+  })
+})
+
+describe('olderRoundsPhrase — the unsearched-history notice counts in agreement', () => {
+  it('agrees with its own number', () => {
+    expect(`1 ${olderRoundsPhrase(1n)} not been searched`).toBe('1 older round has not been searched')
+    expect(`2 ${olderRoundsPhrase(2n)} not been searched`).toBe('2 older rounds have not been searched')
+    // 5,001 positions with a 5,000-epoch scan step leaves exactly one — the singular is reachable.
+    expect(olderRoundsPhrase(epochPages(BigInt(EPOCH_SCAN_STEP) + 1n).older)).toBe('older round has')
+    expect(olderRoundsPhrase(15_000n)).toBe('older rounds have')
   })
 })

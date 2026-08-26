@@ -79,6 +79,8 @@ export class Keeper {
   /** null until a balance poll has succeeded: unknown is not the same as empty. */
   #balanceWei: bigint | null = null;
   #stopped = false;
+  /** Non-null when NOT ONE market came up at boot, with the per-market reasons. */
+  #totalBootstrapFailure: string | null = null;
 
   constructor(deps: KeeperDeps) {
     this.config = deps.config;
@@ -98,6 +100,19 @@ export class Keeper {
 
   get workers(): readonly MarketWorker[] {
     return this.#workers;
+  }
+
+  /**
+   * Non-null when every market failed to bootstrap, the chain-id check having already passed — a
+   * flaky or rate-limited RPC, or a deployments file pointing at addresses that are not there.
+   *
+   * The keeper is still running: health reports it, the retry timer is armed, and the markets come
+   * up on their own the moment the RPC does. Whether the process should ALSO exit so a supervisor
+   * restarts it is `config.exitOnTotalBootstrapFailure`, read by `index.ts` — a deliberate choice
+   * rather than, as it was, an exception thrown before any of that was armed.
+   */
+  get totalBootstrapFailure(): string | null {
+    return this.#totalBootstrapFailure;
   }
 
   /** Markets from the deployments file that are not being supervised yet, and why. */
@@ -227,10 +242,23 @@ export class Keeper {
         });
       }
     }
-    if (this.#workers.length === 0) {
-      throw new Error(
-        `no market could be bootstrapped from ${this.config.deployment.path}:\n  ` + failures.join('\n  '),
-      );
+    if (this.#workers.length === 0 && failures.length > 0) {
+      // Deliberately NOT a throw. Throwing here aborted `start()` before health reporting and the
+      // bootstrap retry timer were armed, so a flaky or rate-limited RPC — one that answered the
+      // chain-id check and then failed every market read — killed the process instead of degrading:
+      // nothing retried, and `/healthz` never got the chance to say why. The keeper stays up,
+      // unhealthy and retrying; exiting is a separate, configured decision.
+      //
+      // An RPC that is unreachable outright never reaches this line: `#verifyChain` throws first,
+      // and that is intended — the keeper does not run without having confirmed the network.
+      this.#totalBootstrapFailure =
+        `no market could be bootstrapped from ${this.config.deployment.path}:\n  ` + failures.join('\n  ');
+      this.#logger.error('no market could be bootstrapped; keeper is unhealthy and will keep retrying', {
+        deployments: this.config.deployment.path,
+        failures,
+        exitOnTotalBootstrapFailure: this.config.exitOnTotalBootstrapFailure,
+      });
+      return;
     }
     if (failures.length > 0) {
       this.#logger.warn('starting with a partial market set; the rest are unhealthy until they come up', {
@@ -276,6 +304,7 @@ export class Keeper {
         this.#pending = this.#pending.filter((p) => p.ref.name !== entry.ref.name);
         this.#workers.push(worker);
         worker.start();
+        this.#totalBootstrapFailure = null;
         this.#logger.info('market bootstrapped on retry and is now supervised', {
           market: entry.ref.name,
           attempts: entry.attempts,
@@ -387,6 +416,11 @@ export class Keeper {
   health(nowMs = this.#now()): HealthReport {
     const warnings: string[] = [];
     const blockers: string[] = [];
+    if (this.#totalBootstrapFailure !== null) {
+      // Every pending market is already reported unhealthy on its own; this says the one thing the
+      // per-market rows cannot, which is that NOTHING is being supervised.
+      blockers.push(this.#totalBootstrapFailure);
+    }
     const balance = this.#balanceWei;
     const state = balanceVerdict(balance, this.config.health.minBalanceWei, this.#txCostWei());
     if (state === 'unknown') {

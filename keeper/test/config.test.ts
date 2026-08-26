@@ -49,6 +49,16 @@ describe('loadConfig', () => {
     expect(config.health.minBalanceWei).toBe(50_000_000_000_000_000n);
     expect(config.tx.maxAttempts).toBe(4);
     expect(config.dryRun).toBe(false);
+    // A total bootstrap failure degrades by default; exiting for a supervisor is opt-in, so that
+    // whether the process survives a transient RPC outage is a decision and not an accident.
+    expect(config.exitOnTotalBootstrapFailure).toBe(false);
+  });
+
+  it('lets the operator choose to exit when nothing bootstraps', () => {
+    expect(load({ ...baseEnv, EXIT_ON_TOTAL_BOOTSTRAP_FAILURE: 'true' }).exitOnTotalBootstrapFailure).toBe(true);
+    expect(() => load({ ...baseEnv, EXIT_ON_TOTAL_BOOTSTRAP_FAILURE: 'maybe' })).toThrow(
+      /EXIT_ON_TOTAL_BOOTSTRAP_FAILURE must be a boolean/,
+    );
   });
 
   it('accepts a private key without the 0x prefix', () => {

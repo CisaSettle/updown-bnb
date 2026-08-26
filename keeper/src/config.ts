@@ -90,6 +90,15 @@ export interface KeeperConfig {
    * `executeRound` itself is permissionless, so this is the only privilege the keeper needs.
    */
   strictRelayUpdater: boolean;
+  /**
+   * What to do when **every** market fails to bootstrap — almost always a whole-RPC outage.
+   *
+   * Default false: the keeper stays up, reports `/healthz` unhealthy with the reason, and keeps
+   * retrying, so an RPC blip that lasts a minute costs a minute rather than the process. Set true
+   * when a supervisor (systemd, Kubernetes) should restart the process instead — a deliberate
+   * choice, not an accident of which line of `start()` threw first.
+   */
+  exitOnTotalBootstrapFailure: boolean;
   /** Simulate and log, never broadcast. */
   dryRun: boolean;
 }
@@ -395,6 +404,7 @@ export function loadConfig(options: LoadConfigOptions = {}): KeeperConfig {
     },
 
     strictRelayUpdater: readBool(env, 'STRICT_RELAY_UPDATER', false, issues),
+    exitOnTotalBootstrapFailure: readBool(env, 'EXIT_ON_TOTAL_BOOTSTRAP_FAILURE', false, issues),
     dryRun: readBool(env, 'DRY_RUN', false, issues),
   };
 
@@ -418,6 +428,7 @@ export function redactedConfig(config: KeeperConfig): Record<string, unknown> {
     logLevel: config.logLevel,
     dryRun: config.dryRun,
     strictRelayUpdater: config.strictRelayUpdater,
+    exitOnTotalBootstrapFailure: config.exitOnTotalBootstrapFailure,
     executeLeadMs: config.schedule.executeLeadMs,
     relayLeadMs: config.schedule.relayLeadMs,
     maxGasPriceWei: config.tx.maxGasPriceWei,

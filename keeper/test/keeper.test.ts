@@ -8,7 +8,11 @@
  *     it from supervision *and* from the report is how a live market voids round after round
  *     behind a 200;
  *  2. a keeper that cannot pay for a transaction must be unhealthy immediately, not after the
- *     per-market staleness budget finally expires.
+ *     per-market staleness budget finally expires — and no configured floor may talk it out of
+ *     that, because a floor below the cost of one transaction is still a keeper that cannot relay
+ *     and cannot settle;
+ *  3. a boot in which EVERY market fails to bootstrap must degrade rather than kill the process:
+ *     unhealthy, retrying, and back on its own the moment the reads succeed.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -77,6 +81,7 @@ function makeConfig(): KeeperConfig {
     },
     health: { intervalsAllowed: 2, minBalanceWei: 50_000_000_000_000_000n, balancePollMs: 60_000 },
     strictRelayUpdater: false,
+    exitOnTotalBootstrapFailure: false,
     dryRun: true,
   };
 }
@@ -85,10 +90,17 @@ interface KeeperState {
   /** Market addresses (lowercase) whose reads currently fail. */
   failing: Set<string>;
   balanceWei: bigint;
+  /** The operator's configured floor, `MIN_BALANCE_BNB`. */
+  minBalanceWei: bigint;
 }
 
 function makeKeeper(over: Partial<KeeperState> = {}) {
-  const state: KeeperState = { failing: new Set(), balanceWei: ONE_BNB, ...over };
+  const state: KeeperState = {
+    failing: new Set(),
+    balanceWei: ONE_BNB,
+    minBalanceWei: 50_000_000_000_000_000n,
+    ...over,
+  };
 
   const readContract = vi.fn(async (args: { address: Address; functionName: string }): Promise<unknown> => {
     if (state.failing.has(args.address.toLowerCase())) throw new Error('HTTP request failed.');
@@ -127,8 +139,10 @@ function makeKeeper(over: Partial<KeeperState> = {}) {
     getTransactionCount: vi.fn(async () => 1),
   };
 
+  const config = makeConfig();
+  config.health.minBalanceWei = state.minBalanceWei;
   const keeper = new Keeper({
-    config: makeConfig(),
+    config,
     logger: createLogger({ level: 'error', write: () => {} }),
     clients: { chain: {}, publicClient, walletClient: { writeContract: vi.fn() } } as unknown as Clients,
   });
@@ -201,6 +215,70 @@ describe('Keeper bootstrap failures', () => {
   });
 });
 
+describe('Keeper total bootstrap failure', () => {
+  const allDown = (): Set<string> => new Set([BTC.toLowerCase(), ETH.toLowerCase()]);
+
+  it('degrades instead of dying when every market fails to bootstrap', async () => {
+    // An RPC that answers the chain-id check and then fails every market read. `start()` used to
+    // throw before health reporting and the retry timer were armed, so `index.ts` shut the keeper
+    // down: nothing retried, and /healthz never got the chance to say why. The process has to
+    // survive a degradation that lasts less than a restart.
+    const h = makeKeeper({ failing: allDown() });
+    await expect(h.keeper.start()).resolves.toBeUndefined();
+
+    expect(h.keeper.workers).toEqual([]);
+    expect(h.keeper.totalBootstrapFailure).toMatch(/no market could be bootstrapped/);
+    expect(h.keeper.pendingMarkets.map((p) => p.name).sort()).toEqual(['btcUsd5m', 'ethUsd5m']);
+
+    await h.keeper.stop();
+  });
+
+  it('answers /healthz 503 with the reason rather than never answering at all', async () => {
+    const h = makeKeeper({ failing: allDown() });
+    await h.keeper.start();
+
+    const res = handleRequest('/healthz', {
+      metrics: h.keeper.metrics,
+      health: () => h.keeper.health(),
+      version: '1.0.0',
+    });
+    expect(res.status).toBe(503);
+    const body = JSON.parse(res.body);
+    expect(body.blockers.join(' ')).toMatch(/no market could be bootstrapped/);
+    expect(body.markets.map((m: { name: string }) => m.name).sort()).toEqual(['btcUsd5m', 'ethUsd5m']);
+    expect(body.markets.every((m: { healthy: boolean }) => !m.healthy)).toBe(true);
+
+    await h.keeper.stop();
+  });
+
+  it('arms the retry timer, so every market comes up when the RPC does', async () => {
+    vi.useFakeTimers();
+    const h = makeKeeper({ failing: allDown() });
+    await h.keeper.start();
+    expect(h.keeper.workers).toEqual([]);
+
+    h.state.failing.clear();
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(h.keeper.workers.map((w) => w.name).sort()).toEqual(['btcUsd5m', 'ethUsd5m']);
+    expect(h.keeper.pendingMarkets).toEqual([]);
+    expect(h.keeper.totalBootstrapFailure).toBeNull();
+    expect(h.keeper.health().healthy).toBe(true);
+
+    await h.keeper.stop();
+  });
+
+  it('leaves exiting to configuration rather than to the order of the boot sequence', async () => {
+    // The keeper never exits by itself; `index.ts` reads this flag and decides. Staying up is the
+    // default because the markets return on their own the moment the RPC does.
+    const h = makeKeeper({ failing: allDown() });
+    expect(h.keeper.config.exitOnTotalBootstrapFailure).toBe(false);
+    await h.keeper.start();
+    expect(h.keeper.totalBootstrapFailure).not.toBeNull();
+    await h.keeper.stop();
+  });
+});
+
 describe('Keeper balance health', () => {
   it('is unhealthy when the keeper cannot pay for a transaction at all', async () => {
     const h = makeKeeper({ balanceWei: 0n });
@@ -259,6 +337,27 @@ describe('Keeper balance health', () => {
     expect(report.warnings.join(' ')).toMatch(/is below the/);
     expect(report.blockers).toEqual([]);
     expect(report.healthy).toBe(true);
+
+    await h.keeper.stop();
+  });
+
+  it('is unfunded below one transaction even when the operator set a lower floor', async () => {
+    // 0.02 tBNB with a 0.01 tBNB floor and a 0.03 tBNB worst-case transaction. The operator's floor
+    // is happy; the chain is not. Letting the configured floor replace the transaction cost reported
+    // 200 while the keeper could neither relay a boundary price nor settle a round.
+    const h = makeKeeper({ balanceWei: 20_000_000_000_000_000n, minBalanceWei: 10_000_000_000_000_000n });
+    await h.keeper.start();
+    await settle(h.keeper);
+
+    const report = h.keeper.health();
+    expect(report.markets.every((m) => m.healthy)).toBe(true);
+    expect(report.blockers.join(' ')).toMatch(/cannot pay for a single transaction/);
+    expect(report.healthy).toBe(false);
+    expect(handleRequest('/healthz', {
+      metrics: h.keeper.metrics,
+      health: () => h.keeper.health(),
+      version: '1.0.0',
+    }).status).toBe(503);
 
     await h.keeper.stop();
   });

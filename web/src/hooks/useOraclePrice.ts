@@ -4,7 +4,8 @@ import { useReadContract, useReadContracts } from 'wagmi'
 import { aggregatorV3Abi } from '../abi'
 import { CHAIN_ID } from '../config/chains'
 import type { Address } from '../config/deployment'
-import { asBigInt, asNumber, pick } from '../lib/read'
+import { asNumber, pick } from '../lib/read'
+import { usableLatestPrint } from '../lib/settlement'
 
 export interface OraclePrice {
   answer?: bigint
@@ -34,16 +35,17 @@ export function useOraclePrice(oracle: Address | undefined, nowSeconds: number):
 
   return useMemo(() => {
     const raw = latest.data as readonly unknown[] | undefined
-    const tuple = pick(raw, 0)
-    const arr = Array.isArray(tuple) ? tuple : undefined
-    const answer = asBigInt(arr?.[1])
-    const updatedAt = asNumber(arr?.[3])
+    // `_tryLatestRoundId`, not `latestRoundData()` at face value. A print with `answer <= 0` or
+    // `updatedAt == 0` is one the contract throws away, so showing it as "$0.00" — and letting the
+    // card draw a coloured move off it — would put a winner on screen that `executeRound` would
+    // never settle. No price is the honest answer there, and the card already renders "—" for it.
+    const print = usableLatestPrint(pick(raw, 0))
     return {
-      answer,
+      answer: print?.answer,
       decimals: asNumber(decimalsQuery.data) ?? 8,
-      updatedAt,
-      roundId: asBigInt(arr?.[0]),
-      ageSeconds: updatedAt === undefined ? undefined : Math.max(0, nowSeconds - updatedAt),
+      updatedAt: print?.updatedAt,
+      roundId: print?.roundId,
+      ageSeconds: print === undefined ? undefined : Math.max(0, nowSeconds - print.updatedAt),
       isLoading: enabled && latest.isLoading,
     }
   }, [latest.data, latest.isLoading, decimalsQuery.data, nowSeconds, enabled])

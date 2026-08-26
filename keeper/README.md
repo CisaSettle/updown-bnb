@@ -51,9 +51,17 @@ transactions in flight and nonces cannot collide. That queue is also why `RELAY_
 for **one** relay rather than for the boundary: several markets share an aligned boundary, their
 relays go out one after another, and the wake has to be early enough for the *last* of them to still
 land at or before `lockTs`. The keeper therefore leads by `RELAY_LEAD_MS` × the number of relay feeds
-still to publish at that boundary (clamped by the round's `oracleMaxAge`), and a relay that reaches
-the front of the queue too late to land is dropped with an error rather than broadcast to arrive
-after the boundary and hold up the relays behind it.
+still to publish at that boundary, clamped to the round's whole `oracleMaxAge` less a 10 s margin for
+block time and clock skew — the whole budget, because that is what `_priceAt` accepts, and a print
+aged less than `oracleMaxAge` at the boundary is exactly as valid as a fresh one. That clamp is also
+the ceiling on how many feeds one key can serve: 150 s of budget at 20 s a relay is seven feeds, and
+the keeper says so in the log when a boundary is oversubscribed. A relay that reaches the front of
+the queue too late to land is dropped with an error rather than broadcast to arrive after the
+boundary and hold up the relays behind it.
+
+At most one relay transaction is ever sent per (feed, boundary): markets sharing a feed **claim** the
+pair before queueing, not after, so two of them can never both spend a queue slot that only one relay
+was budgeted for.
 
 ---
 
@@ -104,7 +112,7 @@ Only the first three are required.
 | `METRICS_PORT` | `9464` | HTTP port for `/healthz` and `/metrics`. `0` disables the server. |
 | `METRICS_HOST` | `0.0.0.0` | Bind address. |
 | `EXECUTE_LEAD_MS` | `2000` | Fire `executeRound` this long **after** `lockTs`. |
-| `RELAY_LEAD_MS` | `20000` | Budget for **one** relay before `lockTs` (testnet only). The actual lead is this × the relay feeds sharing the boundary, capped by the round's `oracleMaxAge`. |
+| `RELAY_LEAD_MS` | `20000` | Budget for **one** relay before `lockTs` (testnet only). The actual lead is this × the relay feeds sharing the boundary, capped at the round's `oracleMaxAge` less a 10 s block-time/clock-skew margin. |
 | `MAX_TIMER_MS` | `900000` | Cap on a single timer; state is re-read at least this often. |
 | `IDLE_POLL_MS` | `30000` | Poll interval while a market is paused or not genesis-started. |
 | `TX_MAX_ATTEMPTS` | `4` | Attempts per logical transaction, including the first. |
@@ -117,9 +125,10 @@ Only the first three are required.
 | `GAS_LIMIT_PADDING_PERCENT` | `25` | Padding on the estimated gas limit. |
 | `BACKOFF_BASE_MS` / `BACKOFF_FACTOR` / `BACKOFF_MAX_MS` / `BACKOFF_JITTER` | `750` / `2` / `15000` / `0.2` | Retry backoff ladder. |
 | `HEALTH_INTERVALS` | `2` | Intervals a market may miss before `/healthz` fails. |
-| `MIN_BALANCE_BNB` | `0.05` | Warn and flag below this balance. |
+| `MIN_BALANCE_BNB` | `0.05` | Warn and flag below this balance. It can only ever make the keeper unhealthy **earlier**: a balance that cannot fund one transaction is unfunded however low this is set. |
 | `BALANCE_POLL_MS` | `60000` | Balance poll interval. |
 | `STRICT_RELAY_UPDATER` | `false` | `true` refuses to boot if a relay feed would reject this key. |
+| `EXIT_ON_TOTAL_BOOTSTRAP_FAILURE` | `false` | What to do when **every** market fails to bootstrap. `false` stays up, reports `/healthz` unhealthy and keeps retrying; `true` exits `1` for a supervisor to restart. |
 | `DRY_RUN` | `false` | `true` simulates and logs, never broadcasts. |
 | `FIND_ROUND_MAX_STEPS` | `64` | Bound on the `findRoundIdAt` walk-back (retried ×8 once if not found). |
 
@@ -137,8 +146,18 @@ keeper change. Each market's `interval`, `bufferSeconds`, `oracleMaxAge`, `oracl
 `settlementAsset` are then read from the chain, never assumed.
 
 If the file is missing, the keeper says exactly which path it tried and that the deploy script has to
-run first. A market that fails to bootstrap is skipped with a loud log; the keeper still starts as
-long as at least one market works.
+run first. A market that fails to bootstrap is skipped with a loud log, stays in `/healthz` as
+`unknown`, and is retried until it comes up.
+
+If **every** market fails to bootstrap — a flaky or rate-limited RPC, a wrong address — the keeper
+still starts: it reports `/healthz` unhealthy with the reason as a blocker, arms the retry timer, and
+picks the markets up the moment the reads succeed. Handing the problem to a supervisor instead is
+`EXIT_ON_TOTAL_BOOTSTRAP_FAILURE=true`, a deliberate choice rather than a side effect of which line
+of the boot sequence threw first.
+
+An RPC that is unreachable *entirely* is a separate and earlier case: the keeper verifies the chain
+id before it bootstraps anything, and it exits rather than run without having confirmed which
+network it is on. That check is deliberate and `EXIT_ON_TOTAL_BOOTSTRAP_FAILURE` does not affect it.
 
 ---
 
@@ -169,9 +188,11 @@ comes up, at which point it is supervised normally. A market that disappeared fr
 and the report is a market whose rounds void behind a green `/healthz`.
 
 The body also carries `warnings` (non-fatal) and `blockers`. A blocker fails the report on its own,
-however healthy the markets look: today the only one is a keeper account that cannot pay for a
-single transaction (600k gas at `MAX_GAS_PRICE_GWEI`), because it can neither relay a boundary price
-nor settle a round. A balance under `MIN_BALANCE_BNB` that can still transact stays a warning.
+however healthy the markets look: a keeper account that cannot pay for a single transaction (600k gas
+at `MAX_GAS_PRICE_GWEI`), because it can neither relay a boundary price nor settle a round; and a
+boot at which no market came up at all. A balance under `MIN_BALANCE_BNB` that can still transact
+stays a warning — but `MIN_BALANCE_BNB` never moves the hard line *down*: below the cost of one
+transaction the account is unfunded whatever it is set to.
 
 **`GET /metrics`** → Prometheus text format:
 

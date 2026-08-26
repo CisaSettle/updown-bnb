@@ -14,7 +14,12 @@
  *  4. relays share one key and therefore one queue, so the wake has to be early enough for the LAST
  *     of them, and one that can no longer land must be dropped instead of broadcast late;
  *  5. an aggregator phase change must not hide a settleable print: `findRoundIdAt` is phase-local,
- *     the contract's `_priceAt` is not.
+ *     the contract's `_priceAt` is not;
+ *  6. two markets sharing one relay feed must never both queue a relay for the same boundary — the
+ *     second one spends a queue slot the lead budgeted for somebody else, and that feed then
+ *     dequeues after `lockTs`;
+ *  7. a print is judged exactly as `_tryRound` judges it (the returned `rid` included), and a read
+ *     that FAILED is never mistaken for a round that does not exist.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -28,6 +33,8 @@ import type { KeeperConfig } from '../src/config.js';
 import type { Clients } from '../src/chain.js';
 
 const MARKET = '0x00000000000000000000000000000000000000aa' as Address;
+/** A second market on the SAME relay feed, as two testnet pairs on one aggregator would be. */
+const MARKET_B = '0x00000000000000000000000000000000000000ab' as Address;
 const ORACLE = '0x00000000000000000000000000000000000000bb' as Address;
 const KEEPER = '0x00000000000000000000000000000000000000cc' as Address;
 const OTHER_FEED_A = '0x00000000000000000000000000000000000000d1' as Address;
@@ -51,6 +58,15 @@ interface ChainState {
   findRoundThrows: boolean;
   /** The feed's whole round history, keyed by proxy round id. */
   prints: Map<bigint, Print>;
+  /**
+   * Round ids the proxy answers with a DIFFERENT round's id — positive data that `_tryRound`
+   * rejects outright, because `rid != roundId`.
+   */
+  lyingRounds: Set<bigint>;
+  /** Round ids whose `getRoundData` fails at the transport, not at the contract. */
+  rpcFailRounds: Set<bigint>;
+  /** True to make `latestRoundData` fail at the transport, not at the contract. */
+  latestRoundDataFails: boolean;
   /** True to make the market read a keeper-fed RelayAggregator, as on testnet. */
   relayFeeds: boolean;
 }
@@ -110,6 +126,7 @@ function makeConfig(): KeeperConfig {
     },
     health: { intervalsAllowed: 2, minBalanceWei: 0n, balancePollMs: 60_000 },
     strictRelayUpdater: false,
+    exitOnTotalBootstrapFailure: false,
     dryRun: true,
   };
 }
@@ -122,6 +139,9 @@ function makeHarness(over: HarnessOptions = {}) {
     chainNow: LOCK_TS + 2,
     findRoundThrows: false,
     prints: new Map([[77n, { answer: 8_412_345_000_000n, updatedAt: LOCK_TS - 10 }]]),
+    lyingRounds: new Set(),
+    rpcFailRounds: new Set(),
+    latestRoundDataFails: false,
     relayFeeds: false,
     ...stateOver,
   };
@@ -190,11 +210,20 @@ function makeHarness(over: HarnessOptions = {}) {
       }
       case 'getRoundData': {
         const id = (args.args as [bigint])[0];
+        // A transport failure, NOT the contract answering: "we could not look" must never read as
+        // "there is nothing there".
+        if (state.rpcFailRounds.has(id)) throw new Error('HTTP request failed.');
         const print = state.prints.get(id);
+        // What a real proxy does for a round it has no data for: it reverts.
         if (!print) throw new Error('No data present');
-        return [id, print.answer, BigInt(print.updatedAt), BigInt(print.updatedAt), id];
+        // A proxy answering with a different round's id. The data looks perfectly good; the chain's
+        // `_tryRound` throws it away anyway, so the keeper must too.
+        const rid = state.lyingRounds.has(id) ? id + 1n : id;
+        return [rid, print.answer, BigInt(print.updatedAt), BigInt(print.updatedAt), rid];
       }
       case 'latestRoundData': {
+        // Transport failure, not the contract answering — the same distinction `getRoundData` makes.
+        if (state.latestRoundDataFails) throw new Error('HTTP request failed.');
         const id = latestId();
         const print = state.prints.get(id);
         if (!print) throw new Error('No data present');
@@ -256,6 +285,14 @@ function makeHarness(over: HarnessOptions = {}) {
 
 const failures = (h: { deps: MarketDeps }, kind: string): number | undefined =>
   h.deps.metrics.get('updown_keeper_failures_total', { market: 'btcUsd5m', kind });
+
+/** The `executeRound` simulations a worker attempted, in order. */
+const executeSimulations = (h: {
+  publicClient: { simulateContract: { mock: { calls: unknown[][] } } };
+}): unknown[][] =>
+  h.publicClient.simulateContract.mock.calls.filter(
+    (call) => (call[0] as { functionName?: string })?.functionName === 'executeRound',
+  );
 
 describe('MarketWorker execute path', () => {
   it('prices the boundary read at send time, not the one captured when the tick was planned', async () => {
@@ -476,6 +513,162 @@ describe('MarketWorker relay scheduling', () => {
   });
 });
 
+describe('MarketWorker relay deduplication across markets sharing a feed', () => {
+  const relaySimulations = (h: { publicClient: { simulateContract: { mock: { calls: unknown[][] } } } }): number =>
+    h.publicClient.simulateContract.mock.calls.filter(
+      (call) => (call[0] as { functionName?: string })?.functionName === 'relay',
+    ).length;
+
+  it('lets only one of two markets on one feed queue a relay for the same boundary', async () => {
+    // Two markets, one RelayAggregator, one boundary — one print serves both. The old check was
+    // `has()` *before* `queue.submit()` and never rechecked: with the queue busy, neither market had
+    // marked the pair yet, so both read false, both enqueued, and the boundary burned two of the
+    // queue slots the lead budgeted for one. Whichever feed was behind them then dequeued after
+    // `lockTs` and its round voided into refunds.
+    const h = makeHarness({ relayFeeds: true, chainNow: LOCK_TS - 10, nowOffsetMs: -10_000 });
+    const workerA = h.worker;
+    const workerB = new MarketWorker('ethUsd5m', MARKET_B, h.deps);
+    await workerA.bootstrap();
+    await workerB.bootstrap();
+    // Both markets read the same feed, so it is one queue slot between them, not two.
+    expect(h.relays.feedCount).toBe(1);
+
+    // Hold the queue so neither relay can run — and therefore neither can mark the pair — until both
+    // workers have decided whether to enqueue. Without this the race is real but not reproducible.
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    void h.queue.submit(() => gate);
+
+    workerA.start();
+    workerB.start();
+    await vi.waitFor(() => expect(h.calls.filter((c) => c === 'getRound').length).toBeGreaterThanOrEqual(2), {
+      timeout: 2_000,
+      interval: 5,
+    });
+    // Both workers are past the decision point; give the slower one room to enqueue if it is going to.
+    await new Promise((r) => setTimeout(r, 150));
+    const queuedWithGateHeld = h.queue.depth;
+
+    openGate();
+    await vi.waitFor(() => expect(relaySimulations(h)).toBeGreaterThanOrEqual(1), { timeout: 2_000, interval: 5 });
+    await new Promise((r) => setTimeout(r, 150));
+    workerA.stop();
+    workerB.stop();
+
+    // The gate plus exactly one relay: the second market never spent a slot at all.
+    expect(queuedWithGateHeld).toBe(2);
+    // And at most one relay transaction per (feed, boundary), ever.
+    expect(relaySimulations(h)).toBe(1);
+  });
+});
+
+describe('MarketWorker boundary verification when latestRoundData cannot be read', () => {
+  it('does not report a settleable round as doomed because latestRoundData failed at the transport', async () => {
+    // The sibling of the `getRoundData` case. `_tryLatestRoundId` catches a REVERT, and `_priceAt`
+    // really does give up when it does — but an RPC that simply did not answer is not that. Reading
+    // both the same way made the keeper count a `boundary-unusable` failure and log "this round WILL
+    // VOID into refunds" about a boundary the chain would have settled, every time the RPC blinked.
+    const prints = new Map<bigint, Print>([
+      [77n, { answer: 8_412_345_000_000n, updatedAt: LOCK_TS - 10 }], // the boundary print
+      [78n, { answer: 8_413_000_000_000n, updatedAt: LOCK_TS + 5 }], // successor, past the boundary
+    ]);
+    const h = makeHarness({ prints, latestRoundDataFails: true, chainNow: LOCK_TS + 20 });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(executeSimulations(h).length).toBeGreaterThanOrEqual(1), {
+      timeout: 2_000,
+      interval: 5,
+    });
+    h.worker.stop();
+
+    // The id the contract's own helper named still goes to the chain, which judges it for itself...
+    expect((executeSimulations(h)[0]?.[0] as { args: readonly bigint[] }).args[0]).toBe(77n);
+    // ...and the keeper does not pretend a read that never happened was a verdict.
+    expect(failures(h, 'boundary-unusable')).toBeUndefined();
+    expect(failures(h, 'boundary-not-found')).toBeUndefined();
+  });
+});
+
+describe('MarketWorker boundary verification against a lying proxy', () => {
+  it('refuses to certify a print the proxy returned under a different round id', async () => {
+    // `_tryRound` discards a print whose returned `rid` is not the id that was asked for, so
+    // `executeRound(77)` reverts InvalidBoundaryProof however good the data looks. Reading the
+    // candidate with the raw reader instead of the strict one logged "boundary print verified" for
+    // exactly that boundary — the keeper's one job here is to predict the rejection, not join it.
+    const prints = new Map<bigint, Print>([
+      [77n, { answer: 8_412_345_000_000n, updatedAt: LOCK_TS - 10 }], // the candidate; proxy lies about its id
+      [78n, { answer: 8_413_000_000_000n, updatedAt: LOCK_TS + 5 }], // successor, past the boundary
+      [79n, { answer: 8_414_000_000_000n, updatedAt: LOCK_TS + 8 }], // latestRoundData()
+    ]);
+    const h = makeHarness({ prints, lyingRounds: new Set([77n]), chainNow: LOCK_TS + 20 });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(failures(h, 'boundary-unusable')).toBe(1), { timeout: 2_000, interval: 5 });
+    h.worker.stop();
+  });
+});
+
+describe('MarketWorker previous-phase search when the feed cannot be read', () => {
+  const phaseChanged = (): Map<bigint, Print> =>
+    new Map<bigint, Print>([
+      [round(1n, 1n), { answer: 8_400_000_000_000n, updatedAt: LOCK_TS - 250 }],
+      [round(1n, 2n), { answer: 8_401_000_000_000n, updatedAt: LOCK_TS - 190 }],
+      [round(1n, 3n), { answer: 8_402_000_000_000n, updatedAt: LOCK_TS - 130 }],
+      [round(1n, 4n), { answer: 8_403_000_000_000n, updatedAt: LOCK_TS - 70 }],
+      [round(1n, 5n), { answer: 8_404_000_000_000n, updatedAt: LOCK_TS - 10 }],
+      // the new aggregator's first print, already past the boundary
+      [round(2n, 1n), { answer: 8_405_000_000_000n, updatedAt: LOCK_TS + 5 }],
+    ]);
+
+  it('does not read an RPC failure inside the phase walk as "the phase does not exist"', async () => {
+    // The settleable print is the last of phase 1, and the only way to reach it is to walk back a
+    // phase. When that walk's very first read fails at the transport, turning the exception into
+    // `null` made a phase that is right there look like a phase that never existed: `searchFailed`
+    // stayed false, the keeper announced the round would void, and repeated failures ran a
+    // perfectly settleable round into a timeout.
+    const h = makeHarness({
+      prints: phaseChanged(),
+      rpcFailRounds: new Set([round(1n, 1n)]),
+      chainNow: LOCK_TS + 20,
+    });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(failures(h, 'boundary-lookup')).toBeGreaterThanOrEqual(1), {
+      timeout: 2_000,
+      interval: 5,
+    });
+    h.worker.stop();
+
+    // "Could not look" is not "nothing there": no void was predicted, and no id was sent.
+    expect(failures(h, 'boundary-not-found')).toBeUndefined();
+    expect(h.publicClient.simulateContract).not.toHaveBeenCalled();
+  });
+
+  it('still walks back to the previous phase when the reads actually succeed', async () => {
+    // The same feed without the transport failure: the print is found and settled, so the test above
+    // is pinning the failed READ and not merely a feed the walk cannot serve.
+    const h = makeHarness({ prints: phaseChanged(), chainNow: LOCK_TS + 20 });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(h.publicClient.simulateContract).toHaveBeenCalled(), {
+      timeout: 2_000,
+      interval: 5,
+    });
+    h.worker.stop();
+
+    expect(h.publicClient.simulateContract).toHaveBeenCalledWith(
+      expect.objectContaining({ functionName: 'executeRound', args: [round(1n, 5n)] }),
+    );
+    expect(failures(h, 'boundary-lookup')).toBeUndefined();
+  });
+});
+
 describe('RelayCoordinator', () => {
   it('counts one queue slot per distinct feed still to relay at a boundary', () => {
     const coordinator = new RelayCoordinator();
@@ -499,6 +692,49 @@ describe('RelayCoordinator', () => {
     coordinator.register(ORACLE.toUpperCase() as Address);
     expect(coordinator.feedCount).toBe(1);
     expect(coordinator.pendingAt(LOCK_TS)).toBe(1);
+  });
+
+  it('hands a (feed, boundary) pair to exactly one caller', () => {
+    const coordinator = new RelayCoordinator();
+    coordinator.register(ORACLE);
+    coordinator.register(OTHER_FEED_A);
+
+    expect(coordinator.claim(ORACLE, LOCK_TS, 0)).toBe(true);
+    // The second market on the same feed loses, so it never enqueues a relay of its own.
+    expect(coordinator.claim(ORACLE, LOCK_TS, 0)).toBe(false);
+    expect(coordinator.has(ORACLE, LOCK_TS)).toBe(true);
+    // A different feed, and a different boundary on the same feed, are untouched.
+    expect(coordinator.claim(OTHER_FEED_A, LOCK_TS, 0)).toBe(true);
+    expect(coordinator.claim(ORACLE, LOCK_TS + INTERVAL, 0)).toBe(true);
+  });
+
+  it('keeps counting a claimed relay as a queue slot until it has actually been sent', () => {
+    const coordinator = new RelayCoordinator();
+    coordinator.register(ORACLE);
+    coordinator.register(OTHER_FEED_A);
+    coordinator.claim(ORACLE, LOCK_TS, 0);
+    // Claimed is queued-but-unsent: it still needs its slot, so the lead must still cover it.
+    expect(coordinator.pendingAt(LOCK_TS)).toBe(2);
+    coordinator.mark(ORACLE, LOCK_TS, 0);
+    expect(coordinator.pendingAt(LOCK_TS)).toBe(1);
+  });
+
+  it('gives a claim back after an attempt that never reached the wire, and only then', () => {
+    const coordinator = new RelayCoordinator();
+    coordinator.register(ORACLE);
+
+    coordinator.claim(ORACLE, LOCK_TS, 0);
+    coordinator.release(ORACLE, LOCK_TS);
+    // Nothing was broadcast, so the boundary is still worth another attempt.
+    expect(coordinator.has(ORACLE, LOCK_TS)).toBe(false);
+    expect(coordinator.claim(ORACLE, LOCK_TS, 0)).toBe(true);
+
+    // Once the pair is consumed it stays consumed: releasing it must not open the door to a second
+    // transaction for a boundary only one print can ever serve.
+    coordinator.mark(ORACLE, LOCK_TS, 0);
+    coordinator.release(ORACLE, LOCK_TS);
+    expect(coordinator.claim(ORACLE, LOCK_TS, 0)).toBe(false);
+    expect(coordinator.consumed(ORACLE, LOCK_TS)).toBe(true);
   });
 
   it('abandoning a boundary stops every market on that feed retrying it', () => {

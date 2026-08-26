@@ -19,6 +19,7 @@ import {
   isPastSettlementWindow,
   missedEpochs,
   relayCanStillLand,
+  relayCapacity,
   RELAY_DEADLINE_MARGIN_MS,
   RELAY_MIN_LANDING_MS,
   type RoundTiming,
@@ -35,6 +36,7 @@ import {
   usableLatestRoundId,
   verifyBoundaryRound,
   type BoundaryProof,
+  type BoundaryVerdict,
   type OraclePrint,
 } from './boundary.js';
 import {
@@ -46,7 +48,7 @@ import {
   TxQueue,
   type SendPolicy,
 } from './tx.js';
-import { computeBackoff, errorText, type BackoffOptions } from './backoff.js';
+import { computeBackoff, errorText, isContractRejection, type BackoffOptions } from './backoff.js';
 
 /**
  * Cooldown applied after a tick that did no useful work, so a permanently failing market backs off
@@ -93,9 +95,20 @@ export interface MarketSnapshot {
 /**
  * Deduplicates relays across markets that share one feed and one boundary timestamp, and counts how
  * many relays a boundary still has to fit through the single-key transaction queue.
+ *
+ * The invariant it exists to hold is **at most one relay transaction per (feed, boundary), ever**.
+ * That cannot be enforced by asking `has()` and then enqueuing: two markets sharing a feed both read
+ * `false` before either of them reaches the front of the queue, both enqueue, and the boundary burns
+ * two queue slots where one was budgeted — starving whichever feed was behind them. So the claim is
+ * taken *atomically, before* the work is queued: `claim()` succeeds for exactly one caller, and the
+ * pair stays reserved until that caller either consumes it (`mark`/`abandon`) or hands it back
+ * (`release`) because nothing was ever broadcast.
  */
 export class RelayCoordinator {
+  /** (feed, boundary) pairs that have been relayed, abandoned, or otherwise permanently consumed. */
   readonly #done = new Map<string, number>();
+  /** (feed, boundary) pairs reserved by a worker that has queued a relay but not yet finished it. */
+  readonly #claimed = new Map<string, number>();
   readonly #feeds = new Set<string>();
 
   static key(feed: Address, boundaryTs: number): string {
@@ -123,22 +136,57 @@ export class RelayCoordinator {
   pendingAt(boundaryTs: number): number {
     let pending = 0;
     for (const feed of this.#feeds) {
+      // Deliberately `#done` only: a *claimed* pair is a relay sitting in the queue that has not
+      // been sent yet, so it still needs a slot and still has to be led for.
       if (!this.#done.has(`${feed}:${boundaryTs}`)) pending += 1;
     }
     return Math.max(1, pending);
   }
 
-  /** True when this (feed, boundary) has already been relayed, or given up on. */
+  /** True when this (feed, boundary) is already spoken for: relayed, given up on, or claimed. */
   has(feed: Address, boundaryTs: number): boolean {
+    const key = RelayCoordinator.key(feed, boundaryTs);
+    return this.#done.has(key) || this.#claimed.has(key);
+  }
+
+  /**
+   * Reserve this (feed, boundary) for the caller. Returns true for exactly one caller and false for
+   * every other, so two markets sharing a feed can never both queue a relay for the same boundary.
+   *
+   * Single-threaded JavaScript makes the test-and-set atomic *only* if there is no `await` between
+   * them — which is precisely why this is one synchronous method and not `has()` then `mark()`.
+   */
+  claim(feed: Address, boundaryTs: number, atMs: number): boolean {
+    const key = RelayCoordinator.key(feed, boundaryTs);
+    if (this.#done.has(key) || this.#claimed.has(key)) return false;
+    this.#claimed.set(key, atMs);
+    this.#prune(this.#claimed, atMs);
+    return true;
+  }
+
+  /**
+   * Hand a claim back, so the pair can be attempted again. Only legitimate when nothing was
+   * broadcast — a pair already consumed by `mark`/`abandon` stays consumed, because releasing it
+   * would allow a second transaction for a boundary only one print can ever serve.
+   */
+  release(feed: Address, boundaryTs: number): void {
+    const key = RelayCoordinator.key(feed, boundaryTs);
+    if (this.#done.has(key)) return;
+    this.#claimed.delete(key);
+  }
+
+  /** True when this (feed, boundary) is finished for good — relayed, or deliberately given up on. */
+  consumed(feed: Address, boundaryTs: number): boolean {
     return this.#done.has(RelayCoordinator.key(feed, boundaryTs));
   }
 
+  /** Consume this (feed, boundary) permanently: it has been relayed, or is not worth relaying. */
   mark(feed: Address, boundaryTs: number, atMs: number): void {
-    this.#done.set(RelayCoordinator.key(feed, boundaryTs), atMs);
+    const key = RelayCoordinator.key(feed, boundaryTs);
+    this.#claimed.delete(key);
+    this.#done.set(key, atMs);
     // Keep the map small: anything older than an hour can never be relevant again.
-    for (const [key, ts] of this.#done) {
-      if (atMs - ts > 3_600_000) this.#done.delete(key);
-    }
+    this.#prune(this.#done, atMs);
   }
 
   /**
@@ -147,6 +195,25 @@ export class RelayCoordinator {
    */
   abandon(feed: Address, boundaryTs: number, atMs: number): void {
     this.mark(feed, boundaryTs, atMs);
+  }
+
+  #prune(map: Map<string, number>, atMs: number): void {
+    for (const [key, ts] of map) {
+      if (atMs - ts > 3_600_000) map.delete(key);
+    }
+  }
+}
+
+/**
+ * A feed read that could not be made at all — as opposed to a round the feed itself says does not
+ * exist. The distinction is the whole point: `_tryRound` treats a revert as "no such print", and
+ * nothing else may be treated that way, or a transient RPC failure silently becomes evidence that a
+ * settleable boundary has no price.
+ */
+export class OracleReadError extends Error {
+  override readonly name = 'OracleReadError';
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options?.cause === undefined ? undefined : { cause: options.cause });
   }
 }
 
@@ -179,6 +246,7 @@ export class MarketWorker {
   #supervisedSinceMs: number;
   #currentEpoch: bigint = 0n;
   #lastInactiveLogMs = 0;
+  #lastRelayCapacityLogMs = 0;
   #idleTicks = 0;
   #armed = false;
   #tickActive = false;
@@ -501,12 +569,30 @@ export class MarketWorker {
     const profile = this.#profile;
     const relayEnabled =
       profile?.relay != null && !this.#deps.relays.has(profile.relay.feed, round.lockTs) && profile.relay.canWrite;
+    // Every relay shares one key and therefore one queue. Waking `slots` budgets early is what
+    // stops the second and third feed of a shared boundary from dequeuing after `lockTs`.
+    const relaySlots = this.#deps.relays.pendingAt(round.lockTs);
+    const perRelayLeadMs = this.#deps.config.schedule.relayLeadMs;
+    if (relayEnabled) {
+      // The lead can spend the whole staleness budget but not a millisecond more, so past a certain
+      // feed count the boundary simply cannot be served: the last relays land after `lockTs` however
+      // early the keeper wakes. Say so, because the only fixes are operational.
+      const capacity = relayCapacity(perRelayLeadMs, round.oracleMaxAge);
+      if (relaySlots > capacity && this.#now() - this.#lastRelayCapacityLogMs > 60_000) {
+        this.#lastRelayCapacityLogMs = this.#now();
+        this.#log.warn('more relay feeds share this boundary than its staleness budget can serve', {
+          relaySlots,
+          capacity,
+          perRelayLeadMs,
+          oracleMaxAge: round.oracleMaxAge,
+          hint: 'lower RELAY_LEAD_MS, split the feeds across keeper keys, or relay fewer feeds',
+        });
+      }
+    }
     return {
       executeLeadMs: this.#deps.config.schedule.executeLeadMs,
-      relayLeadMs: this.#deps.config.schedule.relayLeadMs,
-      // Every relay shares one key and therefore one queue. Waking `slots` budgets early is what
-      // stops the second and third feed of a shared boundary from dequeuing after `lockTs`.
-      relaySlots: this.#deps.relays.pendingAt(round.lockTs),
+      relayLeadMs: perRelayLeadMs,
+      relaySlots,
       relayEnabled,
       maxTimerMs: this.#deps.config.schedule.maxTimerMs,
       minTimerMs: this.#deps.config.schedule.minTimerMs,
@@ -583,167 +669,206 @@ export class MarketWorker {
     if (!profile?.relay) return true;
     const relay = profile.relay;
     const boundaryTs = snapshot.round.lockTs;
-    if (this.#deps.relays.has(relay.feed, boundaryTs)) {
-      this.#log.debug('relay already published for this boundary by a market sharing the feed', { boundaryTs });
+    // Claim the pair BEFORE queueing. Asking `has()` here and enqueuing regardless is a
+    // check-then-act race: two markets sharing this feed both read `false` while the first relay is
+    // still waiting its turn, both enqueue, and the boundary spends two of the queue slots the lead
+    // budgeted for one — the feed behind them then dequeues after `lockTs` and its round voids.
+    if (!this.#deps.relays.claim(relay.feed, boundaryTs, this.#now())) {
+      this.#log.debug('relay for this boundary is already claimed or published by a market sharing the feed', {
+        feed: relay.feed,
+        boundaryTs,
+      });
       return true;
     }
 
     const startedAt = this.#now();
 
     return this.#deps.queue.submit(async (): Promise<boolean> => {
-      const chainNow = await chainTimestamp(this.#deps.clients.publicClient);
-      if (!relayCanStillLand(chainNow, boundaryTs)) {
-        // The explicit deadline. Relays queue behind one another on a single key, so a relay that
-        // waited too long cannot produce a print at or before the boundary any more — broadcasting
-        // it would burn gas, land useless, and hold the queue against the relays still behind it.
-        // Say so loudly and drop it, rather than discovering the void after the fact.
-        this.#deps.relays.abandon(relay.feed, boundaryTs, this.#now());
-        this.#countFailure('relay-deadline');
-        this.#log.error('relay skipped: it can no longer land at or before the boundary', {
-          feed: relay.feed,
-          symbol: relay.symbol,
-          boundaryTs,
-          chainNow,
-          shortBySec: chainNow + Math.ceil(RELAY_MIN_LANDING_MS / 1000) - boundaryTs,
-          waitedMs: this.#now() - startedAt,
-          queueDepth: this.#deps.queue.depth,
-          hint: 'raise RELAY_LEAD_MS, or give the relay feeds sharing this keeper key more room',
-        });
-        return true;
-      }
-      if (boundaryTs - chainNow > snapshot.round.oracleMaxAge) {
-        // Only reachable when the chain clock lags the local clock badly. Back off and retry closer
-        // to the boundary rather than burning a print the contract would reject as too old.
-        this.#log.warn('relay deferred: a print now would be older than the boundary budget', {
-          boundaryTs,
-          chainNow,
-          oracleMaxAge: snapshot.round.oracleMaxAge,
-        });
-        return false;
-      }
-
-      // Quote inside the queue, so the price published is the price now and not the price when
-      // this tick was planned. `PriceSource` serves a short-TTL cache, so markets sharing a feed
-      // still make one HTTP call between them.
-      let price8dp: bigint;
-      let raw: string;
       try {
-        const quote = await this.#deps.priceSource.get(relay.symbol);
-        price8dp = quote.price8dp;
-        raw = quote.raw;
-        this.#deps.metrics.increment(M.priceFetches, HELP[M.priceFetches] as string, {
-          symbol: relay.symbol,
-          outcome: quote.cached ? 'cached' : 'ok',
-        });
-      } catch (error) {
-        this.#deps.metrics.increment(M.priceFetches, HELP[M.priceFetches] as string, {
-          symbol: relay.symbol,
-          outcome: 'error',
-        });
-        this.#log.error('price fetch failed; boundary will have no fresh print', { symbol: relay.symbol, error });
-        this.#countFailure('price');
-        return false;
-      }
-
-      const { publicClient, walletClient, chain } = this.#deps.clients;
-      const account = this.#deps.config.account;
-      try {
-        await publicClient.simulateContract({
-          address: relay.feed,
-          abi: relayAggregatorAbi,
-          functionName: 'relay',
-          args: [price8dp],
-          account,
-        });
-      } catch (error) {
-        this.#log.error('relay simulation failed; not sending', { feed: relay.feed, error: errorText(error) });
-        this.#countFailure('relay-simulate');
-        return false;
-      }
-
-      if (this.#deps.config.dryRun) {
-        this.#log.info('DRY_RUN: would relay', { feed: relay.feed, symbol: relay.symbol, price: raw });
-        this.#deps.relays.mark(relay.feed, boundaryTs, this.#now());
-        return true;
-      }
-
-      const gas = await this.#estimateGas(() =>
-        publicClient.estimateContractGas({
-          address: relay.feed,
-          abi: relayAggregatorAbi,
-          functionName: 'relay',
-          args: [price8dp],
-          account,
-        }),
-      );
-
-      try {
-        const result = await sendWithRetry<TransactionReceipt>(this.#sendPolicy(), {
-          getBaseGasPrice: () => this.#baseGasPrice(),
-          getNonce: () => this.#nonce(),
-          send: (ctx) =>
-            walletClient.writeContract({
-              address: relay.feed,
-              abi: relayAggregatorAbi,
-              functionName: 'relay',
-              args: [price8dp],
-              account,
-              chain,
-              gas,
-              nonce: ctx.nonce,
-              gasPrice: ctx.gasPriceWei,
-            }),
-          waitForReceipt: (hash, timeoutMs) =>
-            publicClient.waitForTransactionReceipt({
-              hash,
-              timeout: timeoutMs,
-              confirmations: this.#deps.config.tx.confirmations,
-            }),
-          getReceiptIfMined: (hash) => this.#receiptIfMined(hash),
-          sleep: (ms) => sleep(ms),
-          now: this.#now,
-          onAttempt: (event) => {
-            this.#deps.metrics.increment(M.txAttempts, HELP[M.txAttempts] as string, {
-              market: this.name,
-              op: 'relay',
-            });
-            if (event.outcome === 'timeout' || event.outcome === 'error') {
-              this.#log.warn('relay attempt failed; retrying with a higher gas price', {
-                attempt: event.attempt,
-                gasPriceWei: event.gasPriceWei,
-                outcome: event.outcome,
-                error: event.error,
-              });
-            }
-          },
-        });
-
-        this.#deps.relays.mark(relay.feed, boundaryTs, this.#now());
-        this.#deps.metrics.increment(M.relays, HELP[M.relays] as string, { market: this.name });
-        this.#deps.metrics.increment(M.txGasUsed, HELP[M.txGasUsed] as string, { market: this.name, op: 'relay' }, Number(result.receipt.gasUsed));
-        this.#log.info('relay published', {
-          feed: relay.feed,
-          symbol: relay.symbol,
-          price: raw,
-          price8dp,
-          boundaryTs,
-          txHash: result.hash,
-          gasUsed: result.receipt.gasUsed,
-          attempts: result.attempts,
-          latencyMs: this.#now() - startedAt,
-        });
-        return true;
-      } catch (error) {
-        this.#countFailure(error instanceof TerminalTxError ? 'relay-revert' : 'relay-send');
-        this.#log.error('relay transaction failed; the boundary may have no usable print', {
-          feed: relay.feed,
-          symbol: relay.symbol,
-          boundaryTs,
-          error,
-        });
-        return false;
+        return await this.#relayQueued(relay, boundaryTs, snapshot, startedAt);
+      } finally {
+        // Whatever happened, stop holding the pair. `release` is a no-op once the pair has been
+        // consumed by `mark`/`abandon`, so a relay that reached the wire is never sent twice, while
+        // one that failed before broadcasting is free to be attempted again.
+        this.#deps.relays.release(relay.feed, boundaryTs);
       }
     });
+  }
+
+  /**
+   * The relay itself, running at the front of the single-key transaction queue with the
+   * (feed, boundary) pair claimed. Returns true when the tick did something useful.
+   */
+  async #relayQueued(
+    relay: RelayProfile,
+    boundaryTs: number,
+    snapshot: MarketSnapshot,
+    startedAt: number,
+  ): Promise<boolean> {
+    // Re-check now that the slot is actually ours to spend: a pair finished while this waited in
+    // the queue (abandoned for being hopeless, say) must not be relayed after the fact.
+    if (this.#deps.relays.consumed(relay.feed, boundaryTs)) {
+      this.#log.debug('relay for this boundary was finished while this one waited in the queue', { boundaryTs });
+      return true;
+    }
+    const chainNow = await chainTimestamp(this.#deps.clients.publicClient);
+    if (!relayCanStillLand(chainNow, boundaryTs)) {
+      // The explicit deadline. Relays queue behind one another on a single key, so a relay that
+      // waited too long cannot produce a print at or before the boundary any more — broadcasting
+      // it would burn gas, land useless, and hold the queue against the relays still behind it.
+      // Say so loudly and drop it, rather than discovering the void after the fact.
+      this.#deps.relays.abandon(relay.feed, boundaryTs, this.#now());
+      this.#countFailure('relay-deadline');
+      this.#log.error('relay skipped: it can no longer land at or before the boundary', {
+        feed: relay.feed,
+        symbol: relay.symbol,
+        boundaryTs,
+        chainNow,
+        shortBySec: chainNow + Math.ceil(RELAY_MIN_LANDING_MS / 1000) - boundaryTs,
+        waitedMs: this.#now() - startedAt,
+        queueDepth: this.#deps.queue.depth,
+        hint: 'raise RELAY_LEAD_MS, or give the relay feeds sharing this keeper key more room',
+      });
+      return true;
+    }
+    if (boundaryTs - chainNow > snapshot.round.oracleMaxAge) {
+      // Only reachable when the chain clock lags the local clock badly. Back off and retry closer
+      // to the boundary rather than burning a print the contract would reject as too old.
+      this.#log.warn('relay deferred: a print now would be older than the boundary budget', {
+        boundaryTs,
+        chainNow,
+        oracleMaxAge: snapshot.round.oracleMaxAge,
+      });
+      return false;
+    }
+
+    // Quote inside the queue, so the price published is the price now and not the price when
+    // this tick was planned. `PriceSource` serves a short-TTL cache, so markets sharing a feed
+    // still make one HTTP call between them.
+    let price8dp: bigint;
+    let raw: string;
+    try {
+      const quote = await this.#deps.priceSource.get(relay.symbol);
+      price8dp = quote.price8dp;
+      raw = quote.raw;
+      this.#deps.metrics.increment(M.priceFetches, HELP[M.priceFetches] as string, {
+        symbol: relay.symbol,
+        outcome: quote.cached ? 'cached' : 'ok',
+      });
+    } catch (error) {
+      this.#deps.metrics.increment(M.priceFetches, HELP[M.priceFetches] as string, {
+        symbol: relay.symbol,
+        outcome: 'error',
+      });
+      this.#log.error('price fetch failed; boundary will have no fresh print', { symbol: relay.symbol, error });
+      this.#countFailure('price');
+      return false;
+    }
+
+    const { publicClient, walletClient, chain } = this.#deps.clients;
+    const account = this.#deps.config.account;
+    try {
+      await publicClient.simulateContract({
+        address: relay.feed,
+        abi: relayAggregatorAbi,
+        functionName: 'relay',
+        args: [price8dp],
+        account,
+      });
+    } catch (error) {
+      this.#log.error('relay simulation failed; not sending', { feed: relay.feed, error: errorText(error) });
+      this.#countFailure('relay-simulate');
+      return false;
+    }
+
+    if (this.#deps.config.dryRun) {
+      this.#log.info('DRY_RUN: would relay', { feed: relay.feed, symbol: relay.symbol, price: raw });
+      this.#deps.relays.mark(relay.feed, boundaryTs, this.#now());
+      return true;
+    }
+
+    const gas = await this.#estimateGas(() =>
+      publicClient.estimateContractGas({
+        address: relay.feed,
+        abi: relayAggregatorAbi,
+        functionName: 'relay',
+        args: [price8dp],
+        account,
+      }),
+    );
+
+    try {
+      const result = await sendWithRetry<TransactionReceipt>(this.#sendPolicy(), {
+        getBaseGasPrice: () => this.#baseGasPrice(),
+        getNonce: () => this.#nonce(),
+        send: (ctx) =>
+          walletClient.writeContract({
+            address: relay.feed,
+            abi: relayAggregatorAbi,
+            functionName: 'relay',
+            args: [price8dp],
+            account,
+            chain,
+            gas,
+            nonce: ctx.nonce,
+            gasPrice: ctx.gasPriceWei,
+          }),
+        waitForReceipt: (hash, timeoutMs) =>
+          publicClient.waitForTransactionReceipt({
+            hash,
+            timeout: timeoutMs,
+            confirmations: this.#deps.config.tx.confirmations,
+          }),
+        getReceiptIfMined: (hash) => this.#receiptIfMined(hash),
+        sleep: (ms) => sleep(ms),
+        now: this.#now,
+        onAttempt: (event) => {
+          this.#deps.metrics.increment(M.txAttempts, HELP[M.txAttempts] as string, {
+            market: this.name,
+            op: 'relay',
+          });
+          if (event.outcome === 'timeout' || event.outcome === 'error') {
+            this.#log.warn('relay attempt failed; retrying with a higher gas price', {
+              attempt: event.attempt,
+              gasPriceWei: event.gasPriceWei,
+              outcome: event.outcome,
+              error: event.error,
+            });
+          }
+        },
+      });
+
+      this.#deps.relays.mark(relay.feed, boundaryTs, this.#now());
+      this.#deps.metrics.increment(M.relays, HELP[M.relays] as string, { market: this.name });
+      this.#deps.metrics.increment(M.txGasUsed, HELP[M.txGasUsed] as string, { market: this.name, op: 'relay' }, Number(result.receipt.gasUsed));
+      this.#log.info('relay published', {
+        feed: relay.feed,
+        symbol: relay.symbol,
+        price: raw,
+        price8dp,
+        boundaryTs,
+        txHash: result.hash,
+        gasUsed: result.receipt.gasUsed,
+        attempts: result.attempts,
+        latencyMs: this.#now() - startedAt,
+      });
+      return true;
+    } catch (error) {
+      // Consume the pair even though this failed. `sendWithRetry` has already broadcast (and
+      // possibly re-broadcast) for this boundary, and from out here there is no way to tell a
+      // transaction that never reached the mempool from one that landed after the receipt wait
+      // gave up. Re-relaying would risk a second transaction for a boundary only one print can
+      // ever serve, and would spend a queue slot budgeted for a feed that still has a chance.
+      this.#deps.relays.abandon(relay.feed, boundaryTs, this.#now());
+      this.#countFailure(error instanceof TerminalTxError ? 'relay-revert' : 'relay-send');
+      this.#log.error('relay transaction failed; the boundary may have no usable print', {
+        feed: relay.feed,
+        symbol: relay.symbol,
+        boundaryTs,
+        error,
+      });
+      return false;
+    }
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -1006,7 +1131,21 @@ export class MarketWorker {
       return { roundId: 0n, searchFailed: false };
     }
 
-    const verdict = await this.#verifyBoundary(roundId, boundaryTs, oracleMaxAge, chainNowSec);
+    let verdict: BoundaryVerdict;
+    try {
+      verdict = await this.#verifyBoundary(roundId, boundaryTs, oracleMaxAge, chainNowSec);
+    } catch (error) {
+      // The feed could not be read to reproduce `_priceAt`. That is not evidence the id is wrong —
+      // it came from the contract's own `findRoundIdAt` helper — so it still goes to the chain,
+      // which will judge it for itself. What must not happen is announcing a verified boundary on
+      // the strength of a read that never happened.
+      this.#log.warn('could not verify the boundary print; sending the id unverified', {
+        boundaryTs,
+        boundaryRoundId: roundId,
+        error: errorText(error),
+      });
+      return { roundId, searchFailed: false };
+    }
     if (!verdict.usable) {
       this.#log.error('boundary print will be rejected on chain; this round WILL VOID into refunds', {
         boundaryTs,
@@ -1050,7 +1189,15 @@ export class MarketWorker {
     });
   }
 
-  /** Raw `getRoundData`, or null when the call fails. */
+  /**
+   * Raw `getRoundData`.
+   *
+   * Returns null only when the **contract** says there is no such round — a revert, which is exactly
+   * what `_tryRound`'s `try/catch` swallows on chain. A call that could not be made at all throws
+   * `OracleReadError` instead. Collapsing an RPC exception into null is what made a transient read
+   * failure indistinguishable from a phase that never existed, and let a settleable round run down
+   * its buffer into a timeout while `searchFailed` stayed false.
+   */
   async #readPrint(oracle: Address, id: bigint): Promise<OraclePrint | null> {
     try {
       const [rid, answer, , updatedAt] = await this.#deps.clients.publicClient.readContract({
@@ -1060,8 +1207,11 @@ export class MarketWorker {
         args: [id],
       });
       return { roundId: rid, answer, updatedAt: Number(updatedAt) };
-    } catch {
-      return null;
+    } catch (error) {
+      if (isContractRejection(error)) return null;
+      throw new OracleReadError(`getRoundData(${id}) on ${oracle} could not be read: ${errorText(error)}`, {
+        cause: error,
+      });
     }
   }
 
@@ -1077,9 +1227,17 @@ export class MarketWorker {
   }
 
   /**
-   * The feed's latest print, or null when `latestRoundData()` could not be read at all. Returned
-   * whole rather than as a bare id: the contract's `_tryLatestRoundId` looks at the answer and the
-   * timestamp too, and a mirror that only takes the id cannot tell a live feed from a dead one.
+   * The feed's latest print. Returned whole rather than as a bare id: the contract's
+   * `_tryLatestRoundId` looks at the answer and the timestamp too, and a mirror that only takes the
+   * id cannot tell a live feed from a dead one.
+   *
+   * Null means the **contract** refused — a revert, exactly what `_tryLatestRoundId`'s `try/catch`
+   * swallows on chain, and the one case in which `_priceAt` really does give up on the boundary.
+   * A call that could not be made at all throws `OracleReadError`, for the same reason `#readPrint`
+   * does: a transport failure here is not the feed saying no. Collapsing it into null made
+   * `verifyBoundaryRound` announce "this round WILL VOID into refunds" and count a
+   * `boundary-unusable` failure every time an RPC blinked, about a boundary the chain would have
+   * settled perfectly well.
    */
   async #latestPrint(oracle: Address): Promise<OraclePrint | null> {
     try {
@@ -1089,8 +1247,11 @@ export class MarketWorker {
         functionName: 'latestRoundData',
       });
       return { roundId: rid, answer, updatedAt: Number(updatedAt) };
-    } catch {
-      return null;
+    } catch (error) {
+      if (isContractRejection(error)) return null;
+      throw new OracleReadError(`latestRoundData() on ${oracle} could not be read: ${errorText(error)}`, {
+        cause: error,
+      });
     }
   }
 
@@ -1110,10 +1271,12 @@ export class MarketWorker {
     const oracle = this.#profile?.oracle;
     if (!oracle) return { roundId: 0n, found: false, searchFailed: false };
     try {
+      // A read that could not be made throws, and the catch below turns it into `searchFailed`:
+      // "we could not look" is never "there is nothing there". Null is the narrower case — the
+      // contract itself refusing — and it too stops the walk, because a feed whose
+      // `latestRoundData()` reverts gives `_priceAt` nothing to prove finality against, so the
+      // keeper should retry rather than name an id the chain cannot accept.
       const latest = await this.#latestPrint(oracle);
-      // Could not read the feed: "we could not look" is not "there is nothing there". A latest print
-      // the CONTRACT would reject is not that case — it still names the phase to walk back from, and
-      // `#verifyBoundary` is where the chain's verdict on it is reproduced.
       if (latest === null) return { roundId: 0n, found: false, searchFailed: true };
 
       const readStrict = this.#strictPrintReader(oracle, chainNowSec);
@@ -1148,7 +1311,11 @@ export class MarketWorker {
     // non-positive answer or `updatedAt == 0` and gives up on the whole boundary when it does. Taking
     // the bare round id instead would let the keeper certify a boundary the chain rejects outright.
     const latestRoundId = usableLatestRoundId(await this.#latestPrint(oracle));
-    const candidate = await this.#readPrint(oracle, roundId);
+    // Strict, exactly like `_tryRound`: a proxy that answers this id with a *different* round's data
+    // has not given the chain anything it will accept, so neither may this mirror call it verified.
+    // The raw read let a positive answer for another id be logged as a verified boundary while
+    // `executeRound` rejected the very id the keeper was about to supply.
+    const candidate = await this.#strictPrintReader(oracle, chainNowSec)(roundId);
     // The successor is whatever the CONTRACT would call the successor: `roundId + 1`, and failing
     // that the first round of a following phase. Reading only `roundId + 1` makes this mirror
     // disagree with the chain on exactly the aggregator upgrade the phase walk exists for.
