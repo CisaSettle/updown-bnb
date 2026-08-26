@@ -196,14 +196,15 @@ not merely asserted in the docs.
 
 ## What is deployed where
 
-**Nothing yet.** `contracts/deployments/` is empty; there is no BSC testnet or mainnet deployment of
-this code at the time of writing. Every address the keeper or the web app uses comes from
-`contracts/deployments/<chainId>.json`, which only exists after `Deploy.s.sol` has run. Both apps
-fail with a clear message when that file is absent rather than falling back to a guess.
+The live addresses are in [Deployed](#deployed) above and in
+`contracts/deployments/<chainId>.json`, which is the single source of truth the keeper and the web
+build both read. It is written only by a real broadcast — a dry run deliberately writes nothing, so
+a rehearsal can never leave a config pointing at addresses that do not exist. Both apps fail with a
+clear message when the file is absent rather than falling back to a guess.
 
 | Chain | Chain id | Feeds | Status |
 |---|---|---|---|
-| BSC testnet | 97 | `RelayAggregator` — keeper-fed, because the native testnet Chainlink feeds are up to ~1480s stale and would void every 5-minute round | First deployment target |
+| BSC testnet | 97 | `RelayAggregator` — keeper-fed, because the native testnet Chainlink feeds run up to ~1500s stale and would void every 5-minute round | **Live**, all contracts source-verified |
 | BSC mainnet | 56 | Real Chainlink `AggregatorV3` feeds (BTC/USD, BNB/USD) | Not deployed — **owner-gated** |
 
 > **Mainnet deployment is a separate, owner-gated step.** It spends real funds, it is irreversible,

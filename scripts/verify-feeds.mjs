@@ -18,6 +18,10 @@ async function call(rpc,to,data){
   const j = await r.json(); if(j.error) throw new Error(j.error.message); return j.result;
 }
 function decStr(hex){ const b=Buffer.from(hex.slice(2),'hex'); const len=Number('0x'+b.slice(32,64).toString('hex')); return b.slice(64,64+len).toString('utf8'); }
+// Chainlink writes 'BTC / USD' while our keys read 'BTC/USD'; compare on content, not spacing.
+// The old check compared d.trim() to the key, which the internal spaces made permanently false —
+// so every feed reported DESC-MISMATCH and the check told us nothing.
+const normalise = (s) => String(s).replace(/\s+/g, '').toUpperCase();
 function i256(hex){ let v=BigInt(hex); if(v>=(1n<<255n)) v-= (1n<<256n); return v; }
 for(const [net,cfg] of Object.entries(NETS)){
   console.log(`\n### ${net}  (${cfg.rpc})`);
@@ -31,7 +35,7 @@ for(const [net,cfg] of Object.entries(NETS)){
       const w = raw.slice(2).match(/.{64}/g);
       const answer = i256('0x'+w[1]); const updatedAt = parseInt(w[3],16);
       const age = Math.floor(Date.now()/1000)-updatedAt;
-      console.log(`  ${name.padEnd(8)} ${addr}  desc="${d}" dec=${dec} price=${(Number(answer)/10**dec).toFixed(2)} age=${age}s ${d.trim()===name?'OK':'!! DESC-MISMATCH'}`);
+      console.log(`  ${name.padEnd(8)} ${addr}  desc="${d}" dec=${dec} price=${(Number(answer)/10**dec).toFixed(2)} age=${age}s ${normalise(d)===normalise(name)?'OK':'!! DESC-MISMATCH'}`);
     }catch(e){ console.log(`  ${name.padEnd(8)} ${addr}  ERROR: ${e.message}`); }
   }
   for(const [name,addr] of Object.entries(cfg.tokens)){

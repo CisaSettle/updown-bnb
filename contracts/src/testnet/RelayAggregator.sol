@@ -34,9 +34,13 @@ contract RelayAggregator is IAggregatorV3, Ownable {
     error BadAnswer();
     error NoData();
 
-    constructor(address initialOwner, address updater_, uint8 decimals_, string memory description_, int256 initial)
-        Ownable(initialOwner)
-    {
+    constructor(
+        address initialOwner,
+        address updater_,
+        uint8 decimals_,
+        string memory description_,
+        int256 initial
+    ) Ownable(initialOwner) {
         decimals = decimals_;
         description = description_;
         updater = updater_;
@@ -60,7 +64,12 @@ contract RelayAggregator is IAggregatorV3, Ownable {
         emit AnswerRelayed(roundId, answer, block.timestamp);
     }
 
-    function getRoundData(uint80 roundId) public view override returns (uint80, int256, uint256, uint256, uint80) {
+    function getRoundData(uint80 roundId)
+        public
+        view
+        override
+        returns (uint80, int256, uint256, uint256, uint80)
+    {
         RoundData memory d = _history[roundId];
         if (d.updatedAt == 0) revert NoData();
         return (roundId, d.answer, d.updatedAt, d.updatedAt, roundId);

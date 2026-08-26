@@ -62,7 +62,12 @@ contract UpDownMarketNative is UpDownMarketBase {
 
     /// @inheritdoc UpDownMarketBase
     /// @dev Native BNB is the settlement asset here and can never be recovered this way.
-    function recoverToken(address token, address to, uint256 amount) external override onlyOwner nonReentrant {
+    function recoverToken(address token, address to, uint256 amount)
+        external
+        override
+        onlyOwner
+        nonReentrant
+    {
         if (to == address(0)) revert ZeroAddress();
         if (token == address(0)) revert CannotRecoverAsset();
         IERC20(token).safeTransfer(to, amount);

@@ -16,10 +16,16 @@ export PATH="$HOME/.foundry/bin:$PATH"
 cd "$(dirname "$0")/../contracts" || exit 1
 
 RED=$'\033[31m'; GRN=$'\033[32m'; YEL=$'\033[33m'; DIM=$'\033[2m'; RST=$'\033[0m'
+
+# Failures are recorded as NAMED reasons, never as one flag. An override must be able to retract
+# exactly the check it is about — an earlier version cleared a global FAILED=0, which silently
+# forgave an invalid deployer key and a wrong-chain RPC along with the owner check.
+FAILURES=()
 ok(){ echo "${GRN}  ok${RST}  $*"; }
-bad(){ echo "${RED} FAIL${RST}  $*"; FAILED=1; }
+bad(){ local id="$1"; shift; echo "${RED} FAIL${RST}  $*"; FAILURES+=("$id"); }
 warn(){ echo "${YEL} warn${RST}  $*"; }
-FAILED=0
+retract(){ local id="$1" kept=(); for f in ${FAILURES+"${FAILURES[@]}"}; do [ "$f" = "$id" ] || kept+=("$f"); done; FAILURES=(${kept+"${kept[@]}"}); }
+failed(){ [ ${#FAILURES[@]} -gt 0 ]; }
 
 [ -f ../.env.mainnet ] && { set -a; . ../.env.mainnet; set +a; echo "${DIM}sourced ../.env.mainnet${RST}"; }
 : "${BSC_RPC_URL:=https://bsc-dataseed1.bnbchain.org}"
@@ -29,26 +35,27 @@ echo "═══ preflight ══════════════════
 
 # ── env present ──────────────────────────────────────────────────────────────
 for v in PRIVATE_KEY OWNER OPERATOR; do
-  [ -n "${!v:-}" ] && ok "$v is set" || bad "$v is not set"
+  [ -n "${!v:-}" ] && ok "$v is set" || bad "env:$v" "$v is not set"
 done
-[ "$FAILED" = 1 ] && { echo; echo "${RED}preflight failed${RST}"; exit 1; }
+failed && { echo; echo "${RED}preflight failed${RST}"; exit 1; }
 
 DEPLOYER=$(cast wallet address --private-key "$PRIVATE_KEY" 2>/dev/null) \
-  && ok "deployer resolves to $DEPLOYER" || bad "PRIVATE_KEY is not a valid key"
+  && ok "deployer resolves to $DEPLOYER" || bad key "PRIVATE_KEY is not a valid key"
 
 # ── chain reachable and is really mainnet ────────────────────────────────────
 CHAIN=$(cast chain-id --rpc-url "$BSC_RPC_URL" 2>/dev/null)
-[ "$CHAIN" = "56" ] && ok "RPC is BNB Smart Chain mainnet (chain 56)" || bad "RPC reports chain '$CHAIN', expected 56"
+[ "$CHAIN" = "56" ] && ok "RPC is BNB Smart Chain mainnet (chain 56)" || bad chain "RPC reports chain '$CHAIN', expected 56"
 
 # ── owner must be a contract (Safe/Timelock), never an EOA ───────────────────
 OWNER_CODE=$(cast code "$OWNER" --rpc-url "$BSC_RPC_URL" 2>/dev/null)
 if [ -z "$OWNER_CODE" ] || [ "$OWNER_CODE" = "0x" ]; then
-  bad "OWNER $OWNER has no code — it is an EOA. Use a Safe multisig or a Timelock."
+  bad owner-eoa "OWNER $OWNER has no code — it is an EOA. Use a Safe multisig or a Timelock."
   echo "       ${DIM}An EOA owner is a single key that can pause the market and take the accrued"
   echo "       fees. It can never touch user principal, but it is still a single point of"
   echo "       failure on a live money contract. Override only if you truly mean to:"
   echo "       ALLOW_EOA_OWNER=1 $0${RST}"
-  [ "${ALLOW_EOA_OWNER:-0}" = "1" ] && { warn "ALLOW_EOA_OWNER=1 — proceeding with an EOA owner"; FAILED=0; }
+  # retracts ONLY the owner check; every other failure still stands
+  [ "${ALLOW_EOA_OWNER:-0}" = "1" ] && { warn "ALLOW_EOA_OWNER=1 — proceeding with an EOA owner"; retract owner-eoa; }
 else
   ok "OWNER $OWNER is a contract (${#OWNER_CODE} bytes of code) — good"
 fi
@@ -58,14 +65,14 @@ BAL=$(cast balance "$DEPLOYER" --rpc-url "$BSC_RPC_URL" 2>/dev/null || echo 0)
 BAL_H=$(cast from-wei "${BAL:-0}")
 node -e "process.exit(Number('$BAL_H') >= 0.003 ? 0 : 1)" \
   && ok "deployer holds $BAL_H BNB (needs ~0.001 for gas)" \
-  || bad "deployer holds $BAL_H BNB — fund it with at least 0.003 BNB"
+  || bad funding "deployer holds $BAL_H BNB — fund it with at least 0.003 BNB"
 
 # ── the settlement asset really is BSC-USDT ──────────────────────────────────
 USDT=0x55d398326f99059fF775485246999027B3197955
 SYM=$(cast call $USDT "symbol()(string)" --rpc-url "$BSC_RPC_URL" 2>/dev/null | tr -d '"')
 DEC=$(cast call $USDT "decimals()(uint8)" --rpc-url "$BSC_RPC_URL" 2>/dev/null)
 [ "$SYM" = "USDT" ] && [ "$DEC" = "18" ] && ok "settlement asset is $SYM with $DEC decimals" \
-  || bad "settlement asset check failed (symbol=$SYM decimals=$DEC)"
+  || bad asset "settlement asset check failed (symbol=$SYM decimals=$DEC)"
 
 # ── the Chainlink feeds are alive right now ──────────────────────────────────
 for pair in "BTC:0x264990fbd0A4796A3E3d8E37C4d5F87a3aCa5Ebf" "BNB:0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE"; do
@@ -75,18 +82,22 @@ for pair in "BTC:0x264990fbd0A4796A3E3d8E37C4d5F87a3aCa5Ebf" "BNB:0x0567F2323251
   AGE=$(( $(date +%s) - ${UPD:-0} ))
   # 5-minute markets ship with oracleMaxAge = 150s; a feed staler than that would void every round.
   if [ "${UPD:-0}" -gt 0 ] && [ "$AGE" -lt 150 ]; then ok "$NAME/USD feed is ${AGE}s old (budget 150s)"
-  else bad "$NAME/USD feed is ${AGE}s old — a 5-minute market would void every round"; fi
+  else bad "feed-$NAME" "$NAME/USD feed is ${AGE}s old — a 5-minute market would void every round"; fi
 done
 
 # ── the contracts still pass their own tests ─────────────────────────────────
 if FOUNDRY_PROFILE=ci forge test >/tmp/updown-mainnet-test.log 2>&1; then
   ok "forge test green ($(grep -c '\[PASS\]' /tmp/updown-mainnet-test.log) tests)"
 else
-  bad "forge test FAILED — see /tmp/updown-mainnet-test.log"
+  bad tests "forge test FAILED — see /tmp/updown-mainnet-test.log"
 fi
 
 echo
-[ "$FAILED" = 1 ] && { echo "${RED}preflight failed — nothing was broadcast.${RST}"; exit 1; }
+failed && {
+  echo "${RED}preflight failed — nothing was broadcast.${RST}"
+  echo "  outstanding: ${FAILURES[*]}"
+  exit 1
+}
 echo "${GRN}preflight passed${RST}"
 
 # ── simulate against real chain state ────────────────────────────────────────

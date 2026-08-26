@@ -17,6 +17,10 @@ jobs:
           forge install foundry-rs/forge-std@v1.16.2 --no-git
           forge install OpenZeppelin/openzeppelin-contracts@v5.1.0 --no-git
         working-directory: contracts
+      # README documents a formatting gate; make it real rather than aspirational.
+      - name: Format check
+        run: forge fmt --check
+        working-directory: contracts
       - name: Build
         run: forge build --deny warnings
         working-directory: contracts

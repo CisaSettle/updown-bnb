@@ -93,10 +93,14 @@ contract Deploy is Script {
         UpDownRegistry registry = new UpDownRegistry(deployer); // ownership handed over below
 
         address btc5m = address(
-            new UpDownMarketERC20(owner, btcFeed, usdt, I5M, FEE_BPS, BUF5M, AGE5M, USDT_MIN, USDT_MAX, USDT_SIDE)
+            new UpDownMarketERC20(
+                owner, btcFeed, usdt, I5M, FEE_BPS, BUF5M, AGE5M, USDT_MIN, USDT_MAX, USDT_SIDE
+            )
         );
         address btc1h = address(
-            new UpDownMarketERC20(owner, btcFeed, usdt, I1H, FEE_BPS, BUF1H, AGE1H, USDT_MIN, USDT_MAX, USDT_SIDE)
+            new UpDownMarketERC20(
+                owner, btcFeed, usdt, I1H, FEE_BPS, BUF1H, AGE1H, USDT_MIN, USDT_MAX, USDT_SIDE
+            )
         );
         address bnb5m = address(
             new UpDownMarketNative(owner, bnbFeed, I5M, FEE_BPS, BUF5M, AGE5M, BNB_MIN, BNB_MAX, BNB_SIDE)
@@ -157,6 +161,8 @@ contract Deploy is Script {
         vm.serializeAddress(k, "usdt", usdt);
         vm.serializeAddress(k, "owner", owner);
         vm.serializeAddress(k, "operator", operator);
+        // the registry's constructor arg, and not the same account as `owner` once a Safe owns it
+        vm.serializeAddress(k, "deployer", vm.addr(vm.envUint("PRIVATE_KEY")));
         vm.serializeBool(k, "relayFeeds", !isMainnet);
         string memory out = vm.serializeUint(k, "feeBps", FEE_BPS);
         vm.writeJson(out, string.concat("./deployments/", vm.toString(block.chainid), ".json"));

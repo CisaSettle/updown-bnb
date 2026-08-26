@@ -82,7 +82,12 @@ contract UpDownMarketERC20 is UpDownMarketBase {
     }
 
     /// @inheritdoc UpDownMarketBase
-    function recoverToken(address token, address to, uint256 amount) external override onlyOwner nonReentrant {
+    function recoverToken(address token, address to, uint256 amount)
+        external
+        override
+        onlyOwner
+        nonReentrant
+    {
         if (to == address(0)) revert ZeroAddress();
         if (token == address(asset)) revert CannotRecoverAsset();
         if (token == address(0)) {

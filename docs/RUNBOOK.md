@@ -335,7 +335,7 @@ Boot fails loudly and lists **every** problem at once if any value is invalid.
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `METRICS_PORT` / `METRICS_HOST` | `9464` / `0.0.0.0` | `/healthz` and `/metrics` listener |
 | `EXECUTE_LEAD_MS` | `2000` | Delay after the boundary before calling `executeRound` |
-| `RELAY_LEAD_MS` | `15000` | How long before the boundary to publish a testnet relay print |
+| `RELAY_LEAD_MS` | `20000` | Budget for **one** relay before the boundary (testnet only). The actual lead is this multiplied by the number of relays sharing that boundary, then clamped to `oracleMaxAge` less a 10s margin — `relayCapacity()` reports how many a feed can genuinely carry. |
 | `IDLE_POLL_MS` | `30000` | Re-poll interval for a paused / not-yet-started market |
 | `FIND_ROUND_MAX_STEPS` | `64` | Bound on the `findRoundIdAt` walk-back |
 | `PRICE_API` | Binance ticker | Spot price source for testnet relays |
@@ -544,6 +544,23 @@ reach user principal or unclaimed payouts, by construction.
 - **Withdraw the rounding residue.** Per-winner floor division leaves at most 1 wei per winner in the
   contract; it is unreachable by everyone, including the owner.
 - **Grant anyone a settlement privilege.** There is no operator role to grant.
+- **Renounce ownership.** `renounceOwnership()` reverts on both market types and the registry.
+  Inherited from OpenZeppelin and live in the ABI, one call would have stranded `treasuryAmount`
+  forever, made `pause()` and `setOracle()` permanently unreachable, and — because `pause()` clears
+  `genesisStarted` while `genesisStart()` is `onlyOwner` — could have left a paused market unable to
+  ever trade again.
+
+> **`pause()` is worth money to an owner who is also a bettor, and you should know that.**
+> The mechanism is disclosed in the PRD as a void reason, but the economics are worth stating
+> plainly: once the settlement print for a live round is visible on the feed, the owner can see who
+> won and, instead of letting it settle, call `pause()`. The round then runs out its window and
+> **every stake comes back, including the losing side's, with no fee**. It is a one-transaction
+> version of a censorship attack that would otherwise need hundreds of consecutive blocks, and it is
+> worth up to `maxSideAmount` per round — 100,000 USDT on the USDT markets, 500 BNB on the native
+> one. It cannot take user funds; it can only cancel a round the owner was losing. This is the main
+> reason the mainnet owner must be a multisig behind a Timelock rather than one key: the delay makes
+> the option worthless, because the round has long since settled or expired by the time a pause
+> could land.
 
 ### The residual risks, stated plainly
 

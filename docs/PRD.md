@@ -124,9 +124,12 @@ closePrice == lockPrice → TIE → round refundable, zero fee
 **Refundable (everyone gets exactly their stake back, fee = 0)** when any of:
 - TIE (`closePrice == lockPrice`)
 - one-sided pool (`bull == 0 || bear == 0`) — there is no counterparty, so there is nothing to win
-- no usable print at the boundary (feed dead, non-positive answer, or the supplied round is not the
-  last one at or before the boundary)
-- the round's own snapshotted settlement window elapsed without settlement
+- the round's own snapshotted settlement window elapsed without any valid proof arriving
+
+Note what is **not** on that list: a caller supplying an unusable or non-final boundary round id does
+**not** void the round — `executeRound` reverts `InvalidBoundaryProof` and nothing changes. That is
+what stops a losing bettor from front-running an honest call to force everyone into a refund. A dead
+feed therefore reaches a refund only the slow way, by the settlement window running out.
 - admin `pause()` while the round was live
 
 Every one of those conditions is judged against **that round's own snapshots** of `feeBps`,
@@ -171,10 +174,19 @@ Verified live on 2026-08-26:
 | ETH/USD | `0x9ef1B8c0E4F7dc8bF5719Ea496883DC6401d5b2e` | `0x143db3CEEfbdfe5631aDD3E50f7614B6ba708BA7` | 8 |
 | BNB/USD | `0x0567F2323251f0Aab15c8dFb1967E4e8A7D42aeE` | `0x2514895c72f50D8bd4B4F9b1110F0D6bD2c97526` | 8 |
 
+Settlement is admitted only once `block.timestamp` is **strictly past** the boundary. Inside the
+boundary second a fresh print timestamped exactly `targetTs` still qualifies, so admitting that
+second would leave the settled price decided by transaction ordering within one block. Past it, the
+qualifying set is frozen for good.
+
 A boundary price at `targetTs` is **usable** only if all hold, for the round id the caller supplied:
 - `getRoundData(id)` returns `answer > 0`, `updatedAt != 0`, `updatedAt <= block.timestamp`
 - `updatedAt <= targetTs` — the print is at or before the boundary
-- `targetTs - updatedAt <= oracleMaxAge` (per-round snapshot) — the feed was actually alive there
+- `targetTs - updatedAt <= oracleMaxAge` — the feed was actually alive there. `oracleMaxAge` is
+  **immutable**, and settlement reads that immutable directly. `Round.oracleMaxAge` records the value
+  in force when the round started; because the parameter cannot change, the two are always equal, and
+  `test_everyRoundRecordsTheImmutableOracleMaxAge` pins that so anyone who later makes it mutable has
+  to decide deliberately which one settlement should consult.
 - it is the **last** such print: either `id == latestRoundId`, or its successor has
   `updatedAt > targetTs`. Chainlink proxies encode `roundId = phaseId << 64 | aggregatorRoundId`, so
   the successor of a phase's last round is the *first round of the next phase*, not `id + 1`; the
@@ -198,7 +210,7 @@ keeper `updater`, fed from a real spot price. It is never deployed on mainnet.
 | Control | Default | Purpose |
 |---|---|---|
 | `minBetAmount` | 1 USDT | dust / gas-griefing |
-| `maxBetAmount` | 5,000 USDT per tx | whale concentration |
+| `maxBetAmount` | 5,000 USDT per tx | per-transaction size. It does **not** bound a single address: nothing stops one account sending many transactions up to `maxSideAmount`. `maxSideAmount` is the real cap. |
 | `maxSideAmount` | 100,000 USDT per side per round | caps the payoff from manipulating the settlement print — the exact attack surface criticised in Polymarket's 5m markets |
 | `feeBps` | 300 (3%), hard-capped at 1000 | revenue |
 | `bufferSeconds` | 240s (5m rounds) | how late a round may still settle before it voids into refunds; snapshotted per round; must be `< interval` |
@@ -273,7 +285,7 @@ function currentBettableEpoch() external view returns (uint256);
   idempotent catch-up path. It holds no on-chain privilege — anyone can run one — so a keeper outage
   degrades to refunds, never to loss. On testnet it also relays real spot prices into
   `RelayAggregator`.
-- **Web** (Next.js 15 + wagmi v2 + viem + RainbowKit + Tailwind): live round card with countdown,
+- **Web** (Vite + React 18 + wagmi v2 + viem + Tailwind, static build): live round card with countdown,
   both odds vocabularies, bet UP/DOWN, position + claim list, round history read from logs.
 - **Deploy scripts** (Foundry): deterministic deploy, BscScan verify, JSON deployment artifacts.
 

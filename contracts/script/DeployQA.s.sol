@@ -46,15 +46,22 @@ contract DeployQA is Script {
             feeds[i] = address(new RelayAggregator(runner, runner, 8, "BTC / USD", 80_000e8));
         }
         markets[0] = address(
-            new UpDownMarketERC20(runner, feeds[0], usdt, INTERVAL, FEE_BPS, BUFFER, MAX_AGE, U_MIN, U_MAX, U_SIDE)
+            new UpDownMarketERC20(
+                runner, feeds[0], usdt, INTERVAL, FEE_BPS, BUFFER, MAX_AGE, U_MIN, U_MAX, U_SIDE
+            )
         );
         markets[1] = address(
-            new UpDownMarketERC20(runner, feeds[1], usdt, INTERVAL, FEE_BPS, BUFFER, MAX_AGE, U_MIN, U_MAX, U_SIDE)
+            new UpDownMarketERC20(
+                runner, feeds[1], usdt, INTERVAL, FEE_BPS, BUFFER, MAX_AGE, U_MIN, U_MAX, U_SIDE
+            )
         );
-        markets[2] =
-            address(new UpDownMarketNative(runner, feeds[2], INTERVAL, FEE_BPS, BUFFER, MAX_AGE, B_MIN, B_MAX, B_SIDE));
+        markets[2] = address(
+            new UpDownMarketNative(runner, feeds[2], INTERVAL, FEE_BPS, BUFFER, MAX_AGE, B_MIN, B_MAX, B_SIDE)
+        );
         markets[3] = address(
-            new UpDownMarketERC20(runner, feeds[3], usdt, INTERVAL, FEE_BPS, BUFFER, MAX_AGE, U_MIN, U_MAX, U_SIDE)
+            new UpDownMarketERC20(
+                runner, feeds[3], usdt, INTERVAL, FEE_BPS, BUFFER, MAX_AGE, U_MIN, U_MAX, U_SIDE
+            )
         );
 
         vm.stopBroadcast();

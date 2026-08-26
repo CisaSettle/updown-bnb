@@ -531,7 +531,9 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     function _tryRound(uint80 roundId) private view returns (bool, int256, uint256) {
-        try oracle.getRoundData(roundId) returns (uint80 rid, int256 answer, uint256, uint256 updatedAt, uint80) {
+        try oracle.getRoundData(roundId) returns (
+            uint80 rid, int256 answer, uint256, uint256 updatedAt, uint80
+        ) {
             if (rid != roundId || answer <= 0 || updatedAt == 0 || updatedAt > block.timestamp) {
                 return (false, 0, 0);
             }

@@ -41,7 +41,9 @@ contract UpDownRegistry is Ownable2Step {
         if (market == address(0) || oracle == address(0)) revert ZeroAddress();
         if (_index[market] != 0) revert AlreadyRegistered();
         _markets.push(
-            MarketInfo({market: market, asset: asset, oracle: oracle, interval: interval_, enabled: true, label: label})
+            MarketInfo({
+                market: market, asset: asset, oracle: oracle, interval: interval_, enabled: true, label: label
+            })
         );
         id = _markets.length - 1;
         _index[market] = id + 1;

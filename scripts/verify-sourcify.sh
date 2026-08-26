@@ -23,6 +23,10 @@ FILE="deployments/${CHAIN}.json"
 j(){ node -e "console.log((JSON.parse(require('fs').readFileSync('$FILE'))['$1'] ?? ''))"; }
 REGISTRY=$(j registry); BTC5M=$(j btcUsd5m); BTC1H=$(j btcUsd1h); BNB5M=$(j bnbUsd5m)
 USDT=$(j usdt); BTCF=$(j btcFeed); BNBF=$(j bnbFeed); OWNER=$(j owner); OPERATOR=$(j operator)
+# The registry is constructed with the DEPLOYER and handed to `owner` afterwards via Ownable2Step,
+# so its constructor arg is the deployer. On testnet the two are the same account, which is exactly
+# why encoding `owner` here verified fine and would have failed on mainnet under a Safe.
+DEPLOYER=$(j deployer); [ -n "$DEPLOYER" ] || { DEPLOYER=$OWNER; echo "note: no 'deployer' in $FILE (pre-dating the field); assuming it equals owner"; }
 RELAY=$(j relayFeeds)
 
 # Must mirror the constants in script/Deploy.s.sol.
@@ -44,7 +48,7 @@ v(){ # addr path:name  encoded-args  label
 }
 
 v "$REGISTRY" src/UpDownRegistry.sol:UpDownRegistry \
-  "$(cast abi-encode 'c(address)' "$OWNER")" "UpDownRegistry"
+  "$(cast abi-encode 'c(address)' "$DEPLOYER")" "UpDownRegistry"
 v "$BTC5M" src/UpDownMarketERC20.sol:UpDownMarketERC20 \
   "$(cast abi-encode 'c(address,address,address,uint256,uint16,uint16,uint32,uint256,uint256,uint256)' \
      "$OWNER" "$BTCF" "$USDT" $I5M $FEE $BUF5M $AGE5M $U_MIN $U_MAX $U_SIDE)" "BTC/USD 5m"
