@@ -115,6 +115,28 @@ export function successorCandidates(roundId: bigint, latestRoundId: bigint): big
   return out
 }
 
+/**
+ * The whole print `_successorUpdatedAt` would settle on — id included — or undefined if we cannot
+ * see it.
+ *
+ * The id matters to a reader being shown the check: "the next print, round 11, landed 33s after
+ * the boundary" is something they can go and read for themselves, where a bare timestamp is not.
+ * `successorUpdatedAt` is the same walk with the id dropped, so the two can never disagree about
+ * which print counts as the successor.
+ */
+export function successorPrint(
+  roundId: bigint,
+  latestRoundId: bigint,
+  prints: ReadonlyMap<string, OraclePrint>,
+  nowSeconds: number,
+): OraclePrint | undefined {
+  for (const id of successorCandidates(roundId, latestRoundId)) {
+    const print = prints.get(id.toString())
+    if (isUsablePrint(print, nowSeconds)) return print
+  }
+  return undefined
+}
+
 /** `updatedAt` of the print that immediately follows `roundId`, or undefined if we cannot see it. */
 export function successorUpdatedAt(
   roundId: bigint,
@@ -122,11 +144,7 @@ export function successorUpdatedAt(
   prints: ReadonlyMap<string, OraclePrint>,
   nowSeconds: number,
 ): number | undefined {
-  for (const id of successorCandidates(roundId, latestRoundId)) {
-    const print = prints.get(id.toString())
-    if (isUsablePrint(print, nowSeconds)) return print.updatedAt
-  }
-  return undefined
+  return successorPrint(roundId, latestRoundId, prints, nowSeconds)?.updatedAt
 }
 
 export type BoundaryProof =

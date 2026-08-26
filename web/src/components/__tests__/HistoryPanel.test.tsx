@@ -1,11 +1,19 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { HistoryPanel } from '../HistoryPanel'
-import { ONE, START, round, usdt } from './fixtures'
+import { FEED, MARKET, ONE, START, round, usdt } from './fixtures'
 
 function render(rows: Array<{ epoch: bigint; round: ReturnType<typeof round> }>, now: number) {
   return renderToStaticMarkup(
-    <HistoryPanel rows={rows} token={usdt} priceDecimals={8} now={now} isLoading={false} />,
+    <HistoryPanel
+      rows={rows}
+      market={MARKET}
+      feed={FEED}
+      token={usdt}
+      priceDecimals={8}
+      now={now}
+      isLoading={false}
+    />,
   )
 }
 

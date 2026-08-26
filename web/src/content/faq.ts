@@ -255,23 +255,47 @@ export const FAQ: FaqSection[] = [
               en: 'A real settled round on BSC testnet, checked end to end:',
               zh: 'BSC 测试网上一个真实已结算轮次的完整复查：',
             },
-            code: `# 1 · the round, from the market
-$ cast call $MARKET "getRound(uint256)" 9 --rpc-url $RPC
-  lockTs        1787721000
-  closeTs       1787721300
-  lockPrice     7877399000000     # 78,773.99
-  closePrice    7893064000000     # 78,930.64
-  lockOracleId  10
-  closeOracleId 11
+            code: `# Round 9 of the BTC/USD 5-minute market on BSC testnet.
+# Give cast the return types, or it prints one unbroken word of hex.
+
+# 1 · the round, from the market
+$ cast call $MARKET "getRound(uint256)(uint64,uint64,uint64,uint16,uint16,bool,bool,\\
+    bool,int256,int256,uint80,uint80,uint32,uint256,uint256,uint256,uint256)" \\
+    9 --rpc-url $RPC
+1787720700                    # startTs
+1787721000                    # lockTs         ← the strike boundary
+1787721300                    # closeTs        ← the settlement boundary
+300                           # feeBps         = 3%
+240                           # bufferSeconds
+true                          # locked
+true                          # settled
+false                         # voided
+7877399000000                 # lockPrice      = 78,773.99
+7893064000000                 # closePrice     = 78,930.64
+10                            # lockOracleId   ← read this feed round
+11                            # closeOracleId  ← and this one
+150                           # oracleMaxAge
+6390000000000000000           # upAmount
+11670000000000000000          # downAmount
+6390000000000000000           # rewardBaseAmount
+17709900000000000000          # rewardPoolAmount
 
 # 2 · those exact feed rounds, from the oracle
-$ cast call $FEED "getRoundData(uint80)" 10 --rpc-url $RPC
-  answer      7877399000000       # matches lockPrice
-  updatedAt   1787720962          # 38s before lockTs, inside the 150s budget
+$ cast call $FEED "getRoundData(uint80)(uint80,int256,uint256,uint256,uint80)" \\
+    10 --rpc-url $RPC
+10                            # roundId, echoed back for the id we asked for
+7877399000000                 # answer     = lockPrice, to the last digit
+1787720962                    # startedAt
+1787720962                    # updatedAt  = 38s before lockTs, inside the 150s budget
+10                            # answeredInRound
 
-$ cast call $FEED "getRoundData(uint80)" 11 --rpc-url $RPC
-  answer      7893064000000       # matches closePrice
-  updatedAt   1787721267          # 33s before closeTs, inside the budget
+$ cast call $FEED "getRoundData(uint80)(uint80,int256,uint256,uint256,uint80)" \\
+    11 --rpc-url $RPC
+11
+7893064000000                 # answer     = closePrice
+1787721267                    # startedAt
+1787721267                    # updatedAt  = 33s before closeTs, inside the budget
+11
 
 # closePrice > lockPrice, so UP won this round.`,
           },

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react'
 import { useAccount } from 'wagmi'
 import { BetPanel } from './components/BetPanel'
 import { Header } from './components/Header'
@@ -7,6 +7,7 @@ import { LiveRoundCard } from './components/LiveRoundCard'
 import { MarketPicker } from './components/MarketPicker'
 import { NoDeployment } from './components/NoDeployment'
 import { PositionsPanel } from './components/PositionsPanel'
+import { RoundProof } from './components/RoundProof'
 import { SkeletonCard } from './components/Skeleton'
 import { TestnetBanner } from './components/TestnetBanner'
 import { Toaster } from './components/Toaster'
@@ -24,7 +25,15 @@ import { useSettlementToken } from './hooks/useSettlementToken'
 import { humanizeError } from './lib/errors'
 import { shortAddress } from './lib/format'
 import { useChainNow } from './hooks/useChainNow'
+import { useLang } from './lib/i18n'
+import { useRoute } from './lib/route'
 import { useTheme } from './lib/theme'
+
+/**
+ * The FAQ is loaded on demand. It carries the whole explanatory corpus in two languages — tens of
+ * kilobytes of prose that a trader who never opens it should not have to download to place a bet.
+ */
+const FaqPage = lazy(() => import('./components/FaqPage').then((m) => ({ default: m.FaqPage })))
 
 const SELECTED_KEY = 'updown.market'
 
@@ -128,6 +137,19 @@ function MarketView({ market }: { market: Market }) {
         token={token}
         now={now}
         feedName={FEED_NAME}
+        proof={
+          rounds.live ? (
+            <RoundProof
+              market={market.address}
+              feed={config.oracle}
+              round={rounds.live}
+              epoch={currentEpoch - 1n}
+              nowSeconds={now}
+              priceDecimals={oracle.decimals}
+              defaultOpen
+            />
+          ) : null
+        }
       >
         <BetPanel
           market={market.address}
@@ -159,6 +181,8 @@ function MarketView({ market }: { market: Market }) {
 
       <HistoryPanel
         rows={history.rows}
+        market={market.address}
+        feed={config.oracle}
         token={token}
         priceDecimals={oracle.decimals}
         now={now}
@@ -198,6 +222,8 @@ function MarketView({ market }: { market: Market }) {
 
 export default function App() {
   const { pref, cycle } = useTheme()
+  const lang = useLang()
+  const route = useRoute()
   const { markets, isLoading, usingFallback, error } = useMarkets()
   const [selectedAddress, setSelectedAddress] = useState<string | undefined>(() => readSelected())
 
@@ -220,9 +246,23 @@ export default function App() {
   return (
     <div className="min-h-full">
       {showTestnetHelpers ? <TestnetBanner /> : null}
-      <Header themePref={pref} onCycleTheme={cycle} />
+      <Header themePref={pref} onCycleTheme={cycle} lang={lang} onFaq={route.name === 'faq'} />
 
-      {isPlaceholderDeployment ? (
+      {/*
+        The FAQ is a route of its own rather than a panel inside the trading view: it unmounts the
+        market entirely, so nothing on it can poll, re-quote or re-render the book behind it.
+      */}
+      {route.name === 'faq' ? (
+        <Suspense
+          fallback={
+            <main className="mx-auto max-w-3xl px-4 py-6 sm:px-6">
+              <SkeletonCard />
+            </main>
+          }
+        >
+          <FaqPage />
+        </Suspense>
+      ) : isPlaceholderDeployment ? (
         <NoDeployment />
       ) : (
         <main className="mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-6">

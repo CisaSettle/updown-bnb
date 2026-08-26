@@ -168,6 +168,7 @@ export function LiveRoundCard({
   now,
   feedName,
   children,
+  proof,
 }: {
   label: string
   config: MarketConfig
@@ -187,6 +188,8 @@ export function LiveRoundCard({
   feedName: string
   /** The bet form, rendered inside the betting column. */
   children?: React.ReactNode
+  /** The per-round proof panel for the live round, rendered under its timings. */
+  proof?: React.ReactNode
 }) {
   const bettablePhase = roundPhase(bettable, now)
   const livePhase = roundPhase(live, now)
@@ -321,6 +324,13 @@ export function LiveRoundCard({
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
                 Locked at {formatTime(live.lockTs)} · settles at {formatTime(live.closeTs)}
               </p>
+
+              {/*
+                The evidence for the very numbers above it: the strike this card shows, the feed
+                round it came from, and the same checks `_priceAt` makes. Passed in rather than
+                built here so this component stays a pure renderer of what it is handed.
+              */}
+              {proof}
             </>
           ) : (
             <>
