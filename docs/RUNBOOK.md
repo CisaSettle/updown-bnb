@@ -156,7 +156,21 @@ Round parameters baked into the deploy (`Deploy.s.sol` constants):
 | BTC/USD 1h (USDT) | 3600 | 1800 | 900 | 300 | 1 / 5,000 / 100,000 USDT |
 | BNB/USD 5m (BNB) | 300 | 240 | 150 | 300 | 0.005 / 10 / 500 BNB |
 
-### 1.4 Verify sources on BscScan
+### 1.4a Verify sources — the scripted way
+
+```bash
+./scripts/verify-sourcify.sh 97      # or 56
+```
+Verifies every deployed contract on Sourcify with no API key, then polls each job and prints the
+result. It reads the addresses out of `contracts/deployments/<chainId>.json` and reconstructs the
+constructor arguments from the same constants `Deploy.s.sol` uses, so it stays in step with a
+parameter change. `already verified` counts as success.
+
+A `no_match` here is a real signal, not noise: it means the deployed bytecode no longer matches the
+source in the working tree — i.e. the source changed after the deployment. Redeploy so that what is
+running is what was reviewed.
+
+### 1.4b Verify sources on BscScan
 
 `--verify` on the deploy usually handles this. Verification uses the Etherscan **v2** multichain API
 (`foundry.toml → [etherscan]`), so one `ETHERSCAN_API_KEY` covers chains 56 and 97.
@@ -239,6 +253,20 @@ cd ../web && npm run sync:abi          # regenerates web/src/abi/*.ts from packa
 
 Stale ABIs are a silent failure mode: the UI or keeper encodes a call the contract no longer has and
 gets an opaque revert. Re-export whenever `contracts/src/` changes shape.
+
+### 1.6a Acceptance-test the live deployment
+
+```bash
+BETTOR_A_KEY=0x... BETTOR_B_KEY=0x... \
+  node scripts/onchain-acceptance.mjs --chain 97 --market btcUsd5m
+```
+Plays a full round against the live chain and asserts, with exact integer arithmetic, that the
+contract pays what it quoted: the odds formula, the payout, the fee taken only from the losing pool,
+that the loser's `claim()` genuinely reverts on chain rather than merely reading as not-claimable,
+and the solvency invariant. Both keys need gas; on testnet the faucet supplies the USDT. Exits
+non-zero if any check fails. Takes about one and a half rounds to complete.
+
+Run it after every deployment, on testnet and mainnet alike.
 
 ### 1.7 Start the keeper
 
@@ -528,6 +556,24 @@ reach user principal or unclaimed payouts, by construction.
 3. **Keeper punctuality.** A slow keeper costs product quality (rounds refund), never solvency.
 
 ### Mainnet plan
+
+**The deployment itself is one guarded command:**
+
+```bash
+./scripts/deploy-mainnet.sh          # sources ../.env.mainnet if present
+```
+It will not broadcast until a preflight passes: `OWNER` must be a **contract** (a Safe or Timelock —
+an EOA is refused unless you set `ALLOW_EOA_OWNER=1` and mean it), the deployer must hold gas, the
+RPC must really be chain 56, the settlement asset must be BSC-USDT with 18 decimals, **both
+Chainlink feeds must be live inside the 150 s budget the 5-minute markets ship with**, and the full
+Foundry suite must be green. It then simulates against real chain state, prints the gas estimate,
+and asks you to type `DEPLOY MAINNET`. As of 2026-08-26 the whole stack costs **0.00073 BNB**.
+
+Afterwards, from the owner Safe: `registry.acceptOwnership()`, then `genesisStart()` on each market.
+`Genesis.s.sol` signs with a single key and is not suitable for a Safe owner — submit those as
+governance transactions.
+
+
 
 - Deploy with `OWNER` = a **Gnosis Safe multisig** (3-of-5 or stricter), itself the proposer/executor
   of an **OpenZeppelin Timelock** (48h suggested) that holds market ownership.

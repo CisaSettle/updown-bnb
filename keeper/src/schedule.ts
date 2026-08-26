@@ -18,6 +18,24 @@
 /** `setTimeout` silently fires immediately above this, so every delay is clamped below it. */
 export const MAX_TIMEOUT_MS = 2_147_483_647;
 
+/**
+ * Per-relay budget: how long one relay may realistically take from dequeue to a confirmed receipt
+ * on BSC — RPC round trips, one or two 3s blocks, and room for a single gas-bumped retry.
+ *
+ * 15s was the old value and it was also the *whole* lead, so on a boundary shared by three feeds
+ * the second and third relays dequeued after `lockTs`, could no longer qualify, and their markets
+ * voided into refunds. The lead is now this figure times the number of relays that can share the
+ * boundary, so the schedule never assumes a relay confirms instantly.
+ */
+export const DEFAULT_RELAY_LEAD_MS = 20_000;
+
+/**
+ * Least time a relay needs between dequeuing and the boundary for its print to have any chance of
+ * landing at or before it — one BSC block plus a little. Below this the send is a wasted queue slot
+ * that only delays the relays behind it, so it is dropped loudly instead.
+ */
+export const RELAY_MIN_LANDING_MS = 3_500;
+
 export interface RoundTiming {
   /** Unix seconds. `0` means the round was never started. */
   startTs: number;
@@ -40,8 +58,17 @@ export interface WakeOptions {
   /**
    * Milliseconds **before** `lockTs` to publish the relay price, so the print's `updatedAt` lands at
    * or before the boundary. Ignored when the market reads a real Chainlink feed.
+   *
+   * This is the budget for **one** relay, not for the boundary: every relay shares one transaction
+   * queue (one key, one nonce chain), so the actual lead is this multiplied by `relaySlots`.
    */
   relayLeadMs: number;
+  /**
+   * How many relays can still be queued behind this one at this boundary, this market's own relay
+   * included. One key means they are sent strictly one after another, so the keeper must wake early
+   * enough for the *last* of them to still land at or before `lockTs`.
+   */
+  relaySlots: number;
   /** True on testnet, where the market's oracle is a keeper-fed `RelayAggregator`. */
   relayEnabled: boolean;
   /** Upper bound on a single timer, so long rounds still re-derive state periodically. */
@@ -52,7 +79,8 @@ export interface WakeOptions {
 
 export const DEFAULT_WAKE_OPTIONS: WakeOptions = {
   executeLeadMs: 2_000,
-  relayLeadMs: 15_000,
+  relayLeadMs: DEFAULT_RELAY_LEAD_MS,
+  relaySlots: 1,
   relayEnabled: false,
   maxTimerMs: 15 * 60_000,
   minTimerMs: 0,
@@ -107,6 +135,34 @@ export function clampRelayLead(relayLeadMs: number, oracleMaxAgeSec: number): nu
 }
 
 /**
+ * The lead for a boundary that `relaySlots` relays have to share.
+ *
+ * Every relay goes through one transaction queue, so they land one after another; the market whose
+ * relay is dequeued last still has to beat `lockTs`. Leading by one slot per queued relay is what
+ * makes that true without ever sending two transactions from one key at once.
+ *
+ * Still clamped by the oracle staleness budget: a print that lands too far before the boundary is
+ * rejected by `_priceAt` just as surely as one that lands after it.
+ */
+export function computeRelayLeadMs(perRelayLeadMs: number, relaySlots: number, oracleMaxAgeSec: number): number {
+  const slots = Number.isFinite(relaySlots) ? Math.max(1, Math.floor(relaySlots)) : 1;
+  return clampRelayLead(Math.max(0, perRelayLeadMs) * slots, oracleMaxAgeSec);
+}
+
+/**
+ * Can a relay that starts sending at `chainNowSec` still produce a print at or before `boundaryTs`?
+ * Used as the explicit deadline on a relay that has been sitting in the transaction queue: one that
+ * can no longer land is skipped loudly rather than broadcast to land late and useless.
+ */
+export function relayCanStillLand(
+  chainNowSec: number,
+  boundaryTs: number,
+  minLandingMs: number = RELAY_MIN_LANDING_MS,
+): boolean {
+  return chainNowSec + Math.ceil(Math.max(0, minLandingMs) / 1000) <= boundaryTs;
+}
+
+/**
  * When should the keeper next wake for a market whose bettable round is `round`, and what for?
  *
  * @param nowMs  wall-clock now, in ms
@@ -118,7 +174,7 @@ export function computeNextWake(nowMs: number, round: RoundTiming, options: Wake
   const windowEndMs = (round.lockTs + round.bufferSeconds) * 1000;
 
   if (options.relayEnabled) {
-    const lead = clampRelayLead(options.relayLeadMs, round.oracleMaxAge);
+    const lead = computeRelayLeadMs(options.relayLeadMs, options.relaySlots, round.oracleMaxAge);
     const relayTargetMs = boundaryMs - lead;
     if (nowMs < relayTargetMs) {
       const { delayMs, capped } = clampDelay(relayTargetMs - nowMs, options);

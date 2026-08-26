@@ -43,6 +43,21 @@ export const aggregatorV3Abi = [
     ],
     stateMutability: 'view',
   },
+  // Needed to resolve the print a boundary actually settles on — `latestRoundData` is the wrong
+  // number once the boundary has passed.
+  {
+    type: 'function',
+    name: 'getRoundData',
+    inputs: [{ name: 'roundId', type: 'uint80' }],
+    outputs: [
+      { name: 'roundId', type: 'uint80' },
+      { name: 'answer', type: 'int256' },
+      { name: 'startedAt', type: 'uint256' },
+      { name: 'updatedAt', type: 'uint256' },
+      { name: 'answeredInRound', type: 'uint80' },
+    ],
+    stateMutability: 'view',
+  },
 ] as const
 
 type AbiErrorItem = { readonly type: string; readonly name?: string }
