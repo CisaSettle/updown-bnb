@@ -16,10 +16,13 @@ import {RelayAggregator} from "../src/testnet/RelayAggregator.sol";
  *      minutes instead of half an hour.
  */
 contract DeployQA is Script {
-    uint256 constant INTERVAL = 60;
+    // 120s rather than the 60s floor: recovering a stale round costs `bufferSeconds + 2`, and at
+    // 60s that left the next betting window too short to relay into, so the suite could never
+    // reach a usable round. 120s leaves ~70s of clean window after a recovery crank.
+    uint256 constant INTERVAL = 120;
     uint16 constant FEE_BPS = 300;
-    uint16 constant BUFFER = 30; // must be < interval
-    uint32 constant MAX_AGE = 30; // must be < interval
+    uint16 constant BUFFER = 45; // must be < interval
+    uint32 constant MAX_AGE = 60; // must be < interval
 
     uint256 constant U_MIN = 1e18;
     uint256 constant U_MAX = 5_000e18;

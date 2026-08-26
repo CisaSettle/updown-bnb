@@ -13,7 +13,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createPublicClient, createWalletClient, http, parseAbi, encodeFunctionData, formatEther, formatUnits, getAddress } from '../keeper/node_modules/viem/_esm/index.js'
+import { createPublicClient, createWalletClient, http, parseAbi, encodeFunctionData, formatEther, formatUnits, getAddress, BaseError, ContractFunctionRevertedError } from '../keeper/node_modules/viem/_esm/index.js'
 import { privateKeyToAccount } from '../keeper/node_modules/viem/_esm/accounts/index.js'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -71,14 +71,23 @@ async function send(account, address, abi, functionName, args, value = 0n) {
     return rc
   })
 }
-/** Expect a revert. Returns the revert name if it reverted, throws if it succeeded. */
+/**
+ * Expect a revert and return the custom error's NAME.
+ *
+ * Reads viem's structured revert data rather than scraping the message: the name is the whole point
+ * of the assertion, and a regex over prose silently degrades to a useless "revert".
+ */
 async function expectRevert(account, address, abi, functionName, args, value = 0n) {
   try {
     await pub.simulateContract({ account, address, abi, functionName, args, value })
   } catch (e) {
-    const m = String(e.message ?? e)
-    const name = m.match(/Error:\s*(\w+)\(/)?.[1] ?? m.match(/reverted with the following reason:\s*(\S+)/)?.[1] ?? 'revert'
-    return name
+    if (e instanceof BaseError) {
+      const reverted = e.walk((err) => err instanceof ContractFunctionRevertedError)
+      if (reverted?.data?.errorName) return reverted.data.errorName
+      if (reverted?.reason) return reverted.reason
+    }
+    const m = String(e?.message ?? e)
+    return m.match(/Error:\s*(\w+)\(/)?.[1] ?? 'revert'
   }
   throw new Error(`${functionName} was expected to revert but simulated fine`)
 }
@@ -287,6 +296,7 @@ async function scenarioOneSidedAndClaimTo() {
   const claimSelf = encodeFunctionData({ abi: MARKET, functionName: 'claim', args: [[epoch]] })
   const e = await expectRevert(RUNNER, bettor, BETTOR, 'call', [m, claimSelf])
   record(S, 'claim() to a contract that cannot receive BNB reverts', e === 'TransferFailed' || e === 'revert', e)
+  record(S, 'the failed claim left the position intact and still refundable', (await read(m, 'pendingPayout', [epoch, bettor])) === STAKE)
 
   // never sends a transaction, so its balance moves only by the payout under test
   const sink = '0x00000000000000000000000000000000DeaDBeef'
