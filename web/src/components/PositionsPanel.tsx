@@ -59,6 +59,8 @@ export function PositionsPanel({
   revalidateClaimable,
   token,
   isLoading,
+  error,
+  onRetry,
   onClaimed,
 }: {
   market: Address
@@ -82,6 +84,10 @@ export function PositionsPanel({
   revalidateClaimable: (epochs: readonly bigint[]) => Promise<RevalidatedClaim>
   token: SettlementToken
   isLoading: boolean
+  /** Any underlying read's error. A failed read is not an empty history and must not render as one. */
+  error?: unknown
+  /** Re-runs the failed reads; without it the error state would name a problem and offer nothing. */
+  onRetry?: () => void
   onClaimed: () => void
 }) {
   const lang = useLang()
@@ -92,11 +98,17 @@ export function PositionsPanel({
   const [preparing, setPreparing] = useState<string | null>(null)
   const busy = busyKey ?? preparing
 
+  // A read that errored leaves collectability unknown for whatever it covered, so the copy below
+  // must never claim completeness on top of it — the same rule `incomplete` already enforces for
+  // an unfinished scan.
+  const failed = error !== undefined && error !== null
+  const unsure = incomplete || failed
+
   // One transaction can only carry so many epochs, so a long tail is collected in batches. The
   // count on the button is always the count actually being sent — and it never says "all" while
   // part of the history is still unsearched.
   const plan = claimPlan(collectableEpochs)
-  const label = claimAllLabel({ batch: plan.batch.length, collectable: collectableEpochs.length, complete: !incomplete })
+  const label = claimAllLabel({ batch: plan.batch.length, collectable: collectableEpochs.length, complete: !unsure })
   const notice = olderRoundsNotice(olderUnscanned)
 
   // `claim` reverts if ANY epoch in the array is not collectable, so only ever send these.
@@ -191,7 +203,7 @@ export function PositionsPanel({
                     batch: plan.batch.length,
                     collectable: collectableEpochs.length,
                     remaining: plan.remaining,
-                    complete: !incomplete,
+                    complete: !unsure,
                   }),
                 )
           }
@@ -209,6 +221,23 @@ export function PositionsPanel({
       <div className="p-5">
         {!isConnected ? (
           <p className="text-sm text-slate-600 dark:text-slate-300">{t(lang, ui.positions.connect)}</p>
+        ) : failed && positions.length === 0 ? (
+          /*
+            A failed read with nothing rendered is NOT the empty state: "no positions yet, place a
+            bet" over an RPC error told a user with unclaimed winnings that they have none — while
+            the footer below swore the coverage was complete.
+          */
+          <div>
+            <p className="text-sm font-semibold text-rose-700 dark:text-rose-400">{t(lang, ui.positions.readFailed)}</p>
+            <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+              {t(lang, ui.positions.readFailedBody)} {humanizeError(error, lang)}
+            </p>
+            {onRetry ? (
+              <button type="button" className="btn-secondary mt-3" onClick={onRetry}>
+                {t(lang, ui.app.retry)}
+              </button>
+            ) : null}
+          </div>
         ) : isLoading ? (
           <SkeletonRows rows={3} />
         ) : positions.length === 0 ? (
@@ -326,7 +355,7 @@ export function PositionsPanel({
               {t(lang, ui.positions.searchOlder)}
             </button>
           </div>
-        ) : isConnected && incomplete ? (
+        ) : isConnected && unsure ? (
           <p className="mt-3 text-[11px] leading-relaxed text-amber-700 dark:text-amber-400">
             {t(lang, ui.positions.incompleteNote)}
           </p>
@@ -335,7 +364,7 @@ export function PositionsPanel({
         <p className="mt-4 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
           {olderUnscanned > 0n ? (
             t(lang, ui.positions.footerUnscanned)
-          ) : incomplete ? (
+          ) : unsure ? (
             t(lang, ui.positions.footerIncomplete)
           ) : (
             <>

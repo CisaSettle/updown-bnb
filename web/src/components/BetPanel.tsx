@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useMemo, useRef, useState } from 'react'
 import { erc20Abi, parseEther } from 'viem'
 import { upDownMarketERC20Abi, upDownMarketNativeAbi } from '../abi'
 import * as ui from '../content/ui'
@@ -9,6 +9,7 @@ import type { MarketConfig } from '../hooks/useMarketConfig'
 import type { SettlementToken } from '../hooks/useSettlementToken'
 import { useTxRunner } from '../hooks/useTxRunner'
 import { allowanceFor, validateBetInput, type AllowanceMode, type Side } from '../lib/bet'
+import { rovingIndex } from '../lib/roving'
 import { formatAmount, formatAmountWithSymbol, formatMultiple, toInputValue } from '../lib/format'
 import { t, useLang, type Text } from '../lib/i18n'
 import { quotePayout, roundPhase, type Round } from '../lib/market'
@@ -48,6 +49,28 @@ export function BetPanel({
   // Approval size is the user's call, not ours — see `allowanceFor`.
   const [allowanceMode, setAllowanceMode] = useState<AllowanceMode>('exact')
 
+  // role=radio promises arrow keys, so arrow keys work: roving tabindex, selection follows focus.
+  const sideRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const modeRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const SIDES = ['up', 'down'] as const
+  const MODES = ['exact', 'unlimited'] as const
+
+  function onSideKeys(e: React.KeyboardEvent) {
+    const next = rovingIndex(e.key, side === 'up' ? 0 : 1, 2, 'both')
+    if (next === undefined) return
+    e.preventDefault()
+    setSide(SIDES[next] ?? 'up')
+    sideRefs.current[next]?.focus()
+  }
+
+  function onModeKeys(e: React.KeyboardEvent) {
+    const next = rovingIndex(e.key, allowanceMode === 'exact' ? 0 : 1, 2, 'both')
+    if (next === undefined) return
+    e.preventDefault()
+    setAllowanceMode(MODES[next] ?? 'exact')
+    modeRefs.current[next]?.focus()
+  }
+
   const phase = roundPhase(round, now)
   const secondsToLock = round ? Number(round.lockTs) - now : 0
   const inLockGrace = phase === 'betting' && secondsToLock <= LOCK_GRACE_SECONDS
@@ -79,6 +102,7 @@ export function BetPanel({
         input,
         side,
         phase,
+        roundKnown: round !== undefined,
         inLockGrace,
         isConnected,
         wrongChain,
@@ -100,6 +124,7 @@ export function BetPanel({
       input,
       side,
       phase,
+      round,
       inLockGrace,
       isConnected,
       wrongChain,
@@ -201,8 +226,13 @@ export function BetPanel({
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label={t(lang, ui.bet.direction)}>
-        {(['up', 'down'] as const).map((s) => {
+      <div
+        className="grid grid-cols-2 gap-2"
+        role="radiogroup"
+        aria-label={t(lang, ui.bet.direction)}
+        onKeyDown={onSideKeys}
+      >
+        {(['up', 'down'] as const).map((s, i) => {
           const active = side === s
           const isUp = s === 'up'
           return (
@@ -211,6 +241,10 @@ export function BetPanel({
               type="button"
               role="radio"
               aria-checked={active}
+              tabIndex={active ? 0 : -1}
+              ref={(el) => {
+                sideRefs.current[i] = el
+              }}
               onClick={() => setSide(s)}
               className={`rounded-xl border-2 px-3 py-2.5 text-sm font-bold transition-colors ${
                 active
@@ -234,7 +268,12 @@ export function BetPanel({
           <span className="text-[11px] text-slate-500 dark:text-slate-400">
             {t(lang, ui.bet.balance)}{' '}
             <span className="num font-semibold">
-              {token.isLoading ? '…' : formatAmountWithSymbol(token.balance, token.decimals, token.symbol)}
+              {/*
+                No wallet, no balance: the reads default their owner to the zero address, so the
+                number here would be balanceOf(0x0) — a confident "0.00" about a wallet that is
+                not connected, possibly holding plenty.
+              */}
+              {!isConnected ? '—' : token.isLoading ? '…' : formatAmountWithSymbol(token.balance, token.decimals, token.symbol)}
             </span>
           </span>
         </div>
@@ -324,7 +363,12 @@ export function BetPanel({
       {!wrongChain && needsApproval && validation.ok && amount !== null ? (
         <div className="card-muted p-3">
           <p className="label">{t(lang, ui.bet.approval)}</p>
-          <div className="mt-1.5 grid grid-cols-2 gap-2" role="radiogroup" aria-label={t(lang, ui.bet.approvalSize)}>
+          <div
+            className="mt-1.5 grid grid-cols-2 gap-2"
+            role="radiogroup"
+            aria-label={t(lang, ui.bet.approvalSize)}
+            onKeyDown={onModeKeys}
+          >
             {[
               {
                 mode: 'exact' as const,
@@ -336,7 +380,7 @@ export function BetPanel({
                 title: t(lang, ui.bet.approvalUnlimited),
                 body: t(lang, ui.bet.approvalUnlimitedBody),
               },
-            ].map((opt) => {
+            ].map((opt, i) => {
               const active = allowanceMode === opt.mode
               return (
                 <button
@@ -344,6 +388,10 @@ export function BetPanel({
                   type="button"
                   role="radio"
                   aria-checked={active}
+                  tabIndex={active ? 0 : -1}
+                  ref={(el) => {
+                    modeRefs.current[i] = el
+                  }}
                   disabled={busy}
                   onClick={() => setAllowanceMode(opt.mode)}
                   className={`rounded-lg border px-2.5 py-2 text-left text-xs transition-colors ${

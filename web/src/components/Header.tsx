@@ -20,7 +20,12 @@ export function Header({
 }) {
   return (
     <header className="sticky top-0 z-20 border-b border-slate-200 bg-slate-50/85 backdrop-blur dark:border-slate-800 dark:bg-slate-950/85">
-      <div className="mx-auto flex max-w-6xl items-center gap-2 px-4 py-3 sm:gap-3 sm:px-6">
+      {/*
+        flex-wrap, because the controls genuinely do not fit beside the logo on a phone once the
+        language toggle is always present — and a non-wrapping row would not overflow gracefully:
+        it would force the whole page wider than the viewport and clip every card below.
+      */}
+      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-2 gap-y-2 px-4 py-3 sm:gap-x-3 sm:px-6">
         <a href="#/" className="flex min-w-0 items-center gap-2.5 rounded-xl">
           <span
             aria-hidden="true"
@@ -36,7 +41,7 @@ export function Header({
           </div>
         </a>
 
-        <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5 sm:gap-2">
           {/*
             The one page a reader is sent to when they ask where the strike came from, so it is a
             labelled link in the chrome rather than a footnote — and it labels itself in the
@@ -51,7 +56,14 @@ export function Header({
           >
             {t(lang, ui.header.faq)}
           </a>
-          <LangToggle lang={lang} onChange={setLang} className="hidden h-10 items-center sm:inline-flex" />
+          {/*
+            Never hidden on phones: the app deliberately defaults to 中文 with no browser-language
+            sniffing, so this toggle is the one control a reader who cannot read the page depends
+            on — hiding it below the sm breakpoint locked every English-speaking phone visitor
+            into a language they cannot read, with the only other toggle behind a link labelled
+            常见问题.
+          */}
+          <LangToggle lang={lang} onChange={setLang} className="h-10 items-center" />
           <ThemeToggle pref={themePref} onCycle={onCycleTheme} />
           <ConnectButton />
         </div>

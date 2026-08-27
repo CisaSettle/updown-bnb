@@ -391,7 +391,7 @@ describe('a history longer than one scan window still gives up all of its money'
 
     // …so the button may not claim to have covered everything. This is the copy the finding is
     // about: a user reading "Claim all" here would believe #3 does not exist.
-    expect(first.label.en).toBe('Claim 1 found')
+    expect(first.label.en).toBe('Collect 1 found')
     expect(first.label.en).not.toContain('all')
     expect(first.label.zh).not.toContain('全部')
   })
@@ -411,7 +411,7 @@ describe('a history longer than one scan window still gives up all of its money'
     expect(state.selection.total).toBe(200n)
     expect(claimPlan(state.selection.epochs).batch).toEqual([130n, 3n])
     expect(state.incomplete).toBe(false)
-    expect(state.label.en).toBe('Claim all (2)')
+    expect(state.label.en).toBe('Collect all (2)')
     expect(state.label.zh).toBe('全部领取（2）')
   })
 
@@ -438,8 +438,9 @@ describe('a history longer than one scan window still gives up all of its money'
 
 describe('claimAllLabel — the button may never overstate what it covers', () => {
   it('says "all" only when the whole history has been searched', () => {
-    expect(claimAllLabel({ batch: 2, collectable: 2, complete: true }).en).toBe('Claim all (2)')
-    expect(claimAllLabel({ batch: 0, collectable: 0, complete: true }).en).toBe('Claim all')
+    expect(claimAllLabel({ batch: 2, collectable: 2, complete: true }).en).toBe('Collect all (2)')
+    // Complete and empty says so on the button itself — a bare disabled "Collect all" was mute on phones.
+    expect(claimAllLabel({ batch: 0, collectable: 0, complete: true }).en).toBe('Nothing to collect')
   })
 
   it('never says "all" while any epoch is unsearched or unread', () => {
@@ -450,7 +451,7 @@ describe('claimAllLabel — the button may never overstate what it covers', () =
     ]) {
       expect(claimAllLabel(args).en).not.toContain('all')
     }
-    expect(claimAllLabel({ batch: 2, collectable: 2, complete: false }).en).toBe('Claim 2 found')
+    expect(claimAllLabel({ batch: 2, collectable: 2, complete: false }).en).toBe('Collect 2 found')
     expect(claimAllLabel({ batch: 0, collectable: 0, complete: false }).en).toBe('Nothing found yet')
   })
 
@@ -458,7 +459,7 @@ describe('claimAllLabel — the button may never overstate what it covers', () =
     // 全部 is the same promise in 中文, so it may only appear where the search is finished — a
     // reader who trusts it on a partial scan reads a claimed-out balance off a partial count.
     expect(claimAllLabel({ batch: 2, collectable: 2, complete: true }).zh).toBe('全部领取（2）')
-    expect(claimAllLabel({ batch: 0, collectable: 0, complete: true }).zh).toBe('全部领取')
+    expect(claimAllLabel({ batch: 0, collectable: 0, complete: true }).zh).toBe('没有可领的')
     for (const args of [
       { batch: 2, collectable: 2, complete: false },
       { batch: 1, collectable: 1, complete: false },
@@ -473,10 +474,10 @@ describe('claimAllLabel — the button may never overstate what it covers', () =
 
   it('counts the batch, not the backlog, when one transaction cannot carry them all', () => {
     expect(claimAllLabel({ batch: MAX_CLAIM_BATCH, collectable: 57, complete: true }).en).toBe(
-      `Claim ${MAX_CLAIM_BATCH} of 57`,
+      `Collect ${MAX_CLAIM_BATCH} of 57`,
     )
     expect(claimAllLabel({ batch: MAX_CLAIM_BATCH, collectable: 57, complete: false }).en).toBe(
-      `Claim ${MAX_CLAIM_BATCH} of 57`,
+      `Collect ${MAX_CLAIM_BATCH} of 57`,
     )
     expect(claimAllLabel({ batch: MAX_CLAIM_BATCH, collectable: 57, complete: true }).zh).toBe(
       `领取 ${MAX_CLAIM_BATCH}/57`,

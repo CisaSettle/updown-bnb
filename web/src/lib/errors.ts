@@ -330,14 +330,25 @@ function messageChain(err: unknown, depth = 0): string {
  * an `Error` with the provider error tucked into `cause`, and those fell through to the generic
  * fallback — the exact case that sent the owner round the loop with "something went wrong".
  */
-function connectorCopy(err: unknown): Text | undefined {
-  const code = rpcCode(err)
+/**
+ * True when the wallet said a request is already open (JSON-RPC -32002). The popup is usually
+ * behind the browser window, so to the person nothing happened and clicking again is the natural
+ * move — which is precisely what produces this, and every further attempt fails the same way
+ * until the queued request is dealt with inside the wallet. A caller that can recover — the
+ * connect button watches for the approval and finishes the connection itself — branches on this
+ * instead of showing the generic "go deal with it and come back" message.
+ */
+export function isRequestAlreadyPending(err: unknown): boolean {
+  if (rpcCode(err) === -32002) return true
   const text = messageChain(err)
-  // -32002: a request is already open in the wallet. The popup is usually behind the browser
-  // window, so to the person nothing happened and clicking again is the natural move — which is
-  // precisely what produces this. Naming it is the difference between "the app is broken" and
-  // "your wallet is waiting for you".
-  if (code === -32002 || text.includes('already pending') || text.includes('already processing')) {
+  return text.includes('already pending') || text.includes('already processing')
+}
+
+function connectorCopy(err: unknown): Text | undefined {
+  const text = messageChain(err)
+  // Naming -32002 is the difference between "the app is broken" and "your wallet is waiting for
+  // you".
+  if (isRequestAlreadyPending(err)) {
     return ERROR_TEXT.requestPending
   }
   if (text.includes('already connected')) return ERROR_TEXT.alreadyConnected

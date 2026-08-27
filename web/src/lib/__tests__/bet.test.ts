@@ -200,6 +200,17 @@ describe('validateBetInput — when a bet cannot be placed at all', () => {
     expect(validateBetInput(state({ isConnected: false, input: '10' })).amount).toBe(10n * ONE)
   })
 
+  // `roundPhase(undefined)` is 'unstarted', and without the flag that state rendered as "Betting
+  // is closed" on every first load and market switch — asserting a closed round on a multicall
+  // still in flight, while PoolBar beside it honestly said "Reading the book…".
+  it('says it is reading, not closed, while the round is still in flight', () => {
+    const v = validateBetInput(state({ roundKnown: false, phase: 'unstarted', input: '10' }))
+    expect(v.reason?.en).toBe('Reading the round…')
+    expect(v.reason?.zh).toBe('正在读取轮次…')
+    // A caller that has its round (every other fixture here) is untouched by the flag's absence.
+    expect(validateBetInput(state({ input: '10' })).ok).toBe(true)
+  })
+
   it('accepts a well-formed bet', () => {
     const v = validateBetInput(state({ input: '10' }))
     expect(v).toEqual({ ok: true, amount: 10n * ONE })

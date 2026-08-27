@@ -1,7 +1,7 @@
 import { BaseError, ContractFunctionRevertedError, encodeErrorResult } from 'viem'
 import { describe, expect, it } from 'vitest'
 import { allErrorsAbi } from '../../abi'
-import { ERROR_COPY, ERROR_TEXT, errorCopy, faucetCooldownCopy, humanizeError } from '../errors'
+import { ERROR_COPY, ERROR_TEXT, errorCopy, faucetCooldownCopy, humanizeError, isRequestAlreadyPending } from '../errors'
 import type { Lang } from '../i18n'
 
 /** A revert the app would actually receive: the custom error, encoded, wrapped the way viem wraps it. */
@@ -187,6 +187,20 @@ describe('humanizeError', () => {
     const nestedProvider = new Error('outer')
     ;(nestedProvider as { cause?: unknown }).cause = new Error('No injected provider found')
     expect(humanizeError(nestedProvider, 'zh')).toBe(ERROR_TEXT.noProvider.zh)
+  })
+
+  // The connect button branches on this predicate to start watching the wallet instead of showing
+  // the generic "go deal with it" line, so it has to see the failure in every shape wallets throw.
+  it('exposes the pending-request check itself, in every shape wallets throw it', () => {
+    expect(isRequestAlreadyPending({ code: -32002 })).toBe(true)
+    const wrapped = new Error('Connector failed')
+    ;(wrapped as { cause?: unknown }).cause = { code: -32002 }
+    expect(isRequestAlreadyPending(wrapped)).toBe(true)
+    expect(isRequestAlreadyPending(new Error('Request of type eth_requestAccounts already pending'))).toBe(true)
+    expect(isRequestAlreadyPending(new BaseError('Already processing eth_requestAccounts.'))).toBe(true)
+    // A rejection, another code, or nothing at all is not "pending".
+    expect(isRequestAlreadyPending({ code: 4001, message: 'User rejected the request.' })).toBe(false)
+    expect(isRequestAlreadyPending(undefined)).toBe(false)
   })
 
   it('carries the error code through, because a number is prose in no language', () => {

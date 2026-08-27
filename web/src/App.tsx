@@ -4,7 +4,7 @@ import { BetPanel } from './components/BetPanel'
 import { Header } from './components/Header'
 import { HistoryPanel } from './components/HistoryPanel'
 import { LiveRoundCard } from './components/LiveRoundCard'
-import { MarketPicker } from './components/MarketPicker'
+import { MARKET_PANEL_ID, MarketPicker, marketTabId } from './components/MarketPicker'
 import { NoDeployment } from './components/NoDeployment'
 import { PositionsPanel } from './components/PositionsPanel'
 import { RoundProof } from './components/RoundProof'
@@ -15,6 +15,7 @@ import * as ui from './content/ui'
 import { addressUrl, isTestnet } from './config/chains'
 import { deployment, isPlaceholderDeployment, usesRelayFeeds } from './config/deployment'
 import { useBoundaryPrice } from './hooks/useBoundaryPrice'
+import { useCollectableMarkets } from './hooks/useCollectableMarkets'
 import { useHistory } from './hooks/useHistory'
 import { useLiveRounds } from './hooks/useRound'
 import { useMarketConfig } from './hooks/useMarketConfig'
@@ -177,6 +178,8 @@ function MarketView({ market }: { market: Market }) {
         revalidateClaimable={positions.revalidateClaimable}
         token={token}
         isLoading={positions.isLoading}
+        error={positions.error}
+        onRetry={positions.refetch}
         onClaimed={refreshAll}
       />
 
@@ -221,8 +224,12 @@ export default function App() {
   const { pref, cycle } = useTheme()
   const lang = useLang()
   const route = useRoute()
+  const { address } = useAccount()
   const { markets, isLoading, usingFallback, error } = useMarkets()
   const [selectedAddress, setSelectedAddress] = useState<string | undefined>(() => readSelected())
+  // Money won in one market must be findable from every other tab — this is what puts the dot on.
+  // Paused on the FAQ route, which exists precisely so nothing polls behind it.
+  const collectableMarkets = useCollectableMarkets(markets, address, route.name !== 'faq')
 
   const selected = useMemo(
     () => markets.find((m) => m.address.toLowerCase() === selectedAddress?.toLowerCase()) ?? markets[0],
@@ -278,6 +285,7 @@ export default function App() {
             selected={selected}
             onSelect={(m) => setSelectedAddress(m.address)}
             isLoading={isLoading}
+            collectable={collectableMarkets}
           />
 
           {usingFallback ? (
@@ -290,7 +298,9 @@ export default function App() {
           {isLoading ? (
             <SkeletonCard />
           ) : selected ? (
-            <MarketView key={selected.address} market={selected} />
+            <div role="tabpanel" id={MARKET_PANEL_ID} aria-labelledby={marketTabId(selected.address)}>
+              <MarketView key={selected.address} market={selected} />
+            </div>
           ) : (
             <div className="card p-5">
               <p className="text-sm font-semibold">{t(lang, ui.noMarkets(lang))}</p>

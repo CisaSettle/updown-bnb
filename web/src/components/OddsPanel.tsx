@@ -1,4 +1,5 @@
 import * as ui from '../content/ui'
+import { Explain } from './Explain'
 import { formatAmount, formatAmountWithSymbol, formatBreakEven, formatMultiple, overroundPoints } from '../lib/format'
 import { t, useLang, type Lang } from '../lib/i18n'
 import { balancedMultipleBps, computeOdds } from '../lib/market'
@@ -185,11 +186,21 @@ export function OddsPanel({
           lang={lang}
         />
       </div>
+      {/*
+        Visible: only the live fact (what happens to the money / that odds still move). The
+        mechanism — why an unpriced book has no quote — is an explanation and folds away.
+      */}
       <p className="mt-2 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-        {!known ? (
-          t(lang, ui.odds.unread)
-        ) : !priced ? (
-          <>
+        {!known
+          ? t(lang, ui.odds.unread)
+          : !priced
+            ? t(lang, live ? ui.odds.oneSidedLive : ui.odds.oneSidedOpen)
+            : t(lang, live ? ui.odds.finalLive : ui.odds.movingOpen)}
+      </p>
+
+      {known && !priced ? (
+        <Explain summary={t(lang, ui.odds.whyNoPrice)}>
+          <p>
             {t(lang, ui.oddsUnpriced.before)}
             <span className="num">odds()</span>
             {t(lang, ui.oddsUnpriced.middle)}
@@ -197,12 +208,9 @@ export function OddsPanel({
             {t(lang, ui.oddsUnpriced.afterBold)}
             <span className="num">{formatMultiple(balancedBps)}</span>
             {t(lang, ui.oddsUnpriced.after)}
-            {t(lang, live ? ui.odds.oneSidedLive : ui.odds.oneSidedOpen)}
-          </>
-        ) : (
-          t(lang, live ? ui.odds.finalLive : ui.odds.movingOpen)
-        )}
-      </p>
+          </p>
+        </Explain>
+      ) : null}
 
       {priced ? (
         <details className="group mt-2">
@@ -234,20 +242,20 @@ export function OddsPanel({
             <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
               {t(lang, ui.odds.howYourShare)}
             </p>
+            {/* The overround caveat belongs to the same explanation, not to the trading surface. */}
+            {overround !== undefined ? (
+              <p className="text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">
+                {t(lang, ui.oddsOverround.lead)}
+                <strong>{t(lang, ui.oddsOverround.leadBold)}</strong>
+                {t(lang, ui.oddsOverround.afterLead)}
+                <span className="num">{(100 + overround).toFixed(1)}%</span>
+                {t(lang, ui.oddsOverround.afterTotal)}
+                <span className="num">{overround.toFixed(1)}</span>
+                {t(lang, ui.oddsOverround.afterPoints)}
+              </p>
+            ) : null}
           </div>
         </details>
-      ) : null}
-
-      {priced && overround !== undefined ? (
-        <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-          {t(lang, ui.oddsOverround.lead)}
-          <strong>{t(lang, ui.oddsOverround.leadBold)}</strong>
-          {t(lang, ui.oddsOverround.afterLead)}
-          <span className="num">{(100 + overround).toFixed(1)}%</span>
-          {t(lang, ui.oddsOverround.afterTotal)}
-          <span className="num">{overround.toFixed(1)}</span>
-          {t(lang, ui.oddsOverround.afterPoints)}
-        </p>
       ) : null}
     </div>
   )

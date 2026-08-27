@@ -229,14 +229,18 @@ export function olderRoundsNotice(older: bigint): { before: Text; after: Text } 
 export function claimAllLabel(args: { batch: number; collectable: number; complete: boolean }): Text {
   const { batch, collectable, complete } = args
   if (batch === 0) {
-    return complete ? { en: 'Claim all', zh: '全部领取' } : { en: 'Nothing found yet', zh: '暂未找到' }
+    // The complete-and-empty case says so on the button itself. A disabled "Collect all" whose
+    // reason lived only in its hover title was mute on every phone.
+    return complete ? { en: 'Nothing to collect', zh: '没有可领的' } : { en: 'Nothing found yet', zh: '暂未找到' }
   }
   if (batch < collectable) {
-    return { en: `Claim ${batch} of ${collectable}`, zh: `领取 ${batch}/${collectable}` }
+    return { en: `Collect ${batch} of ${collectable}`, zh: `领取 ${batch}/${collectable}` }
   }
+  // "Collect", as everywhere else on this panel — the row buttons, the chip, the prose. One money
+  // action gets one English verb; 中文 already said 领取 throughout.
   return complete
-    ? { en: `Claim all (${batch})`, zh: `全部领取（${batch}）` }
-    : { en: `Claim ${batch} found`, zh: `领取已找到的 ${batch} 个` }
+    ? { en: `Collect all (${batch})`, zh: `全部领取（${batch}）` }
+    : { en: `Collect ${batch} found`, zh: `领取已找到的 ${batch} 个` }
 }
 
 /**

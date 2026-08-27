@@ -9,6 +9,7 @@ import type { OracleHistory } from '../hooks/useOracleSeries'
 import type { OraclePrice } from '../hooks/useOraclePrice'
 import type { SettlementToken } from '../hooks/useSettlementToken'
 import { Countdown } from './Countdown'
+import { Explain } from './Explain'
 import { OddsPanel } from './OddsPanel'
 import { PoolBar } from './PoolBar'
 import { PriceChart } from './PriceChart'
@@ -300,12 +301,27 @@ export function LiveRoundCard({
 
           {live && live.startTs !== 0n ? (
             <>
-              <Countdown
-                secondsLeft={secondsToClose}
-                total={config.interval}
-                label={livePhase === 'live' ? ui.countdownLabel.settlesIn : ui.countdownLabel.settlementWindow}
-                tone={livePhase === 'live' ? 'live' : 'idle'}
-              />
+              {/*
+                Which deadline is actually running depends on the phase. Before `closeTs` the round
+                counts to settlement; after it, the clock that matters is the settlement window at
+                `closeTs + bufferSeconds` — counting to `closeTs` there drew a permanent 00:00
+                under a label promising a running window. A settled or voided round has no running
+                deadline at all, so it shows no clock.
+              */}
+              {livePhase !== 'settled' && livePhase !== 'voided' ? (
+                <Countdown
+                  secondsLeft={livePhase === 'live' ? secondsToClose : secondsToClose + live.bufferSeconds}
+                  total={livePhase === 'live' ? config.interval : live.bufferSeconds}
+                  label={
+                    livePhase === 'live'
+                      ? ui.countdownLabel.settlesIn
+                      : livePhase === 'expired'
+                        ? ui.countdownLabel.windowClosed
+                        : ui.countdownLabel.settlementWindow
+                  }
+                  tone={livePhase === 'live' ? 'live' : 'idle'}
+                />
+              ) : null}
 
               <PriceBlock
                 strike={live.lockPrice}
@@ -350,14 +366,14 @@ export function LiveRoundCard({
             </>
           )}
 
-          {/* The honest bit, stated where the money is. */}
+          {/* The promise stays visible where the money is; the enumeration of cases folds away. */}
           <div className="card-muted p-3">
             <p className="text-xs font-bold uppercase tracking-wide text-slate-700 dark:text-slate-200">
               {t(lang, ui.liveCard.refundTitle)}
             </p>
-            <p className="mt-1 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-              {t(lang, ui.liveCard.refundBody)}
-            </p>
+            <Explain summary={t(lang, ui.liveCard.refundWhen)}>
+              <p>{t(lang, ui.liveCard.refundBody)}</p>
+            </Explain>
           </div>
         </div>
       </div>

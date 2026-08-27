@@ -154,7 +154,7 @@ function BoundaryCard({
           <p className="num mt-0.5 text-lg font-bold">{formatPrice(report.recordedPrice, priceDecimals)}</p>
           {disagrees ? (
             <p className="num mt-0.5 break-all text-[11px] font-semibold text-rose-700 dark:text-rose-300">
-              raw {report.recordedPrice.toString()}
+              {t(lang, { en: 'raw', zh: '原始值' })} {report.recordedPrice.toString()}
             </p>
           ) : null}
           <p className="num mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
@@ -176,7 +176,7 @@ function BoundaryCard({
           </p>
           {disagrees ? (
             <p className="num mt-0.5 break-all text-[11px] font-semibold text-rose-700 dark:text-rose-300">
-              raw {feedAnswer.toString()}
+              {t(lang, { en: 'raw', zh: '原始值' })} {feedAnswer.toString()}
             </p>
           ) : null}
           <p className="num mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">

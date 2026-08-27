@@ -362,9 +362,13 @@ $ cast call $FEED "getRoundData(uint80)(uint80,int256,uint256,uint256,uint80)" \
             },
           },
           {
+            // The screen's own name for this number, and the screen's own framing: the odds panel
+            // calls it a break-even win rate and explicitly denies the probability reading, so the
+            // FAQ must not teach a term that exists nowhere in the app — least of all the exact
+            // reading the app forbids.
             note: {
-              en: 'The "implied chance" shown next to each multiple is just 1 ÷ multiple. The two sides add up to slightly more than 100% because the fee is inside both — that gap is the fee, not a mispricing, and the app shows it explicitly.',
-              zh: '每个倍数旁边显示的"隐含概率"就是 1 ÷ 倍数。两侧加起来会略高于 100%，因为手续费包含在两者之中——那个差额就是手续费，不是定价错误，应用会把它明确标出来。',
+              en: 'The "break-even win rate" shown next to each multiple is just 1 ÷ multiple — what a side has to win for you to come out level at that payout, not a probability. The two sides add up to slightly more than 100% because the fee is inside both — that gap is the fee, not a mispricing, and the app shows it explicitly.',
+              zh: '每个倍数旁边显示的"保本胜率"就是 1 ÷ 倍数——按这个赔付、这一边要赢多少比例你才刚好不亏不赚，它不是概率。两侧加起来会略高于 100%，因为手续费包含在两者之中——那个差额就是手续费，不是定价错误，应用会把它明确标出来。',
             },
           },
         ],

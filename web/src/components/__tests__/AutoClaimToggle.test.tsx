@@ -44,12 +44,15 @@ describe('AutoClaimToggle', () => {
     expect(html).toContain('随时关掉')
   })
 
-  // An unread `autoClaimOptIn` must not render as "on" — that would tell someone a sweep is
-  // arranged when nothing of the sort has been agreed.
-  it('treats a read that has not come back as off', () => {
+  // An unread `autoClaimOptIn` must not render as "on" — but it must not assert "off" either:
+  // the Off copy is a definitive claim about an on-chain setting, and over an unread value it
+  // told an opted-in user the opposite of the truth while inviting a redundant opt-in click.
+  it('treats a read that has not come back as unknown: unchecked, disabled, and said out loud', () => {
     optedIn = undefined
     const html = renderIn('en', <AutoClaimToggle market={MARKET} lang="en" />)
     expect(html).not.toContain('checked=""')
-    expect(html).toMatch(/Nothing is ever pushed at you/)
+    expect(html).toContain('disabled=""')
+    expect(html).toContain('Reading this setting from the chain…')
+    expect(html).not.toMatch(/Nothing is ever pushed at you/)
   })
 })

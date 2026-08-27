@@ -96,6 +96,12 @@ WalletConnect is added only when `VITE_WALLETCONNECT_PROJECT_ID` is set. When it
 WalletConnect code is dead-code-eliminated from the bundle entirely (~385 kB main chunk vs ~485 kB
 with it enabled), so leaving it off costs nothing and adds nothing.
 
+What it buys is **phone browsers**: without it a mobile visitor's only option is the MetaMask deep
+link, so Trust / OKX / Binance-wallet users have no path at all. To enable it, create a project at
+<https://cloud.reown.com> (the id is a public client-side identifier, not a secret) and set the
+repository variable `WALLETCONNECT_PROJECT_ID` — `pages.yml` already forwards it to the build.
+Full steps: RUNBOOK §1.10.
+
 ---
 
 ## Deploying the static build

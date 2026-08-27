@@ -45,6 +45,7 @@ describe('static zh sweep', () => {
       ['marketSubtitle', ui.marketSubtitle(formatInterval(300, 'zh'), 'USDT')],
       ['remaining', ui.remaining(formatDurationWords(290, 'zh'))],
       ['feedQuietNow', ui.feedQuietNow(formatAgo(140, 'zh'))],
+      ['staleCandlesNote', ui.staleCandlesNote(ui.budgetSpan(90, 'zh'))],
       ['feedAge', ui.feedAge(12)],
       ['printedAt', ui.printedAt(formatTime(START, 'zh'))],
       ['lockedSettles', ui.lockedSettles(formatTime(START, 'zh'), formatTime(START + 300, 'zh'))],

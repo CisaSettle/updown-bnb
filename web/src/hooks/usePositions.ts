@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { zeroAddress } from 'viem'
 import { useConfig, useReadContract, useReadContracts } from 'wagmi'
 import { readContracts } from 'wagmi/actions'
@@ -88,6 +88,24 @@ export function usePositions(market: Address | undefined, user: Address | undefi
 
   // A different wallet has a different history; never show one account's page depth — or one
   // account's collected rounds — for another.
+  //
+  // The caches below carry what earlier reads learned across a query re-key. They are guarded by
+  // IDENTITY, checked synchronously on every read and write: an effect-based clear is not enough,
+  // because on an account switch the render happens before any effect runs — it would read the
+  // old account's entries, and the persist effect would then write them back over the clear.
+  const cacheKey = `${market ?? ''}|${user ?? ''}`.toLowerCase()
+  // Collectability already learned, keyed by epoch — never by position. Fresh reads overwrite
+  // entries in both directions (a probe that comes back 0 replaces a cached "collectable").
+  const knownCollect = useRef<{ key: string; view: ReadonlyMap<string, Collectability> }>({
+    key: cacheKey,
+    view: new Map(),
+  })
+  // The last non-empty epoch list, for the round trip in which a deepened scan has re-keyed
+  // `pagesQuery` and its data is not back yet. Values, not positions: the list is the epochs
+  // themselves, so it cannot mis-attribute anything, and `missingPages` still reports the pages
+  // as unread so nothing claims completeness on its strength.
+  const knownEpochs = useRef<{ key: string; list: readonly bigint[] }>({ key: cacheKey, list: [] })
+
   useEffect(() => {
     setVisibleCount(POSITION_PAGE)
     setScanSteps(1)
@@ -122,6 +140,14 @@ export function usePositions(market: Address | undefined, user: Address | undefi
   const depth = useMemo(() => scanDepth(scanSteps, visibleCount), [scanSteps, visibleCount])
   const { pages, older } = useMemo(() => epochPages(total ?? 0n, { scanned: depth }), [total, depth])
 
+  // Deepening the scan or loading more rows re-keys the queries below, and TanStack treats a new
+  // key as "no data yet" — so pressing the buttons that exist to FIND money used to blank the
+  // money already found (chip, batch, Collect-all) for as long as the refetch took. The cure is
+  // NOT placeholderData: every query here is positional against an array whose membership shifts
+  // with the depth (`epochPages` slides every page's offset), so carried-over positional data
+  // would attribute one round's payout to another. `knownEpochs` and `knownCollect` above carry
+  // what was already learned by VALUE instead.
+
   const pagesQuery = useReadContracts({
     contracts: pages.map(
       (p) =>
@@ -137,7 +163,7 @@ export function usePositions(market: Address | undefined, user: Address | undefi
     query: { enabled: enabled && pages.length > 0, refetchInterval: 30_000, staleTime: 15_000 },
   })
 
-  const { epochs, missingPages } = useMemo(() => {
+  const { epochs: freshEpochs, missingPages } = useMemo(() => {
     const data = pagesQuery.data as readonly unknown[] | undefined
     return orderNewestFirst(
       pages.map((_, i) => {
@@ -146,6 +172,20 @@ export function usePositions(market: Address | undefined, user: Address | undefi
       }),
     )
   }, [pagesQuery.data, pages])
+
+  // While the re-keyed pages read is in flight the fresh list is empty; the remembered one keeps
+  // the rows, the chip and the batch on screen — but only under the identity it was read for.
+  // An account with no history has both lists empty.
+  const epochs: readonly bigint[] =
+    freshEpochs.length > 0
+      ? freshEpochs
+      : knownEpochs.current.key === cacheKey
+        ? knownEpochs.current.list
+        : []
+
+  useEffect(() => {
+    if (freshEpochs.length > 0) knownEpochs.current = { key: cacheKey, list: freshEpochs }
+  }, [freshEpochs, cacheKey])
 
   const { loaded: visible, tail } = useMemo(() => splitLoaded(epochs, visibleCount), [epochs, visibleCount])
 
@@ -258,23 +298,51 @@ export function usePositions(market: Address | undefined, user: Address | undefi
     return view
   }, [detailQuery.data, visible])
 
-  /** Collectability for every epoch the user has, not just the rendered ones. */
-  const collectView = useMemo(() => {
+  /**
+   * What the CURRENT reads answered — no cache. This is the only map coverage accounting may
+   * trust: a cached entry proves an epoch was probed once, not that this cycle read it.
+   */
+  const freshCollect = useMemo(() => {
     const view = new Map<string, Collectability>()
     tail.forEach((epoch, i) => {
       const entry = collectabilityFromPayout(asBigInt(pick(tailScan.data as readonly unknown[] | undefined, i)))
       if (entry) view.set(epoch.toString(), entry)
     })
     for (const [epoch, entry] of loadedCollect) view.set(epoch, entry)
+    return view
+  }, [tail, tailScan.data, loadedCollect])
+
+  /**
+   * Collectability for every epoch the user has, not just the rendered ones.
+   *
+   * Seeded from `knownCollect` — under its identity guard — so that deepening the scan or loading
+   * more rows, which re-keys the queries and empties their data for a round trip, does not blank
+   * money already found. Fresh reads then overwrite by epoch, including down to "not
+   * collectable", so the cache can never keep a round the chain has stopped paying once a probe
+   * has said so. (The pre-send revalidation still re-reads the actual batch either way.)
+   */
+  const collectView = useMemo(() => {
+    const cached = knownCollect.current.key === cacheKey ? knownCollect.current.view : new Map<string, Collectability>()
+    const view = new Map<string, Collectability>(cached)
+    for (const [epoch, entry] of freshCollect) view.set(epoch, entry)
     return dropClaimed(view, claimedThisSession)
-  }, [tail, tailScan.data, loadedCollect, claimedThisSession])
+  }, [freshCollect, claimedThisSession, cacheKey])
+
+  useEffect(() => {
+    knownCollect.current = { key: cacheKey, view: collectView }
+  }, [collectView, cacheKey])
 
   const selection = useMemo(() => collectableSelection(epochs, collectView), [epochs, collectView])
 
-  /** Epochs whose collectability we could not read at all — never claimed, always disclosed. */
+  /**
+   * Epochs the CURRENT reads did not answer for — never claimed, always disclosed. Counted
+   * against `freshCollect`, not the merged view: a cached entry keeps money visible, but it must
+   * not let the panel claim completeness for an epoch this cycle never actually read (a subcall
+   * can fail individually under `allowFailure` without surfacing a query error).
+   */
   const unscanned = useMemo(
-    () => epochs.filter((e) => !collectView.has(e.toString())).length,
-    [epochs, collectView],
+    () => epochs.filter((e) => !freshCollect.has(e.toString())).length,
+    [epochs, freshCollect],
   )
 
   const scanning =
@@ -350,11 +418,14 @@ export function usePositions(market: Address | undefined, user: Address | undefi
      */
     revalidateClaimable,
     /**
-     * True when history older than the scan window is still unprobed, or a page/probe did not come
-     * back. Either way some epoch's collectability is unknown, and the UI must not pretend
-     * otherwise — least of all by calling a partial batch "Claim all".
+     * True when history older than the scan window is still unprobed, a page/probe did not come
+     * back, the scan is still running — or the total itself is still unknown, which is every
+     * initial load and account switch before `userEpochs(user, 0, 0)` answers. Either way some
+     * epoch's collectability is unknown, and the UI must not pretend otherwise — least of all by
+     * calling a partial batch "Collect all" or rendering the completeness footer beside a
+     * loading skeleton.
      */
-    incomplete: older > 0n || (!scanning && (missingPages > 0 || unscanned > 0)),
+    incomplete: (enabled && total === undefined) || older > 0n || scanning || missingPages > 0 || unscanned > 0,
     isLoading: enabled && (totalQuery.isLoading || (total !== undefined && total > 0n && scanning)),
     error: totalQuery.error ?? pagesQuery.error ?? tailScan.error ?? detailQuery.error ?? undefined,
     refetch,

@@ -6,6 +6,7 @@ import { activeChain } from '../config/chains'
 import { deployment } from '../config/deployment'
 import { useTxRunner } from '../hooks/useTxRunner'
 import { t, useLang } from '../lib/i18n'
+import { pushToast } from '../lib/toast'
 
 /**
  * Testnet-only affordances. `relayFeeds` means the price feeds are keeper-fed `RelayAggregator`s,
@@ -24,13 +25,38 @@ export function TestnetBanner({ onFaucet }: { onFaucet?: () => void }) {
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 text-xs sm:px-6">
         <span className="chip bg-amber-500/30 font-bold uppercase tracking-wide">{t(lang, ui.testnet.chip)}</span>
         <p className="min-w-0 flex-1 basis-full leading-relaxed sm:basis-0">{t(lang, ui.testnetNotice(lang))}</p>
+        {/*
+          The USDT faucet is a transaction, and a fresh test wallet cannot pay for one: every step
+          of the funnel needs a little tBNB for gas, and nothing else on the page said where it
+          comes from. This link is the difference between a tester who starts and one who is stuck
+          at "insufficient funds" on their very first click.
+        */}
+        <a
+          className="btn h-8 shrink-0 border border-amber-600 px-3 py-1 text-xs text-amber-900 hover:bg-amber-200 dark:text-amber-100 dark:hover:bg-amber-900"
+          href="https://www.bnbchain.org/en/testnet-faucet"
+          target="_blank"
+          rel="noreferrer"
+          title={t(lang, ui.testnet.gasFaucetTitle)}
+        >
+          {t(lang, ui.testnet.gasFaucet)}
+        </a>
         {hasFaucetToken ? (
           <button
             type="button"
             className="btn h-8 shrink-0 bg-amber-600 px-3 py-1 text-xs text-white hover:bg-amber-700 disabled:opacity-60"
-            disabled={!isConnected || faucetBusy}
+            disabled={faucetBusy}
             title={t(lang, isConnected ? ui.testnet.faucetTitle : ui.testnet.faucetNeedsWallet)}
-            onClick={() =>
+            onClick={() => {
+              // Not `disabled` while no wallet is connected: a dead button explains nothing —
+              // least of all on a phone, where its `title` never shows. The click answers instead.
+              if (!isConnected) {
+                pushToast({
+                  kind: 'info',
+                  title: t(lang, ui.testnet.faucetNeedsWallet),
+                  body: t(lang, ui.testnet.faucetHowTo),
+                })
+                return
+              }
               void run(
                 'faucet',
                 ui.testnet.faucetTx,
@@ -48,7 +74,7 @@ export function TestnetBanner({ onFaucet }: { onFaucet?: () => void }) {
                   onFaucet?.()
                 },
               )
-            }
+            }}
           >
             {t(lang, faucetBusy ? ui.testnet.faucetBusy : ui.testnet.faucet)}
           </button>

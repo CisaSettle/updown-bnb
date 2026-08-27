@@ -49,6 +49,13 @@ export interface BetInputState {
   spendable: bigint
   genesisStarted: boolean
   paused: boolean
+  /**
+   * False while the round read is still in flight. `roundPhase(undefined)` is 'unstarted', and
+   * without this flag the validator asserted "Betting is closed" about a round it had not read —
+   * on every first load and market switch — while PoolBar beside it honestly said it was reading.
+   * Optional so a caller that always has its round (every test fixture) need not say so.
+   */
+  roundKnown?: boolean
   minBet: bigint
   maxBet: bigint
   maxSide: bigint
@@ -110,6 +117,9 @@ export function validateBetInput(s: BetInputState): BetValidation {
       },
       amount,
     )
+  }
+  if (s.roundKnown === false) {
+    return fail({ en: 'Reading the round…', zh: '正在读取轮次…' }, amount)
   }
   if (s.phase === 'upcoming') {
     return fail({ en: 'This round has not opened for betting yet.', zh: '这一轮还没有开放下注。' }, amount)

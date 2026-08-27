@@ -1,4 +1,4 @@
-import { addressUrl, activeChain } from '../config/chains'
+import { addressUrl, chainLabel } from '../config/chains'
 import type { MarketFact } from '../hooks/useMarketFacts'
 import { formatInterval, shortAddress } from '../lib/format'
 import { t, type Lang, type Text } from '../lib/i18n'
@@ -38,7 +38,8 @@ function Frame({
   return (
     <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50/70 p-4 dark:border-sky-900 dark:bg-sky-950/40">
       <p className="label text-sky-800 dark:text-sky-300">
-        {t(lang, title)} · {activeChain.name}
+        {/* The chain's name as the reader says it — the app-wide rule chains.ts states. */}
+        {t(lang, title)} · {chainLabel(lang)}
       </p>
       <div className="mt-2">{children}</div>
       {footer ? <div className="mt-2 text-[11px] leading-relaxed text-slate-600 dark:text-slate-300">{footer}</div> : null}

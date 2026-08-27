@@ -22,19 +22,23 @@ export function Toaster() {
   // The rows below bind each toast to `t`, which shadows the translator, so resolve through a name
   // that survives the loop rather than renaming the toast everywhere.
   const label = (text: Text) => t(lang, text)
-  if (toasts.length === 0) return null
 
+  // The region renders even while empty: a live region that mounts already populated is the
+  // documented way announcements get dropped, and these toasts are the app's only account of a
+  // transaction's fate. The container costs nothing when empty (pointer-events-none, no visual).
   return (
     <div
       className="pointer-events-none fixed inset-x-0 bottom-0 z-50 flex flex-col items-center gap-2 p-4 sm:items-end sm:p-6"
       role="region"
+      // The live region is THIS persistent container, not the toasts: an element that enters the
+      // DOM already populated is the documented way announcements get dropped, and every toast
+      // used to do exactly that. Children added to a pre-existing polite region are announced.
+      aria-live="polite"
       aria-label={t(lang, ui.toast.region)}
     >
       {toasts.map((t) => (
         <div
           key={t.id}
-          role="status"
-          aria-live="polite"
           className={`pointer-events-auto w-full max-w-sm animate-pop rounded-xl border px-4 py-3 shadow-lg ${STYLES[t.kind]}`}
         >
           <div className="flex items-start gap-3">

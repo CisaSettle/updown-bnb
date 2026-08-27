@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import * as ui from '../content/ui'
+import { Explain } from './Explain'
 import { formatPrice, formatPriceNumber, formatTime } from '../lib/format'
 import { t, useLang, type Text } from '../lib/i18n'
 import {
@@ -46,7 +47,14 @@ import type { OraclePrint } from '../lib/settlement'
 
 const VIEW_W = 480
 const VIEW_H = 200
-const PLOT = { x0: 2, x1: 424, y0: 10, y1: 172 } as const
+/**
+ * The plot leaves a 74-unit right gutter and a 42-unit bottom band: at the ~0.6 scale a 360px
+ * phone renders this viewBox at, the 12–13 unit labels below land at ≈ 7–8 CSS px — the floor of
+ * legibility. The old 8–9 unit text came out at ≈ 5px there, which is to say: not at all.
+ */
+const PLOT = { x0: 2, x1: 398, y0: 12, y1: 158 } as const
+/** In-SVG text sizes, in viewBox units. */
+const FONT = { tick: 12, time: 12, strikeValue: 12.5, label: 13 } as const
 
 /** Above this many points the per-print dots become noise and the line carries it alone. */
 const MAX_DOTS = 40
@@ -118,11 +126,11 @@ function PlateLabel({
   // pass here — but the bound has to hold in both scripts: a CJK glyph is about twice a Latin one
   // at the same font-size, and the old per-character constant would have let 中文 run out of its
   // own plate and sit unreadable on the series line.
-  const width = plateWidth(text)
+  const width = plateWidth(text, FONT.label)
   return (
     <g>
-      <rect x={x - width} y={y - 8} width={width} height={11} rx={2} className="fill-white/75 dark:fill-slate-900/75" />
-      <text x={x - 3} y={y} textAnchor="end" fontSize={9} className={className}>
+      <rect x={x - width} y={y - 12} width={width} height={16} rx={3} className="fill-white/75 dark:fill-slate-900/75" />
+      <text x={x - 3} y={y} textAnchor="end" fontSize={FONT.label} className={className}>
         {text}
       </text>
     </g>
@@ -245,9 +253,10 @@ export function PriceChart({
   const anyUnusable = segments.some((segment) => !segment.usable)
 
   // A tick that lands on the strike prints its label straight through the strike's own, which is
-  // the one number on the axis that must stay legible.
+  // the one number on the axis that must stay legible. The clearance tracks the label size: two
+  // 12-unit rows need ~14 units between baselines to stay apart.
   const ticks = (domain ? niceTicks(domain, 3) : []).filter(
-    (tick) => strikeY === undefined || Math.abs(y(tick) - strikeY) > 9,
+    (tick) => strikeY === undefined || Math.abs(y(tick) - strikeY) > 14,
   )
 
   const budgetText = ui.budgetSpan(budget, lang)
@@ -284,7 +293,7 @@ export function PriceChart({
               type="button"
               onClick={() => setChoice('line')}
               aria-pressed={view === 'line'}
-              className={`rounded px-2 py-0.5 text-[11px] font-semibold ${
+              className={`rounded px-2.5 py-1 text-[11px] font-semibold ${
                 view === 'line'
                   ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
                   : 'text-slate-600 dark:text-slate-300'
@@ -298,7 +307,7 @@ export function PriceChart({
               disabled={!readiness.ok}
               aria-pressed={view === 'candles'}
               title={t(lang, readiness.ok ? ui.candlesTitle(bucketSec) : ui.chart.candlesUnavailable)}
-              className={`rounded px-2 py-0.5 text-[11px] font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${
+              className={`rounded px-2.5 py-1 text-[11px] font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${
                 view === 'candles'
                   ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
                   : 'text-slate-600 dark:text-slate-300'
@@ -342,18 +351,18 @@ export function PriceChart({
                 height={Math.max(0, PLOT.y1 - strikeY)}
                 className="fill-rose-500/10"
               />
-              {strikeY - PLOT.y0 > 16 ? (
+              {strikeY - PLOT.y0 > 22 ? (
                 <PlateLabel
                   x={PLOT.x1 - 2}
-                  y={PLOT.y0 + 10}
+                  y={PLOT.y0 + 14}
                   text={t(lang, ui.chart.upWinsHere)}
                   className="fill-emerald-700 dark:fill-emerald-400"
                 />
               ) : null}
-              {PLOT.y1 - strikeY > 16 ? (
+              {PLOT.y1 - strikeY > 22 ? (
                 <PlateLabel
                   x={PLOT.x1 - 2}
-                  y={PLOT.y1 - 4}
+                  y={PLOT.y1 - 5}
                   text={t(lang, ui.chart.downWinsHere)}
                   className="fill-rose-700 dark:fill-rose-400"
                 />
@@ -383,7 +392,14 @@ export function PriceChart({
                 strokeWidth={0.5}
                 className="stroke-slate-300 dark:stroke-slate-700"
               />
-              <text x={PLOT.x1 + 4} y={y(tick) + 3} fontSize={8} className="fill-slate-500 font-mono dark:fill-slate-400">
+              {/* Anchored to the right edge: a longer price grows leftward instead of clipping. */}
+              <text
+                x={VIEW_W - 2}
+                y={y(tick) + 4}
+                fontSize={FONT.tick}
+                textAnchor="end"
+                className="fill-slate-500 font-mono dark:fill-slate-400"
+              >
                 {formatPriceNumber(tick)}
               </text>
             </g>
@@ -445,14 +461,15 @@ export function PriceChart({
                 className="stroke-slate-900 dark:stroke-slate-100"
               />
               <text
-                x={PLOT.x1 + 4}
-                y={strikeY + 3}
-                fontSize={8.5}
+                x={VIEW_W - 2}
+                y={strikeY + 4}
+                fontSize={FONT.strikeValue}
+                textAnchor="end"
                 className="fill-slate-900 font-mono font-bold dark:fill-slate-100"
               >
                 {formatPrice(frame.strike, decimals)}
               </text>
-              <text x={PLOT.x0 + 3} y={strikeY - 3} fontSize={9} className="fill-slate-900 font-bold dark:fill-slate-100">
+              <text x={PLOT.x0 + 3} y={strikeY - 4} fontSize={FONT.label} className="fill-slate-900 font-bold dark:fill-slate-100">
                 {t(lang, ui.chart.axisStrike)}
               </text>
             </>
@@ -470,8 +487,8 @@ export function PriceChart({
           />
           <text
             x={x(frame.lockTs)}
-            y={PLOT.y1 + 10}
-            fontSize={9}
+            y={PLOT.y1 + 15}
+            fontSize={FONT.label}
             textAnchor={frame.lockTs >= frame.endTs ? 'end' : 'middle'}
             className="fill-slate-500 dark:fill-slate-400"
           >
@@ -486,8 +503,8 @@ export function PriceChart({
           </text>
           <text
             x={x(frame.lockTs)}
-            y={PLOT.y1 + 19}
-            fontSize={8}
+            y={PLOT.y1 + 29}
+            fontSize={FONT.time}
             textAnchor={frame.lockTs >= frame.endTs ? 'end' : 'middle'}
             className="fill-slate-400 font-mono dark:fill-slate-500"
           >
@@ -507,8 +524,8 @@ export function PriceChart({
               />
               <text
                 x={x(frame.closeTs)}
-                y={PLOT.y1 + 10}
-                fontSize={9}
+                y={PLOT.y1 + 15}
+                fontSize={FONT.label}
                 textAnchor={frame.closeTs >= frame.endTs ? 'end' : 'middle'}
                 className="fill-slate-500 dark:fill-slate-400"
               >
@@ -516,8 +533,8 @@ export function PriceChart({
               </text>
               <text
                 x={x(frame.closeTs)}
-                y={PLOT.y1 + 19}
-                fontSize={8}
+                y={PLOT.y1 + 29}
+                fontSize={FONT.time}
                 textAnchor={frame.closeTs >= frame.endTs ? 'end' : 'middle'}
                 className="fill-slate-400 font-mono dark:fill-slate-500"
               >
@@ -539,7 +556,7 @@ export function PriceChart({
             className="stroke-slate-400/70 dark:stroke-slate-500/70"
           />
 
-          <text x={PLOT.x0} y={PLOT.y1 + 10} fontSize={8} className="fill-slate-400 font-mono dark:fill-slate-500">
+          <text x={PLOT.x0} y={PLOT.y1 + 29} fontSize={FONT.time} className="fill-slate-400 font-mono dark:fill-slate-500">
             {formatTime(frame.startTs, lang)}
           </text>
         </svg>
@@ -555,80 +572,41 @@ export function PriceChart({
                   : ui.chart.neverPrinted,
             )}
           </p>
+          {/*
+            The heading plus ONE limit-specific fact stay visible — uncertainty under a capped
+            walk, the known refund at the feed's own start. The mechanism and the timestamps fold
+            into "How to read this chart" below.
+          */}
           {isLoading ? null : series.latest ? (
-            // The feed HAS printed — the badge above is quoting one — just not between this window's
-            // edges. Saying "has not printed yet" here would contradict the price on the same line, and
-            // it is the wrong fact besides: this happens when a keeper stalls long enough for the
-            // readable history to have moved past a round frozen at its own close.
-            //
-            // What may NOT be said here is that the round therefore refunds. The prints held are only
-            // the history this chart read — `MAX_PRINTS` back, and no further than a phase change — so
-            // unless `limit` says the floor really is the start of the feed, the print that priced this
-            // boundary may simply be older than the walk goes. `historyLimit` is what tells the two
-            // apart, and only `feed-start` supports the stronger claim.
             <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-              {t(lang, ui.noPrintExplain.before)}
-              <span className="num">{formatTime(series.oldest?.ts ?? series.latest.ts, lang)}</span>
-              {t(lang, ui.noPrintExplain.middle)}
-              <span className="num">{formatTime(frame.endTs, lang)}</span>
-              {t(lang, ui.noPrintExplain.after)}
-              {t(
-                lang,
-                // Only `feed-start` has the walk actually reached the beginning of the feed, so
-                // only there is "no print exists at or before the boundary" a fact rather than a
-                // gap in what was read. Even so the refund is future tense: `executeRound` reverts
-                // on a bad proof for as long as the round is inside its own buffer, and
-                // `refundable()` stays false until `_isExpired` — the round is not claimable yet.
-                limit === 'feed-start'
-                  ? ui.chart.limitFeedStart
-                  : limit === 'phase-start'
-                    ? ui.chart.limitPhaseStart
-                    : ui.chart.limitReadCap,
-              )}
+              {t(lang, limit === 'feed-start' ? ui.chart.noPrintRefund : ui.chart.noPrintUncertain)}
             </p>
-          ) : (
-            <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-              {t(lang, ui.chart.nothingToPlot)}
-            </p>
-          )}
+          ) : null}
         </div>
       )}
 
+      {/*
+        The visible line is the reading key or the state, one sentence. Everything that explains a
+        MECHANISM — what the feed is, why the line is steps, what dashes mean, how candles are
+        bucketed, where history stops — folds into "How to read this chart" below. The one
+        exception stays visible: a fact about money that is true right now (a never-locked round
+        refunding, a stale feed).
+      */}
       <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
         {frame.strikeState === 'set' ? (
           hasSomething ? (
-            <>
-              {t(lang, ui.strikeSetNote.before)}
-              {t(lang, feedName)}
-              {t(lang, ui.strikeSetNote.middle)}
-              <span className="num">{budgetText}</span>
-              {t(lang, ui.strikeSetNote.after)}
-            </>
+            t(lang, ui.strikeSetNote.before)
           ) : (
             <>
               {t(lang, ui.strikeOnlyNote.before)}
               <span className="num">{formatPrice(frame.strike, decimals)}</span>
-              {t(lang, ui.strikeOnlyNote.after)}
-              {t(lang, feedName)}
               {t(lang, ui.strikeOnlyNote.end)}
             </>
           )
         ) : frame.strikeState === 'pending' ? (
-          <>
-            <strong>{t(lang, ui.chart.noStrikeBold)}</strong>
-            {t(lang, ui.noStrikeNote.before)}
-            <span className="num">{formatTime(frame.lockTs, lang)}</span>
-            {t(lang, ui.noStrikeNote.after)}
-          </>
+          <strong>{t(lang, ui.chart.noStrikeBold)}</strong>
         ) : frame.strikeState === 'awaiting' ? (
-          <>
-            <strong>{t(lang, ui.chart.notLockedBold)}</strong>
-            {t(lang, ui.awaitingStrikeNote.before)}
-            <span className="num">{formatTime(frame.lockTs, lang)}</span>
-            {t(lang, ui.awaitingStrikeNote.middle)}
-            <span className="num">executeRound</span>
-            {t(lang, ui.awaitingStrikeNote.after)}
-          </>
+          <strong>{t(lang, ui.chart.notLockedBold)}</strong>
         ) : (
           <>
             <strong>{t(lang, ui.chart.neverLockedBold)}</strong>
@@ -637,45 +615,101 @@ export function PriceChart({
         )}
       </p>
 
-      {anyUnusable && view === 'line' ? (
-        <p
-          className={`mt-1 text-[11px] leading-relaxed ${
-            health === 'stale' ? 'text-rose-700 dark:text-rose-400' : 'text-slate-500 dark:text-slate-400'
-          }`}
-        >
-          {t(lang, ui.dashedNote.before)}
-          <strong>{t(lang, ui.chart.dashedBold)}</strong>
-          {t(lang, ui.dashedNote.middle)}
-          <span className="num">{budgetText}</span>
-          {t(lang, ui.dashedNote.after)}
-          {health === 'stale' && series.latest ? t(lang, ui.feedQuietNow(formatAgo(ageSeconds, lang))) : ''}
+      {/*
+        A stale feed is a live fact about money, in either view: it stays visible. Only while the
+        chart is actually plotting, though — the empty no-print-in-window card speaks for itself,
+        and under a capped history walk it is not entitled to promise any refund.
+      */}
+      {hasSomething && health === 'stale' && series.latest ? (
+        <p className="mt-1 text-[11px] leading-relaxed text-rose-700 dark:text-rose-400">
+          {t(lang, ui.staleCandlesNote(budgetText))}
+          {t(lang, ui.feedQuietNow(formatAgo(ageSeconds, lang)))}
         </p>
       ) : null}
 
-      {view === 'candles' ? (
-        <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-          {t(lang, ui.candlesNote(bucketSec, readiness.printsPerBucket.toFixed(1)))}
-        </p>
-      ) : readiness.reason === 'too-few' || readiness.reason === 'too-sparse' ? (
-        <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-          {t(lang, ui.candlesOffNote(readiness.printsPerBucket.toFixed(1)))}
-        </p>
-      ) : null}
-
-      {!series.coversStart && series.points.length > 0 ? (
-        <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-          {t(
-            lang,
-            limit === 'phase-start'
-              ? ui.chart.coversPhaseStart
-              : limit === 'feed-start'
-                ? ui.chart.coversFeedStart
-                : limit === 'read-cap'
-                  ? ui.chart.coversReadCap
-                  : ui.chart.coversLoading,
-          )}
-        </p>
-      ) : null}
+      <Explain summary={t(lang, ui.chart.howToRead)}>
+        {frame.strikeState === 'set' && hasSomething ? (
+          <p>
+            {t(lang, feedName)}
+            {t(lang, ui.strikeSetNote.middle)}
+            <span className="num">{budgetText}</span>
+            {t(lang, ui.strikeSetNote.after)}
+          </p>
+        ) : null}
+        {frame.strikeState === 'set' && !hasSomething ? (
+          <p>
+            {t(lang, feedName)}
+            {t(lang, ui.strikeOnlyNote.end)}
+          </p>
+        ) : null}
+        {/*
+          The empty-window explanation. The feed HAS printed — the badge above is quoting one —
+          just not between this window's edges; and only `feed-start` supports the stronger claim
+          that no print exists at or before the boundary, so the limit picks the sentence.
+        */}
+        {!hasSomething && !isLoading && series.latest ? (
+          <p>
+            {t(lang, ui.noPrintExplain.before)}
+            <span className="num">{formatTime(series.oldest?.ts ?? series.latest.ts, lang)}</span>
+            {t(lang, ui.noPrintExplain.middle)}
+            <span className="num">{formatTime(frame.endTs, lang)}</span>
+            {t(lang, ui.noPrintExplain.after)}
+            {t(
+              lang,
+              limit === 'feed-start'
+                ? ui.chart.limitFeedStart
+                : limit === 'phase-start'
+                  ? ui.chart.limitPhaseStart
+                  : ui.chart.limitReadCap,
+            )}
+          </p>
+        ) : null}
+        {!hasSomething && !isLoading && !series.latest ? <p>{t(lang, ui.chart.nothingToPlot)}</p> : null}
+        {frame.strikeState === 'pending' ? (
+          <p>
+            {t(lang, ui.noStrikeNote.before)}
+            <span className="num">{formatTime(frame.lockTs, lang)}</span>
+            {t(lang, ui.noStrikeNote.after)}
+          </p>
+        ) : null}
+        {frame.strikeState === 'awaiting' ? (
+          <p>
+            {t(lang, ui.awaitingStrikeNote.before)}
+            <span className="num">{formatTime(frame.lockTs, lang)}</span>
+            {t(lang, ui.awaitingStrikeNote.middle)}
+            <span className="num">executeRound</span>
+            {t(lang, ui.awaitingStrikeNote.after)}
+          </p>
+        ) : null}
+        {anyUnusable && view === 'line' ? (
+          <p>
+            {t(lang, ui.dashedNote.before)}
+            <strong>{t(lang, ui.chart.dashedBold)}</strong>
+            {t(lang, ui.dashedNote.middle)}
+            <span className="num">{budgetText}</span>
+            {t(lang, ui.dashedNote.after)}
+          </p>
+        ) : null}
+        {view === 'candles' ? (
+          <p>{t(lang, ui.candlesNote(bucketSec, readiness.printsPerBucket.toFixed(1)))}</p>
+        ) : readiness.reason === 'too-few' || readiness.reason === 'too-sparse' ? (
+          <p>{t(lang, ui.candlesOffNote(readiness.printsPerBucket.toFixed(1)))}</p>
+        ) : null}
+        {!series.coversStart && series.points.length > 0 ? (
+          <p>
+            {t(
+              lang,
+              limit === 'phase-start'
+                ? ui.chart.coversPhaseStart
+                : limit === 'feed-start'
+                  ? ui.chart.coversFeedStart
+                  : limit === 'read-cap'
+                    ? ui.chart.coversReadCap
+                    : ui.chart.coversLoading,
+            )}
+          </p>
+        ) : null}
+      </Explain>
     </div>
   )
 }

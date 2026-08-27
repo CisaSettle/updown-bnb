@@ -24,12 +24,19 @@ import { SkeletonRows } from './Skeleton'
  */
 function winnerChip(round: Round, outcome: Outcome, lang: Lang) {
   if (outcome === 'refund') {
+    // The reason is visible text, not only the title: an admin void and a blown settlement window
+    // are different facts about the market, and a hover title states neither on a phone.
     return (
-      <span
-        className="chip bg-violet-100 text-violet-900 dark:bg-violet-950 dark:text-violet-200"
-        title={t(lang, round.voided ? ui.history.refundedVoidedTitle : ui.history.refundedWindowTitle)}
-      >
-        {t(lang, ui.history.refunded)}
+      <span className="inline-block">
+        <span
+          className="chip bg-violet-100 text-violet-900 dark:bg-violet-950 dark:text-violet-200"
+          title={t(lang, round.voided ? ui.history.refundedVoidedTitle : ui.history.refundedWindowTitle)}
+        >
+          {t(lang, ui.history.refunded)}
+        </span>
+        <span className="mt-0.5 block text-[10px] text-slate-500 dark:text-slate-400">
+          {t(lang, round.voided ? ui.history.refundReasonVoided : ui.history.refundReasonWindow)}
+        </span>
       </span>
     )
   }

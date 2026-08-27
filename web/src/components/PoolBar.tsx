@@ -1,4 +1,5 @@
 import * as ui from '../content/ui'
+import { Explain } from './Explain'
 import { formatAmount, sharePercent } from '../lib/format'
 import { t, useLang } from '../lib/i18n'
 
@@ -76,23 +77,27 @@ export function PoolBar({
         </div>
       )}
 
-      <div className="mt-1.5 flex justify-between text-xs text-slate-500 dark:text-slate-400">
-        {!known ? (
-          <span>{t(lang, ui.pool.reading)}</span>
-        ) : empty ? (
-          <span className="leading-relaxed">{t(lang, live ? ui.pool.emptyLiveNote : ui.pool.emptyOpenNote)}</span>
-        ) : (
-          <>
-            <span className="num">{`${upPct.toFixed(1)}%`}</span>
-            {oneSided ? (
-              <span className="px-2 text-center leading-relaxed">
-                {t(lang, live ? ui.pool.oneSidedLive : ui.pool.oneSidedOpen)}
-              </span>
-            ) : null}
-            <span className="num">{`${downPct.toFixed(1)}%`}</span>
-          </>
-        )}
-      </div>
+      {/*
+        A live money fact stays visible (the one-sided refund line); the WHY of an empty book is
+        an explanation of the mechanism and folds away — the chip above already states the state.
+      */}
+      {!known ? (
+        <div className="mt-1.5 text-xs text-slate-500 dark:text-slate-400">{t(lang, ui.pool.reading)}</div>
+      ) : empty ? (
+        <Explain summary={t(lang, ui.pool.whyZero)}>
+          <p>{t(lang, live ? ui.pool.emptyLiveNote : ui.pool.emptyOpenNote)}</p>
+        </Explain>
+      ) : (
+        <div className="mt-1.5 flex justify-between text-xs text-slate-500 dark:text-slate-400">
+          <span className="num">{`${upPct.toFixed(1)}%`}</span>
+          {oneSided ? (
+            <span className="px-2 text-center leading-relaxed">
+              {t(lang, live ? ui.pool.oneSidedLive : ui.pool.oneSidedOpen)}
+            </span>
+          ) : null}
+          <span className="num">{`${downPct.toFixed(1)}%`}</span>
+        </div>
+      )}
     </div>
   )
 }

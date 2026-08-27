@@ -349,6 +349,26 @@ curl -sL "$BASE$ASSET" | grep -oiE '0x[0-9a-f]{40}' | sort -u
 Every address that prints should appear in `contracts/deployments/<chainId>.json`. An empty result
 means the asset path was not found, not that the bundle is clean — check `$ASSET` is non-empty.
 
+### 1.10 Enabling WalletConnect for phone browsers
+
+The shipped build carries the injected connector only, so a plain phone browser's single option is
+the MetaMask deep link — Trust / OKX / Binance-wallet users have no path. WalletConnect fixes that,
+and everything is already wired except a project id that only an owner-controlled Reown account can
+provision:
+
+1. Create a project at <https://cloud.reown.com> (the WalletConnect cloud). The **project id** it
+   issues is a public client-side identifier, not a secret.
+2. In the project's settings, register the production origin `https://updown.bluffking.ai` (plus
+   any preview origins you use).
+3. Set the repository variable `WALLETCONNECT_PROJECT_ID` under **Settings → Secrets and variables
+   → Actions → Variables**. `pages.yml` already passes it to the build as
+   `VITE_WALLETCONNECT_PROJECT_ID`.
+4. Re-run the Pages workflow — Vite embeds the value at build time, so an existing deployment does
+   not pick it up on its own.
+
+Leaving the variable unset keeps today's behaviour exactly: the WalletConnect code is dead-code
+eliminated and the app ships injected-only.
+
 ---
 
 ## 2 · Keeper operations

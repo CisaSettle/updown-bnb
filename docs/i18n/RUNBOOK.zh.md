@@ -321,6 +321,22 @@ curl -sL "$BASE$ASSET" | grep -oiE '0x[0-9a-f]{40}' | sort -u
 打印出来的每一个地址都应当出现在 `contracts/deployments/<chainId>.json` 里。结果为空并不代表包是干净的，
 而是代表没找到资源路径——请检查 `$ASSET` 是否非空。
 
+### 1.10 为手机浏览器启用 WalletConnect
+
+线上构建只带注入式连接器，所以普通手机浏览器唯一的入口是 MetaMask 深链——Trust / OKX /
+币安钱包的用户没有任何路径。WalletConnect 能解决这个问题，而且除了一个只能由 owner
+名下的 Reown 账号签发的 project id 之外，其余全部已经接好：
+
+1. 到 <https://cloud.reown.com>（WalletConnect 云）创建一个项目。它签发的 **project id**
+   是公开的客户端标识，不是机密。
+2. 在项目设置里登记生产源 `https://updown.bluffking.ai`（以及你会用到的预览源）。
+3. 在仓库 **Settings → Secrets and variables → Actions → Variables** 里设置仓库变量
+   `WALLETCONNECT_PROJECT_ID`。`pages.yml` 已经会把它作为 `VITE_WALLETCONNECT_PROJECT_ID`
+   传给构建。
+4. 重新运行 Pages 工作流——Vite 在构建时内嵌这个值，已经部署的站点不会自己捡到它。
+
+不设置这个变量就完全保持今天的行为：WalletConnect 代码会被整体消除，应用只带注入式连接器。
+
 ---
 
 ## 2 · Keeper 运维

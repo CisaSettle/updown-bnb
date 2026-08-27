@@ -33,6 +33,10 @@ export function AutoClaimToggle({ market, lang }: { market: Address; lang: Lang 
   })
 
   if (!isConnected) return null
+  // Until the read lands, the setting is unknown — not off. Rendering the definitive Off promise
+  // over an unread value told an opted-in user the opposite of their on-chain state, and a click
+  // in that window would have sent a redundant opt-in transaction.
+  const known = optedIn !== undefined
   const on = optedIn === true
   const busy = busyKey === 'auto-claim'
 
@@ -43,7 +47,7 @@ export function AutoClaimToggle({ market, lang }: { market: Address; lang: Lang 
           type="checkbox"
           className="mt-0.5 h-4 w-4 shrink-0 accent-emerald-600"
           checked={on}
-          disabled={busy}
+          disabled={busy || !known}
           onChange={() =>
             void run(
               'auto-claim',
@@ -65,7 +69,7 @@ export function AutoClaimToggle({ market, lang }: { market: Address; lang: Lang 
             {busy ? t(lang, ui.positions.autoClaimBusy) : t(lang, ui.positions.autoClaim)}
           </span>
           <span className="mt-0.5 block text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
-            {t(lang, on ? ui.positions.autoClaimOn : ui.positions.autoClaimOff)}
+            {t(lang, !known ? ui.positions.autoClaimUnknown : on ? ui.positions.autoClaimOn : ui.positions.autoClaimOff)}
           </span>
         </span>
       </label>

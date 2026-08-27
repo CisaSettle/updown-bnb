@@ -51,6 +51,13 @@ jobs:
           # binding for an Actions deployment. web/public/CNAME remains in the artifact as portable
           # host metadata, but it does not replace that repository setting.
           VITE_BASE_PATH: /
+          # WalletConnect is what gives phone browsers a path beyond the MetaMask deep link
+          # (Trust / OKX / Binance wallets). It turns on the moment the repository variable
+          # WALLETCONNECT_PROJECT_ID is set (Settings → Secrets and variables → Actions →
+          # Variables) — the project id is created at https://cloud.reown.com and is a public
+          # client-side identifier, not a secret. Unset, this resolves to empty and the app
+          # ships injected-only, exactly as before. See RUNBOOK §1.10.
+          VITE_WALLETCONNECT_PROJECT_ID: ${{ vars.WALLETCONNECT_PROJECT_ID }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web/dist

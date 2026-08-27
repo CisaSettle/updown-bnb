@@ -90,6 +90,15 @@ export const connect = {
   },
   noWalletYet: { en: "Don't have one? Install MetaMask", zh: '还没有钱包？安装 MetaMask' },
   failed: { en: 'Could not connect', zh: '没能连上' },
+  walletWaiting: { en: 'Your wallet is waiting for you', zh: '钱包在等你处理' },
+  // Approval is the only outcome the page can detect on its own: a dismissed request leaves no
+  // trace it can read. So the copy promises auto-connect only for approval, and names the one
+  // extra click a dismissal costs — promising it for both stranded people on a toast that never
+  // came true.
+  walletWaitingBody: {
+    en: 'A connect request is already open in your wallet — its popup is probably hidden behind this window. Confirm it there and this page connects on its own; if you dismiss it instead, come back and press Connect again.',
+    zh: '钱包里已经有一个连接请求了——它的弹窗多半被挡在这个窗口后面。在钱包里批准它，这个页面就会自己连上；如果你把它关掉了，就回来再点一次连接。',
+  },
 } satisfies Record<string, Text>
 
 export function switchNetwork(lang: Lang): Text {
@@ -102,6 +111,17 @@ export const testnet = {
   chip: { en: 'Testnet', zh: '测试网' },
   faucetTitle: { en: 'Mint 1,000 test USDT', zh: '铸造 1,000 测试 USDT' },
   faucetNeedsWallet: { en: 'Connect your wallet first', zh: '先连接钱包' },
+  faucetHowTo: {
+    en: 'The faucet mints 1,000 test USDT straight to your connected address. Press "Connect wallet" at the top right (it reads "Install a wallet" if you don\'t have one yet), then press this button again.',
+    zh: '水龙头会把 1,000 测试 USDT 直接铸到你连上的地址。先点右上角的"连接钱包"（还没有钱包的话，那里显示的是"安装钱包"），再回来点一次这个按钮。',
+  },
+  // Every transaction here — the USDT faucet included — needs a little testnet BNB for gas, and a
+  // fresh test wallet has none. This is the one link that unblocks step one of the funnel.
+  gasFaucet: { en: 'Get gas (tBNB) ↗', zh: '领 gas（tBNB）↗' },
+  gasFaucetTitle: {
+    en: 'Every transaction here needs a little testnet BNB for gas. The official BNB Chain faucet gives it away.',
+    zh: '这里的每一笔交易都需要一点测试网 BNB 付 gas。BNB Chain 官方水龙头免费发。',
+  },
   faucetBusy: { en: 'Minting…', zh: '铸造中…' },
   faucet: { en: 'Get 1,000 test USDT', zh: '领 1,000 测试 USDT' },
   faucetTx: { en: 'Test USDT faucet', zh: '测试 USDT 水龙头' },
@@ -162,6 +182,7 @@ export const marketPicker = {
     en: 'No enabled markets found in the registry.',
     zh: '注册表里没有找到已启用的市场。',
   },
+  collectableDot: { en: 'Money to collect in this market', zh: '这个市场有可领的钱' },
 } satisfies Record<string, Text>
 
 /** `5m rounds · settles in USDT` / `5 分钟一轮 · 用 USDT 结算`. */
@@ -218,6 +239,7 @@ export const liveCard = {
     zh: '还没有进行中的轮次。市场开启一个间隔之后，第一轮才会结算。',
   },
   refundTitle: { en: 'Full refund, zero fee', zh: '全额退回，零手续费' },
+  refundWhen: { en: 'When does this apply?', zh: '哪些情况会退？' },
   refundBody: {
     en: 'A round is voided and every stake refunded in full, with no fee taken, if the settlement price is exactly the strike (a tie), if one side of the book is empty, if no usable oracle print exists at the boundary, if the settlement window is missed, or if the market was paused before the round locked. A round that had already locked is not on that list: it settles through a pause at the price the feed printed. Winners are paid from the losing pool only, so a winner never receives less than their own stake.',
     zh: '出现下面任何一种情况，轮次作废、每一笔本金全额退回、不收手续费：结算价正好等于行权价（平局）、盘口有一边是空的、边界时刻没有可用的预言机报价、错过结算时限，或者市场在该轮锁定之前就被暂停。已经锁定的轮次不在这张清单里：它会穿过暂停，按喂价报出的价格结算。赢家的钱只从输的那一边的池子里出，所以赢家拿到的钱永远不会少于自己的本金。',
@@ -339,6 +361,7 @@ export const pool = {
     en: 'One side only. If the round locks like this, every stake is refunded in full with no fee.',
     zh: '目前只有一边有钱。如果就这样锁定，每一笔本金全额退回，不收手续费。',
   },
+  whyZero: { en: 'Why is the book 0?', zh: '为什么盘口是 0？' },
 } satisfies Record<string, Text>
 
 export function poolShareAria(upPct: string, downPct: string): Text {
@@ -386,6 +409,7 @@ export const odds = {
     zh: '单边锁定的轮次全额退回，零手续费——没有人会因为找不到对手而亏钱。',
   },
   howTitle: { en: 'How this number is worked out', zh: '这个数字是怎么算出来的' },
+  whyNoPrice: { en: 'Why there is no price yet', zh: '为什么还没有价格' },
   howIntro: {
     en: 'Winners split the losing side, minus the fee. The fee comes off the losing pool only, so a winner is never paid less than their stake.',
     zh: '赢的一方分掉输的一方，扣掉手续费。手续费只从输的池子里扣，所以赢家拿到的永远不会低于本金。',
@@ -629,7 +653,7 @@ export const positions = {
     en: 'The button above collects the rounds found so far — part of your history could not be read just now, so there may be more.',
     zh: '上面那个按钮领的是目前已经找到的轮次——你的一部分历史刚才没能读出来，所以可能还有更多。',
   },
-  footerCompleteBold: { en: 'Claim all', zh: '全部领取' },
+  footerCompleteBold: { en: 'Collect all', zh: '全部领取' },
   footerComplete: {
     en: ' covers every collectable round in this market, including ones older than the rows shown here.',
     zh: '涵盖这个市场里每一个可领取的轮次，包括比这里显示的行更早的那些。',
@@ -651,7 +675,7 @@ export const positions = {
     en: 'These rounds have already been collected. Your positions are being refreshed.',
     zh: '这些轮次已经领过了。正在刷新你的仓位。',
   },
-  claimAllTx: { en: 'Claim all', zh: '全部领取' },
+  claimAllTx: { en: 'Collect all', zh: '全部领取' },
   autoClaim: { en: 'Let anyone collect for me', zh: '允许他人替我领取' },
   autoClaimTx: { en: 'Auto-collect setting', zh: '自动领取设置' },
   autoClaimOn: {
@@ -663,6 +687,19 @@ export const positions = {
     zh: '未开启。不会有任何东西被推给你：你的赔付存在合约里，直到你自己领取。没有期限，也没有人能拦住你。',
   },
   autoClaimBusy: { en: 'Confirming…', zh: '确认中…' },
+  // The toggle's description asserts an on-chain fact; until the read lands there is no fact to
+  // assert, and "Off" while unknown invites a redundant transaction from someone already opted in.
+  autoClaimUnknown: {
+    en: 'Reading this setting from the chain…',
+    zh: '正在从链上读取这个设置…',
+  },
+  // A failed read is not an empty history. The empty-state copy invites a bet; showing it over a
+  // read failure would tell a user with unclaimed winnings that they have none.
+  readFailed: { en: 'Could not read your positions', zh: '读不到你的仓位' },
+  readFailedBody: {
+    en: 'Nothing is lost — your bets and any winnings live on chain and stay collectable. Retry in a moment.',
+    zh: '什么都没有丢——你的注单和赔付都在链上，一直可以领。过一会儿重试。',
+  },
 } satisfies Record<string, Text>
 
 export function toCollect(amount: string): Text {
@@ -732,8 +769,14 @@ export const history = {
   colPaid: { en: 'Paid', zh: '实付倍数' },
   colPools: { en: 'Pools (up / down)', zh: '池子（UP / DOWN）' },
   verify: { en: 'Verify', zh: '核验' },
-  check: { en: 'Check', zh: '核验' },
+  // The buttons under the Verify column say the column's own word — a VERIFY header over a row of
+  // Check buttons named one control two ways (中文 already said 核验 for both).
+  check: { en: 'Verify', zh: '核验' },
   hide: { en: 'Hide', zh: '收起' },
+  // Why the money came back, in words a row can show: an admin void and a blown settlement window
+  // are different facts about the market, and the distinction used to live only in a hover title.
+  refundReasonVoided: { en: 'voided', zh: '已作废' },
+  refundReasonWindow: { en: 'window elapsed', zh: '超时未结算' },
   close: { en: 'Close', zh: '关闭' },
   readBack: {
     en: 'read back from the feed, in your browser',
@@ -764,6 +807,7 @@ export function lastNRounds(n: number | string): Text {
 export const chart = {
   heading: { en: 'Oracle price', zh: '预言机价格' },
   subheading: { en: 'the series this round settles on', zh: '本轮据以结算的那条序列' },
+  howToRead: { en: 'How to read this chart', zh: '怎么读这张图' },
   style: { en: 'Chart style', zh: '图表样式' },
   line: { en: 'Line', zh: '折线' },
   candles: { en: 'Candles', zh: 'K 线' },
@@ -792,6 +836,17 @@ export const chart = {
   limitReadCap: {
     en: 'The chart reads only the most recent prints, so it cannot say from here whether an older print priced this round.',
     zh: '图表只读最近的一段报价，所以从这里判断不了是否有更早的报价为本轮定了价。',
+  },
+  // The one line each empty-window state must keep VISIBLE — the fact, not the mechanism. Under a
+  // capped or phase-limited history the honest fact is uncertainty; only at the feed's own start
+  // is "no print exists" a fact, and with it the eventual refund.
+  noPrintUncertain: {
+    en: 'Whether an older print priced this round cannot be told from the history read here.',
+    zh: '单凭这里读到的这段历史，判断不了是否有更早的报价为本轮定了价。',
+  },
+  noPrintRefund: {
+    en: 'No usable print exists at or before this round’s boundary: once its settlement window elapses, every stake refunds in full with no fee.',
+    zh: '本轮边界时刻之前（含那一刻）不存在可用报价：等它的结算时限过去，每一笔本金全额退回，不收手续费。',
   },
   nothingToPlot: {
     en: 'There is nothing to plot until the oracle publishes an answer. Until then no round can be priced, and any round whose boundary passes without a print is refunded in full with no fee taken.',
@@ -946,6 +1001,18 @@ export function budgetSpan(budget: number, lang: Lang): string {
   return lang === 'zh' ? `${budget} 秒` : `${budget}s`
 }
 
+/**
+ * The stale feed's consequence for money — the one chart warning that stays on the trading
+ * surface in every view. Until this existed the consequence lived only in the badge's hover
+ * title, mute on every phone.
+ */
+export function staleCandlesNote(budget: string): Text {
+  return {
+    en: `The feed has been quiet past this round's ${budget} oracle budget: a boundary landing now cannot be priced at all, and that round is refunded in full with no fee taken.`,
+    zh: `喂价安静的时间已经超过本轮 ${budget}的预言机时限：现在落下的边界时刻根本定不出价格，那一轮会全额退回，不收手续费。`,
+  }
+}
+
 export function feedQuietNow(ago: string): Text {
   return {
     en: ` The feed is in that state right now: nothing has printed for ${ago}.`,
@@ -980,6 +1047,13 @@ export const toast = {
     en: 'Your transaction was submitted but has not confirmed yet. Check the explorer before sending it again.',
     zh: '你的交易已经发出去了，但还没有确认。再发一次之前，先去区块浏览器看一眼。',
   },
+  // A wallet "cancel" mines a replacement transaction whose receipt reads success — success for
+  // the cancellation, not for the action. Reporting it as "confirmed" would tell the user their
+  // money moved at the exact moment they made sure it did not.
+  cancelled: {
+    en: 'You cancelled or replaced this transaction in your wallet, so the original was never executed.',
+    zh: '你在钱包里把这笔交易取消或者替换掉了，原来那一笔没有执行。',
+  },
 } satisfies Record<string, Text>
 
 /**
@@ -998,6 +1072,10 @@ export function txFailed(title: string): Text {
 
 export function txStillPending(title: string): Text {
   return { en: `${title} still pending`, zh: `${title} · 仍未确认` }
+}
+
+export function txCancelled(title: string): Text {
+  return { en: `${title} cancelled`, zh: `${title} · 已取消` }
 }
 
 // ── app shell ───────────────────────────────────────────────────────────────────────────────────

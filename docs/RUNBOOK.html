@@ -275,6 +275,15 @@ curl -I https://cisasettle.github.io/updown-bnb/</code></pre>
 ASSET=$(curl -sL "$BASE/" | grep -oE '/assets/[A-Za-z0-9_.-]+\.js' | head -1)
 curl -sL "$BASE$ASSET" | grep -oiE '0x[0-9a-f]{40}' | sort -u</code></pre>
 <p>Every address that prints should appear in <code>contracts/deployments/&lt;chainId&gt;.json</code>. An empty result means the asset path was not found, not that the bundle is clean — check <code>$ASSET</code> is non-empty.</p>
+<h3 id="1-10-enabling-walletconnect-for-phone-browsers">1.10 Enabling WalletConnect for phone browsers</h3>
+<p>The shipped build carries the injected connector only, so a plain phone browser's single option is the MetaMask deep link — Trust / OKX / Binance-wallet users have no path. WalletConnect fixes that, and everything is already wired except a project id that only an owner-controlled Reown account can provision:</p>
+<ol>
+<li>Create a project at &lt;https://cloud.reown.com&gt; (the WalletConnect cloud). The <strong>project id</strong> it issues is a public client-side identifier, not a secret.</li>
+<li>In the project's settings, register the production origin <code>https://updown.bluffking.ai</code> (plus any preview origins you use).</li>
+<li>Set the repository variable <code>WALLETCONNECT_PROJECT_ID</code> under <strong>Settings → Secrets and variables → Actions → Variables</strong>. <code>pages.yml</code> already passes it to the build as <code>VITE_WALLETCONNECT_PROJECT_ID</code>.</li>
+<li>Re-run the Pages workflow — Vite embeds the value at build time, so an existing deployment does not pick it up on its own.</li>
+</ol>
+<p>Leaving the variable unset keeps today's behaviour exactly: the WalletConnect code is dead-code eliminated and the app ships injected-only.</p>
 <hr>
 <h2 id="2-keeper-operations">2 · Keeper operations</h2>
 <h3 id="what-the-keeper-actually-does">What the keeper actually does</h3>
@@ -608,6 +617,15 @@ curl -I https://cisasettle.github.io/updown-bnb/</code></pre>
 ASSET=$(curl -sL "$BASE/" | grep -oE '/assets/[A-Za-z0-9_.-]+\.js' | head -1)
 curl -sL "$BASE$ASSET" | grep -oiE '0x[0-9a-f]{40}' | sort -u</code></pre>
 <p>打印出来的每一个地址都应当出现在 <code>contracts/deployments/&lt;chainId&gt;.json</code> 里。结果为空并不代表包是干净的， 而是代表没找到资源路径——请检查 <code>$ASSET</code> 是否非空。</p>
+<h3 id="1-10-为手机浏览器启用-walletconnect">1.10 为手机浏览器启用 WalletConnect</h3>
+<p>线上构建只带注入式连接器，所以普通手机浏览器唯一的入口是 MetaMask 深链——Trust / OKX / 币安钱包的用户没有任何路径。WalletConnect 能解决这个问题，而且除了一个只能由 owner 名下的 Reown 账号签发的 project id 之外，其余全部已经接好：</p>
+<ol>
+<li>到 &lt;https://cloud.reown.com&gt;（WalletConnect 云）创建一个项目。它签发的 <strong>project id</strong> 是公开的客户端标识，不是机密。</li>
+<li>在项目设置里登记生产源 <code>https://updown.bluffking.ai</code>（以及你会用到的预览源）。</li>
+<li>在仓库 <strong>Settings → Secrets and variables → Actions → Variables</strong> 里设置仓库变量 <code>WALLETCONNECT_PROJECT_ID</code>。<code>pages.yml</code> 已经会把它作为 <code>VITE_WALLETCONNECT_PROJECT_ID</code> 传给构建。</li>
+<li>重新运行 Pages 工作流——Vite 在构建时内嵌这个值，已经部署的站点不会自己捡到它。</li>
+</ol>
+<p>不设置这个变量就完全保持今天的行为：WalletConnect 代码会被整体消除，应用只带注入式连接器。</p>
 <hr>
 <h2 id="2-keeper-运维">2 · Keeper 运维</h2>
 <h3 id="keeper-究竟做了什么">keeper 究竟做了什么</h3>
