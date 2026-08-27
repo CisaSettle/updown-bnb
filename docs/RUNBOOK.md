@@ -460,6 +460,25 @@ ticket: when the keeper runs out of gas it stops executing, and stale follows.
 Suggested alerts: `/healthz` non-200 for > 1 interval; any market `stale`; low-balance warning
 present for > 10 minutes; keeper process not running.
 
+### The betting bot (testnet demo liquidity)
+
+`scripts/bet-bot.mjs` keeps every market showing a real, moving book: each round it stakes varying
+amounts from two dedicated accounts — usually both sides, sometimes deliberately one-sided,
+occasionally sitting a round out — and collects what earlier rounds owe, so the standing cost per
+market is roughly the protocol fee on the losing pool. It drips its own TestUSDT from the faucet
+(1,000 per hour per address) and refuses to start on any chain but 97.
+
+```bash
+A_KEY=$BOT_A_KEY B_KEY=$BOT_B_KEY node scripts/bet-bot.mjs
+```
+
+Env: `RPC_URL`; `MARKETS` (csv of deployment keys, default all six); `BET_MIN`/`BET_MAX` (USDT,
+default 3/12); `MIN_GAS_BNB` (default 0.01) below which it tops up `GAS_TOPUP_BNB` (default 0.05)
+of BNB from an optional `FUNDER_KEY` or logs `LOW GAS` loudly. Use dedicated keys for all three of `A_KEY`, `B_KEY` and `FUNDER_KEY` —
+none of them may be the keeper or owner key, because a second sender on those accounts races their
+nonces, and the bot refuses to start on such a clash. Gas is the one thing the faucet cannot mint —
+the accounts need occasional tBNB from <https://www.bnbchain.org/en/testnet-faucet>.
+
 ---
 
 ## 3 · Incident playbook
@@ -665,6 +684,18 @@ cast send <MARKET> 'claimTreasury(address)' <TO> --private-key $OWNER_KEY --rpc-
 
 `claimTreasury` can only ever move fees that have already accrued from settled rounds. It cannot
 reach user principal or unclaimed payouts, by construction.
+
+### 3.8 Incident notes
+
+The chain records every outcome, but it does not explain an oracle, keeper, UI or contract
+incident, or say who was affected. A confirmed material incident therefore gets a dated public
+note — in the repository, linked from wherever users were affected — stating: the affected markets
+and epoch ranges, the transaction evidence (hashes, oracle round ids), the user impact in plain
+terms, and the forward-only remediation. Explicitly NOT in scope for such a note: changing any
+settled round. There is no corrected re-settlement path in this protocol, and the note says so
+rather than implying a remedy that cannot exist. (The FAQ's "What if I dispute a settlement?"
+answer promises exactly this practice — the pause half of that promise is kept by §3.4; this
+section is where the note is kept.)
 
 ---
 

@@ -134,7 +134,7 @@
 <p><strong>Non-custodial, on-chain binary options (Up/Down) on BNB Smart Chain.</strong> Settled by Chainlink price feeds, priced by a parimutuel two-sided pool — no house, no market maker, no order book.</p>
 <p>Pick <strong>UP</strong> or <strong>DOWN</strong> on BTC, ETH or BNB over a fixed round. When the round locks, the Chainlink price at that boundary becomes the strike (<code>lockPrice</code>); when it closes, the price at the next boundary becomes the settlement (<code>closePrice</code>). The winning side splits the losing side's pool pro-rata, minus a protocol fee that is charged <strong>only on the losing pool</strong> — so a winner is never paid less than their own principal. Nobody can lose more than their stake, and no admin key can touch user funds.</p>
 <ul>
-<li><strong>Live app (BNB testnet):</strong> &lt;https://updown.bluffking.ai&gt; — connect a wallet, take the faucet's 1,000 test USDT, and place a bet. Every price it shows can be re-derived from the chain; the app's own proof panel names the Chainlink round id behind each strike and settlement so you can check it without trusting the page.</li>
+<li><strong>Live app (BNB testnet):</strong> <a href="https://updown.bluffking.ai" target="_blank" rel="noreferrer">https://updown.bluffking.ai</a> — connect a wallet, take the faucet's 1,000 test USDT, and place a bet. Every price it shows can be re-derived from the chain; the app's own proof panel names the Chainlink round id behind each strike and settlement so you can check it without trusting the page.</li>
 <li><strong>Product spec (bilingual EN / 中文):</strong> <a href="PRD.html"><code>docs/PRD.html</code></a> — open it in a browser</li>
 <li><strong>Engineering spec:</strong> <a href="PRD.md"><code>docs/PRD.md</code></a></li>
 <li><strong>Operations:</strong> <a href="RUNBOOK.md"><code>docs/RUNBOOK.md</code></a></li>
@@ -231,7 +231,7 @@ npm run build                     # tsc --noEmit &amp;&amp; vite build → stati
 <p><strong>BNB 智能链上的非托管、全链上二元期权（涨/跌）。</strong> 由 Chainlink 喂价结算，由平价池（同注分彩）定价——没有庄家， 没有做市商，没有订单簿。</p>
 <p>在一个固定长度的轮次里，对 BTC、ETH 或 BNB 押 <strong>UP</strong> 或 <strong>DOWN</strong>。轮次锁定时，那个边界时刻的 Chainlink 价格成为 行权价（<code>lockPrice</code>）；轮次结束时，下一个边界的价格成为结算价（<code>closePrice</code>）。赢的一边按比例瓜分输的一边的池子， 扣掉一笔<strong>只从输的池子收取</strong>的协议手续费——所以赢家拿到的钱永远不会少于自己的本金。没有人会亏掉超过本金的钱， 也没有任何管理员私钥能碰用户的资金。</p>
 <ul>
-<li><strong>线上应用（BNB 测试网）：</strong> &lt;https://updown.bluffking.ai&gt; — 连接钱包，从水龙头领 1,000 测试 USDT，然后下一注。 它显示的每一个价格都能从链上重新推导出来；应用自带的证明面板会指名每个行权价与结算价背后的 Chainlink 轮次编号， 你不必信任这个页面也能自己核对。</li>
+<li><strong>线上应用（BNB 测试网）：</strong> <a href="https://updown.bluffking.ai" target="_blank" rel="noreferrer">https://updown.bluffking.ai</a> — 连接钱包，从水龙头领 1,000 测试 USDT，然后下一注。 它显示的每一个价格都能从链上重新推导出来；应用自带的证明面板会指名每个行权价与结算价背后的 Chainlink 轮次编号， 你不必信任这个页面也能自己核对。</li>
 <li><strong>产品规格（双语 EN / 中文）：</strong> <a href="PRD.html"><code>docs/PRD.html</code></a> — 在浏览器里打开</li>
 <li><strong>工程规格：</strong> <a href="PRD.md"><code>docs/PRD.md</code></a></li>
 <li><strong>运维：</strong> <a href="RUNBOOK.md"><code>docs/RUNBOOK.md</code></a></li>

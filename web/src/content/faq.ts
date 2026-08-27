@@ -45,6 +45,60 @@ export const FAQ: FaqSection[] = [
     title: { en: 'The product', zh: '这是什么' },
     entries: [
       {
+        id: 'rules',
+        q: { en: 'The rules, in short', zh: '规则速览' },
+        blocks: [
+          {
+            p: {
+              en: 'Everything on this list is enforced by the contract rather than promised by a policy document — the one client-side courtesy is marked as such where it appears — and every line has a longer answer further down this page.',
+              zh: '这张清单上的每一条都由合约执行，而不是由一份政策文件承诺——唯一一处属于页面自身的辅助行为，会在出现的地方注明——每一条在本页下方都有更完整的解答。',
+            },
+          },
+          {
+            ul: [
+              {
+                en: 'A round settles on the last print at or before its boundary second, from the one aggregator this market is bound to for life — and that print must still be inside the round’s oracle staleness budget (oracleMaxAge) at that boundary. Anyone who settles within the window records the same boundary price and the same outcome.',
+                zh: '一个轮次按其边界时刻之前（含那一刻）的最后一笔报价结算，报价必须来自本市场终身绑定的那一个聚合器，并且在边界时刻仍处于本轮的预言机时限（oracleMaxAge）之内。任何人在时限内来结算，记录下的边界价格与结果都相同。',
+              },
+              {
+                en: 'Betting closes at the round’s lock second: the contract rejects any bet mined at or after it. The form also closes a few seconds earlier — a client-side guard, not a contract rule — to reduce the risk that an already-signed bet lands too late.',
+                zh: '下注在轮次锁定那一秒截止：合约拒绝任何在该时刻或之后上链的注单。页面表单还会再提前几秒关闭——这是页面自身的保护，不是合约规则——用来降低已签名的交易来不及上链的风险。',
+              },
+              {
+                en: 'Full refund with zero fee, for both sides, when a round cannot be settled honestly: a tie on the strike, a one-sided book, no usable print at the boundary, a missed settlement window, or a pause that landed before the round locked and was still in force when its lock window ran out.',
+                zh: '一轮无法被诚实结算时，双方全额退回、零手续费：结算价正好等于行权价（平局）、单边池、边界时刻没有可用报价、错过结算时限、或市场在该轮锁定之前被暂停、且暂停一直持续到该轮的锁定时限耗尽。',
+              },
+              {
+                en: 'A round that had locked before a pause still settles normally, at the price the feed printed.',
+                zh: '在暂停落下之前已经锁定的轮次照常结算，按喂价真实报出的价格。',
+              },
+              {
+                en: 'The fee is charged on the losing pool only, so a winner is never paid less than their own stake — and a voided round pays no fee at all.',
+                zh: '手续费只从输的那一边的池子里收，所以赢家拿到的钱永远不少于自己的本金——作废的轮次一分手续费都不收。',
+              },
+              {
+                en: 'Settling is permissionless and timing-independent inside the window: whoever calls, whenever they call, the recorded result is the same. A boundary with no usable print cannot be settled by anyone, and such a round becomes refundable once its settlement window expires — not immediately.',
+                zh: '结算无需许可，且在时限之内与时机无关：无论谁来调用、何时调用，记录下的结果都一样。边界时刻没有可用报价的轮次谁都无法结算，这样的轮次要等自己的结算时限耗尽后才转为可退款——不是立刻。',
+              },
+              {
+                en: 'Collecting is pull-based: winnings and refunds wait in the contract until you claim them. Claiming never expires, is never pausable, and has no owner check.',
+                zh: '领取是“你来取”：赢利和退款都存放在合约里，直到你自己来领。领取永不过期、不受暂停影响、也没有任何权限检查。',
+              },
+              {
+                en: 'There is no separate settlement or collection fee. Beyond the protocol fee above, the only cost is network gas.',
+                zh: '没有单独的结算费或领取费。除了上面说的协议手续费，唯一的成本就是链上 gas。',
+              },
+            ],
+          },
+          {
+            note: {
+              en: 'The proofs live further down: “What exactly is the settlement rule?”, “When do I get my money back instead?”, and “How do I check the strike and the settlement price myself?”. Each market’s own parameters are shown in the live panels on this page.',
+              zh: '证明都在下文：“结算机制究竟是什么？”“什么情况下会原样退钱？”“我怎么自己复查行权价和结算价？”。每个市场自己的参数，见本页的实时数据面板。',
+            },
+          },
+        ],
+      },
+      {
         id: 'what',
         q: { en: 'What is UpDown?', zh: 'UpDown 是什么？' },
         blocks: [
@@ -412,8 +466,8 @@ $ cast call $FEED "getRoundData(uint80)(uint80,int256,uint256,uint256,uint80)" \
                 zh: '单边池——没有人押另一边，所以根本无从赢起。',
               },
               {
-                en: 'The feed went dark — no usable price existed at the boundary before the round’s window ran out. The same happens if the feed ever moves to a new aggregator phase: nothing can be proved after that, so every round runs out its window and refunds.',
-                zh: '喂价中断——在该轮时限用尽之前，边界时刻不存在可用的价格。喂价如果换到了新的聚合器相位（phase），结果也一样：此后任何报价都无法被证明，于是每一轮都会耗尽时限并全额退回。',
+                en: 'The feed went dark — no usable price existed at the boundary before the round’s window ran out. A feed migration to a new aggregator phase ends the same way, but not instantly: prints from the new phase are rejected, boundaries still covered by the bound aggregator’s last print settle normally, and every round whose boundary falls past that coverage runs out its window and becomes refundable.',
+                zh: '喂价中断——在该轮时限用尽之前，边界时刻不存在可用的价格。喂价换到新的聚合器相位（phase）最终也是同一个结局，但不是立刻：新相位的报价会被拒绝，仍在被绑定聚合器最后一笔报价覆盖范围内的边界照常结算，越过这个范围之后的每一轮才耗尽时限、转为可退款。',
               },
               {
                 en: 'Nobody settled the round in time — the window elapsed, so it can no longer be settled at all.',
@@ -514,14 +568,50 @@ $ cast call $FEED "getRoundData(uint80)(uint80,int256,uint256,uint256,uint80)" \
           },
           {
             p: {
-              en: 'The market is also bound for life to the single Chainlink aggregator it was deployed against. A print from any other aggregator is not a valid proof and is rejected outright. If the feed genuinely moves on, nothing can be proved any more: every round runs out its settlement window, every stake is refunded in full with no fee, and the market retires. A new market is deployed against the new feed. Nothing gets stuck, and nothing is ever settled on a price you cannot check.',
-              zh: '这个市场同时被终身绑定在它部署时对应的那一个 Chainlink 聚合器上。来自任何其他聚合器的报价都不是有效证明，会被直接拒绝。如果喂价真的换代了，此后任何价格都无法被证明：每一轮都会耗尽自己的结算时限，每一笔本金全额退回、不收手续费，这个市场就此退役。新的市场会针对新的喂价重新部署。不会有钱被卡住，也不会有任何一轮按你无法核查的价格结算。',
+              en: 'The market is also bound for life to the single Chainlink aggregator it was deployed against. A print from any other aggregator is not a valid proof and is rejected outright. If the feed genuinely moves on, the market winds down rather than breaking: boundaries the bound aggregator’s last print still covers, inside oracleMaxAge, settle normally; every boundary past that coverage can no longer be proved, so those rounds run out their settlement windows and every stake in them is refunded in full with no fee. A new market is deployed against the new feed. Nothing gets stuck, and nothing is ever settled on a price you cannot check.',
+              zh: '这个市场同时被终身绑定在它部署时对应的那一个 Chainlink 聚合器上。来自任何其他聚合器的报价都不是有效证明，会被直接拒绝。如果喂价真的换代了，这个市场是有序收场，而不是坏掉：仍在被绑定聚合器最后一笔报价覆盖范围内（预言机时限之内）的边界照常结算；越过这个范围的边界从此无法被证明，那些轮次会耗尽各自的结算时限，其中每一笔本金全额退回、不收手续费，这个市场就此退役。新的市场会针对新的喂价重新部署。不会有钱被卡住，也不会有任何一轮按你无法核查的价格结算。',
             },
           },
           {
             note: {
               en: 'That is true of the markets you are trading right now, not only of the source: chain 97 was redeployed on the current code, and you can check it yourself — oraclePhase() answers, and setOracle reverts because it is not there.',
               zh: '这一点对你现在正在交易的市场就是成立的，不只是对源码而言：97 链已在当前代码上重新部署，你可以自己验证——oraclePhase() 能回答，而 setOracle 会回滚，因为它根本不存在。',
+            },
+          },
+        ],
+      },
+      {
+        id: 'dispute',
+        q: { en: 'What if I dispute a settlement?', zh: '对结算结果有争议怎么办？' },
+        blocks: [
+          {
+            p: {
+              en: 'There is no review desk here, and no corrected re-settlement path — not because disputes are unwelcome, but because a ticket could not change anything. The settlement price is proved against public chain data by the contract itself, and a settled round is final for everyone, the team included.',
+              zh: '这里没有人工复核，也没有“修正后重新结算”的通道——不是不欢迎质疑，而是工单改变不了任何东西。结算价由合约自己对照公开的链上数据完成证明，已结算的轮次对所有人都是终局，包括团队自己。',
+            },
+          },
+          {
+            p: {
+              en: 'Checking comes before trusting. Every round’s proof panel re-derives the strike and the settlement price in your own browser, straight from the feed contract, and names the oracle round ids it used; the same round data and events are one click away on the block explorer.',
+              zh: '核验先于信任。每一轮的证明面板都会在你自己的浏览器里、直接从喂价合约重新推导行权价和结算价，并写明它用到的预言机轮次 id；同样的轮次数据和事件，在区块浏览器上一键可查。',
+            },
+          },
+          {
+            p: {
+              en: 'The failure modes need no judgment call. A feed silent past the point where its last print can still cover a boundary, a missed window, a feed migration that outlives the bound aggregator’s last valid print — each leaves the affected rounds unable to settle, and they become refundable automatically once their own settlement window expires. A refund is still collected by you, through the same claim button, and claiming never expires.',
+              zh: '故障场景不需要任何人裁量。喂价安静到其最后一笔报价再也盖不住边界时刻、错过时限、喂价换代且超出了被绑定聚合器最后一笔报价的有效期——这些都只会让受影响的轮次无法结算，并在各自的结算时限耗尽后自动转为可退款。退款仍由你自己通过同一个领取按钮取回，领取永不过期。',
+            },
+          },
+          {
+            p: {
+              en: 'What people can do: investigate a UI or infrastructure problem, pause the market against taking new risk, and publish a dated incident note naming the affected markets and epochs, the transaction evidence, and the forward-only remediation — explicitly without touching any settled round. What nobody can do is alter a recorded settlement; the oracle risk in the next answer is the honest limit of that guarantee.',
+              zh: '人能做的是：排查界面或基础设施的问题、暂停市场以挡住新的风险进入、以及发布带日期的事件说明——写明受影响的市场与轮次、交易证据、只面向未来的补救措施，并明确不改动任何已结算轮次。没有人能做的，是改写一笔已被记录的结算；下一条回答里的预言机风险，就是这条保证的诚实边界。',
+            },
+          },
+          {
+            note: {
+              en: 'Found a mismatch between the proof panel and the chain, or anything else that looks wrong? Open an issue on the GitHub repository (github.com/CisaSettle/updown-bnb) with the market address, the epoch, the transaction hash, and the oracle round ids from the proof panel — exactly the evidence that lets anyone reproduce what you saw.',
+              zh: '发现证明面板和链上数据对不上，或任何看起来不对的地方？到 GitHub 仓库（github.com/CisaSettle/updown-bnb）提一个 issue，附上市场地址、轮次号、交易哈希，以及证明面板里的预言机轮次 id——这正是让任何人都能复现你所见的全部证据。',
             },
           },
         ],
@@ -541,8 +631,8 @@ $ cast call $FEED "getRoundData(uint80)(uint80,int256,uint256,uint256,uint80)" \
                 zh: '智能合约风险。这份代码经过六轮对抗式跨厂商评审和一次独立审计，外加大量测试，并且已在链上完成源码验证、你可以自己读。其中最近的一次查出了一个严重漏洞——管理员可以插手一个已锁定轮次的结算价——这正是价格来源现在改为不可变的原因。这说明的是"评审记录值得一读"，而不是"下一轮评审一定查不出东西"。',
               },
               {
-                en: 'Oracle risk. Settlement is only as good as the feed. A feed that stops publishing lets rounds run out their window into refunds rather than settling them wrongly, and a feed that moves to a new aggregator retires the market into refunds — both are the safe failure. But a feed reporting a wrong price would settle a wrong outcome, and nothing on chain can tell the difference.',
-                zh: '预言机风险。结算的可靠性上限就是喂价的可靠性。喂价停止发布时，轮次会耗尽时限转为退款而不是错误结算；喂价换到新的聚合器时，市场会退役并全部退款——这两种都是安全的失败方式。但如果喂价报出的价格本身就是错的，就会结算出错误的结果，而链上没有任何东西能分辨这一点。',
+                en: 'Oracle risk. Settlement is only as good as the feed. A feed that stops publishing settles the boundaries its last print still covers and lets everything after run out its window into refunds rather than settle wrongly; a feed that moves to a new aggregator winds the market down the same way. Both are the safe failure. But a feed reporting a wrong price would settle a wrong outcome, and nothing on chain can tell the difference.',
+                zh: '预言机风险。结算的可靠性上限就是喂价的可靠性。喂价停止发布时，其最后一笔报价仍覆盖的边界照常结算，之后的每一轮耗尽时限、转为退款，而不是错误结算；喂价换到新的聚合器时，市场也以同样的方式有序收场。这两种都是安全的失败方式。但如果喂价报出的价格本身就是错的，就会结算出错误的结果，而链上没有任何东西能分辨这一点。',
               },
               {
                 en: 'Thin books. In a round where almost nobody took your side, your multiple is large but the round may void for want of a counterparty — you get your stake back, not a win.',
