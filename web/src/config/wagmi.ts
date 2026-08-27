@@ -13,8 +13,6 @@ import { getLang, t } from '../lib/i18n'
  */
 const wcProjectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID?.trim()
 
-export const walletConnectEnabled = Boolean(wcProjectId)
-
 const connectors: CreateConnectorFn[] = [injected({ shimDisconnect: true })]
 
 if (wcProjectId) {

@@ -48,7 +48,7 @@ import type { OraclePrint } from '../lib/settlement'
 const VIEW_W = 480
 const VIEW_H = 200
 /**
- * The plot leaves a 74-unit right gutter and a 42-unit bottom band: at the ~0.6 scale a 360px
+ * The plot leaves an 82-unit right gutter and a 42-unit bottom band: at the ~0.6 scale a 360px
  * phone renders this viewBox at, the 12–13 unit labels below land at ≈ 7–8 CSS px — the floor of
  * legibility. The old 8–9 unit text came out at ≈ 5px there, which is to say: not at all.
  */
