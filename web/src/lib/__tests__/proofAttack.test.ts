@@ -392,7 +392,11 @@ describe('the invariant holds across the whole space, not just the cases we thou
     // pass path, all-passed would never test the refusal path.
     expect(verified).toBeGreaterThan(total / 20)
     expect(refused).toBeGreaterThan(total / 20)
-  })
+    // A deliberate 6,000-case sweep is a fixed workload, and vitest's 5s default is a bet about
+    // runner speed, not about this test: a shared CI machine loses that bet and blocks every
+    // deploy on a file nothing changed. The budget says what the sweep is, not how fast the
+    // hardware is.
+  }, 30_000)
 })
 
 describe('the commands the panel hands out actually decode', () => {
