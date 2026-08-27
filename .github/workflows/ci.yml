@@ -9,7 +9,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # `stable` is a moving target: it advanced from 1.7.1 to 1.8.0 during 2026-08-27 and
+      # changed the lint surface under `--deny warnings`, turning an unchanged tree from green
+      # to 451 warnings in the same day. Keep local review and CI on the exact proven toolchain.
       - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.7.1
       # lib/ is vendored as plain copies and gitignored, so a fresh checkout installs it.
       # Versions are pinned here and in scripts/setup.sh; keep the two in step.
       - name: Install pinned Solidity dependencies
