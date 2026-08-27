@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Address } from '../config/deployment'
 import type { HistoryRow } from '../hooks/useHistory'
 import type { SettlementToken } from '../hooks/useSettlementToken'
@@ -92,6 +92,20 @@ export function HistoryPanel({
   // and twenty of them open at once would be twenty multicalls nobody asked for.
   const [openEpoch, setOpenEpoch] = useState<string | undefined>(undefined)
   const openRow = rows.find((r) => r.epoch.toString() === openEpoch)
+
+  // The proof lands below the whole table (see the note at the panel), which for the newest round —
+  // the row nearly everyone clicks — puts it some three screens below the button that opened it.
+  // Opening it therefore looked like nothing happening at all. Bring it to the reader instead.
+  //
+  // `start`, not `nearest`: the panel's own body fills in from chain reads a moment later and grows
+  // as it does, and `nearest` — which does nothing at all for a panel already marginally in view —
+  // let that growth push it back off screen. Pinning the top is the one position that survives it.
+  // `instant` because the page sets `scroll-behavior: smooth` globally, and smoothly animating a
+  // three-screen jump takes about two seconds of the reader watching the page fly past.
+  const proofRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (openEpoch) proofRef.current?.scrollIntoView({ block: 'start', behavior: 'instant' })
+  }, [openEpoch])
 
   return (
     <section className="card" aria-label={t(lang, ui.history.heading)}>
@@ -207,8 +221,13 @@ export function HistoryPanel({
           is a horizontally scrolling 760px grid, and a proof panel nested in one of its cells would
           inherit that scroll and be unreadable on a phone. The row's own button owns this panel.
         */}
-        {/* Rendered unconditionally so every row's `aria-controls` points at something real. */}
-        <div id={PROOF_PANEL_ID}>
+        {/*
+          Rendered unconditionally so every row's `aria-controls` points at something real.
+          `scroll-mt-*` keeps the scroll above from stopping with the panel's own heading and Close
+          button tucked under the sticky header — the header wraps to two rows on a phone, so the
+          margin grows with it.
+        */}
+        <div id={PROOF_PANEL_ID} ref={proofRef} className="scroll-mt-32 sm:scroll-mt-24">
           {openRow ? (
             <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50/60 p-4 dark:border-sky-900 dark:bg-sky-950/30">
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">

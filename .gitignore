@@ -10,3 +10,7 @@ contracts/lib/
 .review/
 *.log
 .DS_Store
+# Per-machine agent settings. The shared hook wiring in .claude/settings.json and
+# .codex/hooks.json is committed; a local override never is.
+.claude/settings.local.json
+.codex/config.toml

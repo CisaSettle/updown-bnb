@@ -479,6 +479,54 @@ none of them may be the keeper or owner key, because a second sender on those ac
 nonces, and the bot refuses to start on such a clash. Gas is the one thing the faucet cannot mint —
 the accounts need occasional tBNB from <https://www.bnbchain.org/en/testnet-faucet>.
 
+### Keeping the testnet in gas
+
+The board burns roughly **0.10 tBNB/day** — the keeper about 0.067 of it, each bot about 0.019.
+Only the chain's own faucet mints tBNB, so this is a standing chore rather than a one-time setup.
+
+Watch the keeper first. A dry bot only means a still book; a dry keeper means markets go stale and
+already-locked rounds run out their settlement windows and refund — the one failure mode users
+see. The keeper's own `MIN_BALANCE_BNB` warning (default 0.05) is the early signal, and it fires in
+`/healthz` `warnings[]` well before anything stops.
+
+**`RELAY_TICK_MS` is the lever, and `0` is the setting that costs nothing.** Two different things
+publish prices, and only one of them matters for money. Every boundary gets its own required relay
+print, which settlement depends on absolutely. `RELAY_TICK_MS` (30s here, off by default) buys
+*extra* prints between boundaries for nothing but chart density: a tick is skipped rather than
+queued whenever a boundary relay is due, and it never takes a `(feed, boundary)` claim. Turning it
+off makes the chart coarser and takes a large bite out of the keeper's gas.
+
+Settlement never *depends* on a density tick, but an enabled tick is not entirely free of it
+either. The two share one key and therefore one nonce, so a tick that was broadcast and never
+confirmed sits in front of the next boundary relay until it clears — the keeper says so itself,
+loudly (`density tick failed after replacing itself; a pending tick may delay the next relay`).
+Setting `RELAY_TICK_MS=0` removes that interference completely; merely raising the interval only
+makes it rarer.
+
+The bigger cause of a stale-boundary refund is the keeper missing boundary relays outright — down,
+unfunded, or rate-limited — because `oracleMaxAge` (150s on the 5-minute markets, 900s on the
+hourly) is measured against the last usable print at the boundary. That is a keeper-health problem,
+and §3.1 is where it is handled.
+
+The refill loop, every few days:
+
+1. Claim 0.3 tBNB at <https://www.bnbchain.org/en/testnet-faucet> into the funding address. The
+   faucet serves only an address holding **0.002 BNB on BSC mainnet** — an anti-sybil price on
+   identity, not scarcity — and raises a captcha that a human must clear. An EVM address is the
+   same on both chains, so one address can hold the mainnet qualifier and receive the testnet
+   coin. One claim feeds the board for about three days.
+2. Spread it, topping every account back up to its target:
+
+```bash
+SRC_KEY=0x… BOT_ADDRESSES=<botA>,<botB> node scripts/fund-gas.mjs --dry   # then without --dry
+```
+
+`fund-gas.mjs` re-checks that the RPC answers chain 97 before it signs anything: the funding key
+controls real BNB on mainnet at the same address, and a wrong endpoint would spend it. It tops up
+to a target rather than sending fixed amounts, and when the source is short it scales every
+transfer by the same fraction, so a partial claim leaves the whole board on one expiry instead of
+filling the first account and starving the last.
+
 ---
 
 ## 3 · Incident playbook

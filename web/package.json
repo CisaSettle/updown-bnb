@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "UpDown Protocol \u2014 static trading UI for decentralized binary options on BNB Smart Chain",
+  "description": "UpDown Protocol — static trading UI for decentralized binary options on BNB Smart Chain",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "sync:abi": "node scripts/sync-abi.mjs",
-    "check:deployment": "node scripts/check-deployment.mjs"
+    "check:deployment": "node scripts/check-deployment.mjs",
+    "check:controls": "node scripts/check-control-visibility.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.102.3",
@@ -27,6 +28,7 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^5.2.0",
     "autoprefixer": "^10.4.20",
+    "playwright-core": "^1.62.1",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.19",
     "typescript": "^5.9.0",
