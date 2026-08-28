@@ -33,7 +33,7 @@ export function TestnetBanner({ onFaucet }: { onFaucet?: () => void }) {
         */}
         <a
           className="btn h-8 shrink-0 border border-amber-600 px-3 py-1 text-xs text-amber-900 hover:bg-amber-200 dark:text-amber-100 dark:hover:bg-amber-900"
-          href="https://www.bnbchain.org/en/testnet-faucet"
+          href="https://docs.bnbchain.org/bnb-smart-chain/developers/faucet/"
           target="_blank"
           rel="noreferrer"
           title={t(lang, ui.testnet.gasFaucetTitle)}

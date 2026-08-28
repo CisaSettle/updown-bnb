@@ -30,7 +30,7 @@ describe('TestnetBanner with no wallet connected', () => {
     // The USDT faucet is itself a transaction: with zero tBNB the funnel dead-ends on
     // "insufficient funds" at step one, and nothing else on the page says where gas comes from.
     const html = renderIn('zh', <TestnetBanner />)
-    expect(html).toContain('https://www.bnbchain.org/en/testnet-faucet')
-    expect(html).toContain('领 gas（tBNB）')
+    expect(html).toContain('https://docs.bnbchain.org/bnb-smart-chain/developers/faucet/')
+    expect(html).toContain('gas 领取方式（tBNB）')
   })
 })

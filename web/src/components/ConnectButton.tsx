@@ -9,6 +9,7 @@ import { t, useLang } from '../lib/i18n'
 import { rovingIndex } from '../lib/roving'
 import { dismissToast, pushToast } from '../lib/toast'
 import { watchWalletAuthorization } from '../lib/walletWatch'
+import { DEMO_WALLET_CONNECTOR_ID, forgetDemoWallet } from '../lib/demoWallet'
 
 function hasInjectedProvider(): boolean {
   if (typeof window === 'undefined') return false
@@ -91,10 +92,10 @@ function useMenu(itemCount: number) {
  * wrong-chain header, so Disconnect and the explorer link cannot vanish with the network again
  * and the two states cannot drift apart in menu behaviour.
  */
-function AccountMenu({ address, onDisconnect }: { address: string; onDisconnect: () => void }) {
+function AccountMenu({ address, onDisconnect, isDemo }: { address: string; onDisconnect: () => void; isDemo: boolean }) {
   const lang = useLang()
   const { disconnect } = useDisconnect()
-  const menu = useMenu(2)
+  const menu = useMenu(isDemo ? 3 : 2)
 
   return (
     <div className="relative" ref={menu.wrapper} onKeyDown={menu.onKeyDown}>
@@ -139,6 +140,27 @@ function AccountMenu({ address, onDisconnect }: { address: string; onDisconnect:
           >
             {t(lang, ui.connect.disconnect)}
           </button>
+          {isDemo ? (
+            <button
+              role="menuitem"
+              ref={(el) => {
+                menu.items.current[2] = el
+              }}
+              type="button"
+              className="block w-full border-t border-slate-200 px-4 py-3 text-left text-sm text-rose-600 hover:bg-slate-100 dark:border-slate-700 dark:text-rose-400 dark:hover:bg-slate-800"
+              onClick={() => {
+                if (!window.confirm(t(lang, ui.demoWallet.removeConfirm))) return
+                // Disconnect first so wagmi releases the active account; removing the only copy of
+                // the key is then explicit, user-confirmed, and limited to this app's one record.
+                onDisconnect()
+                disconnect()
+                forgetDemoWallet()
+                menu.close(false)
+              }}
+            >
+              {t(lang, ui.demoWallet.remove)}
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -147,7 +169,7 @@ function AccountMenu({ address, onDisconnect }: { address: string; onDisconnect:
 
 export function ConnectButton() {
   const lang = useLang()
-  const { address, isConnected } = useAccount()
+  const { address, isConnected, connector: activeConnector } = useAccount()
   const { wrongChain, isSwitching, switchToActiveChain } = useActiveChain()
   const { connectors, connect, isPending } = useConnect()
 
@@ -279,11 +301,15 @@ export function ConnectButton() {
         >
           {t(lang, isSwitching ? ui.connect.switching : ui.switchNetwork(lang))}
         </button>
-        {isConnected && address ? <AccountMenu address={address} onDisconnect={markUserDisconnect} /> : null}
+        {isConnected && address ? (
+          <AccountMenu address={address} onDisconnect={markUserDisconnect} isDemo={activeConnector?.id === DEMO_WALLET_CONNECTOR_ID} />
+        ) : null}
       </div>
     )
   } else if (isConnected && address) {
-    content = <AccountMenu address={address} onDisconnect={markUserDisconnect} />
+    content = (
+      <AccountMenu address={address} onDisconnect={markUserDisconnect} isDemo={activeConnector?.id === DEMO_WALLET_CONNECTOR_ID} />
+    )
   } else {
     if (usable.length === 0) {
       const deepLink = walletDeepLink()
@@ -336,7 +362,7 @@ export function ConnectButton() {
                     doConnect(c)
                   }}
                 >
-                  {c.name}
+                  {c.id === DEMO_WALLET_CONNECTOR_ID ? t(lang, ui.demoWallet.connectorName) : c.name}
                 </button>
               ))}
             </div>

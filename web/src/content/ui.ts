@@ -117,10 +117,10 @@ export const testnet = {
   },
   // Every transaction here — the USDT faucet included — needs a little testnet BNB for gas, and a
   // fresh test wallet has none. This is the one link that unblocks step one of the funnel.
-  gasFaucet: { en: 'Get gas (tBNB) ↗', zh: '领 gas（tBNB）↗' },
+  gasFaucet: { en: 'Gas options (tBNB) ↗', zh: 'gas 领取方式（tBNB）↗' },
   gasFaucetTitle: {
-    en: 'Every transaction here needs a little testnet BNB for gas. The official BNB Chain faucet gives it away.',
-    zh: '这里的每一笔交易都需要一点测试网 BNB 付 gas。BNB Chain 官方水龙头免费发。',
+    en: 'Every transaction needs testnet BNB for gas. BNB Chain lists its support bot, Discord, and third-party faucet options here.',
+    zh: '每笔交易都需要测试网 BNB 付 gas。BNB Chain 在这里列出了官方支持机器人、Discord 和第三方水龙头。',
   },
   faucetBusy: { en: 'Minting…', zh: '铸造中…' },
   faucet: { en: 'Get 1,000 test USDT', zh: '领 1,000 测试 USDT' },
@@ -133,6 +133,56 @@ export function testnetNotice(lang: Lang): Text {
     zh: `你在 ${chainLabel(lang)}上。这里的钱没有价值。价格来自 keeper 推送的中继喂价，不是 Chainlink——测试网自带的 Chainlink 喂价滞后得太厉害，5 分钟的轮次撑不住。`,
   }
 }
+
+// ── disposable test wallet ─────────────────────────────────────────────────────────────────────
+
+export const demoWallet = {
+  recommended: { en: 'Recommended for first-time visitors', zh: '首次体验推荐' },
+  title: { en: 'Try it without connecting your own wallet', zh: '不用连接自己的钱包，也能直接体验' },
+  body: {
+    en: 'Create a separate test account in this browser, get free test funds, and place a bet. Your everyday wallet never sees this site.',
+    zh: '在这个浏览器里创建一个独立的测试账号，领取免费测试币后就能下注。你平时使用的钱包完全不用连接本站。',
+  },
+  safety: {
+    en: 'Testnet only. The private key stays in this browser, is not backed up, and is not safe for real assets. Never send BNB, USDT, or anything valuable to this address.',
+    zh: '仅限测试网。私钥只保存在这个浏览器里，没有备份，也不适合保管真实资产。不要向这个地址转入 BNB、USDT 或任何有价值的资产。',
+  },
+  steps: { en: 'Demo account setup', zh: '体验账号设置步骤' },
+  stepCreate: { en: 'Create a browser test account', zh: '创建浏览器测试账号' },
+  create: { en: 'Create test account', zh: '创建测试账号' },
+  continue: { en: 'Continue with test account', zh: '继续使用测试账号' },
+  connectorName: { en: 'Browser test account', zh: '浏览器测试账号' },
+  creating: { en: 'Creating…', zh: '正在创建…' },
+  created: { en: 'Test account created', zh: '测试账号已创建' },
+  createdBody: {
+    en: 'Only this browser holds its key. Next, get a little testnet gas.',
+    zh: '只有这个浏览器保存它的私钥。下一步领取一点测试网 gas。',
+  },
+  createFailed: { en: 'Could not create the test account', zh: '没能创建测试账号' },
+  unavailable: { en: 'Test account unavailable', zh: '测试账号暂不可用' },
+  unavailableBody: {
+    en: 'This build does not include the testnet-only wallet connector.',
+    zh: '这个版本没有加载仅用于测试网的钱包连接器。',
+  },
+  copy: { en: 'Copy address', zh: '复制地址' },
+  copied: { en: 'Copied', zh: '已复制' },
+  stepGas: { en: 'Get a little tBNB for gas', zh: '领取一点 tBNB 作为 gas' },
+  gasBody: {
+    en: 'BNB Chain requires gas even for free-token claims. We will copy a funding request and open BNB Chain’s official Telegram support bot; this page detects the deposit automatically.',
+    zh: 'BNB Chain 连领取免费代币也需要 gas。点击后会复制申请内容并打开 BNB Chain 官方 Telegram 支持机器人；到账后本页会自动检测。',
+  },
+  copyAndGas: { en: 'Copy request & open official bot ↗', zh: '复制申请并打开官方机器人 ↗' },
+  otherGasOptions: { en: 'Other gas options ↗', zh: '其他 gas 领取方式 ↗' },
+  gasReady: { en: 'Gas received:', zh: 'gas 已到账：' },
+  stepUsdt: { en: 'Get 1,000 test USDT', zh: '领取 1,000 测试 USDT' },
+  claim: { en: 'Get 1,000 test USDT', zh: '领取 1,000 测试 USDT' },
+  ready: { en: 'Ready to trade:', zh: '可以开始体验：' },
+  remove: { en: 'Delete test account from this browser', zh: '从本浏览器删除测试账号' },
+  removeConfirm: {
+    en: 'Delete this test account? You will permanently lose access to its open positions and test funds.',
+    zh: '删除这个测试账号？你将永久失去其中未结束仓位和测试资金的访问权。',
+  },
+} satisfies Record<string, Text>
 
 // ── no deployment ───────────────────────────────────────────────────────────────────────────────
 

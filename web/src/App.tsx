@@ -10,6 +10,7 @@ import { PositionsPanel } from './components/PositionsPanel'
 import { RoundProof } from './components/RoundProof'
 import { SkeletonCard } from './components/Skeleton'
 import { TestnetBanner } from './components/TestnetBanner'
+import { DemoWalletPanel } from './components/DemoWalletPanel'
 import { Toaster } from './components/Toaster'
 import * as ui from './content/ui'
 import { addressUrl, isTestnet } from './config/chains'
@@ -280,6 +281,8 @@ export default function App() {
         <NoDeployment />
       ) : (
         <main className="mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-6">
+          {showTestnetHelpers ? <DemoWalletPanel /> : null}
+
           <MarketPicker
             markets={markets}
             selected={selected}

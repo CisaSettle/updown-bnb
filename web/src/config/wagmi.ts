@@ -3,6 +3,7 @@ import { bsc, bscTestnet } from 'wagmi/chains'
 import { injected, walletConnect } from 'wagmi/connectors'
 import type { CreateConnectorFn } from 'wagmi'
 import { CHAIN_ID, BSC_MAINNET_RPC, BSC_TESTNET_RPC, rpcUrl } from './chains'
+import { demoWalletConnector } from './demoWalletConnector'
 import { meta } from '../content/ui'
 import { getLang, t } from '../lib/i18n'
 
@@ -14,6 +15,10 @@ import { getLang, t } from '../lib/i18n'
 const wcProjectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID?.trim()
 
 const connectors: CreateConnectorFn[] = [injected({ shimDisconnect: true })]
+
+// A generated key must never follow this app onto chain 56. Mainnet builds do not even register
+// the connector, so no UI mistake can turn the disposable browser account into a real-money wallet.
+if (CHAIN_ID === bscTestnet.id) connectors.unshift(demoWalletConnector())
 
 if (wcProjectId) {
   connectors.push(
