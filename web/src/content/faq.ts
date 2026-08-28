@@ -223,8 +223,8 @@ export const FAQ: FaqSection[] = [
           },
           {
             p: {
-              en: 'That is a deliberate difference from a centralised event contract, where the strike is the index price at the moment your order is filled. Here everyone in a round is betting on the same question with the same reference point, which is what makes the pool split fair and what makes the whole round checkable from one pair of numbers.',
-              zh: '这是与中心化事件合约的一个刻意区别——在那类产品里，行权价是你下单成交那一刻的指数价。而这里，同一轮次里所有人押的是同一个问题、同一个参照点，这既是池子按比例分配得以公平的前提，也是整轮可以用一对数字就核查清楚的原因。',
+              en: 'That differs from products that assign each order its own reference price. For example, Binance Event Contracts use the Price Index at the next second after placement as that order\'s open price; other products define their own entry rules. Here everyone in a round is betting on the same question with the same reference point, which makes the pool split fair and the whole round checkable from one pair of numbers.',
+              zh: '这与“每笔订单各有参照价”的产品不同。例如，币安事件合约把下单后下一秒的 Price Index 作为该笔订单的开仓价；其他产品则按各自规则确定入场基准。而这里，同一轮次里所有人押的是同一个问题、同一个参照点，这既是池子按比例分配得以公平的前提，也是整轮可以用一对数字就核查清楚的原因。',
             },
           },
           {
