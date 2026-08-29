@@ -70,25 +70,25 @@ Three properties are worth knowing before reading any code:
 
 | Contract | Address |
 |---|---|
-| `UpDownRegistry` | [`0x8180410383497E8cC4A5E2af12BeA9756fB0027d`](https://testnet.bscscan.com/address/0x8180410383497E8cC4A5E2af12BeA9756fB0027d) |
-| BTC/USD 5m | [`0x4834529FF9591AD5cB6e4bb0a4e1C7F2Df3f5e0a`](https://testnet.bscscan.com/address/0x4834529FF9591AD5cB6e4bb0a4e1C7F2Df3f5e0a) |
-| BTC/USD 1h | [`0xF2FBbcc52f6616f8F01D7Cd3C2FFD1F93A5e81D1`](https://testnet.bscscan.com/address/0xF2FBbcc52f6616f8F01D7Cd3C2FFD1F93A5e81D1) |
-| ETH/USD 5m | [`0x47253E0E86FB531546ec516d357aCCB25d03e5A4`](https://testnet.bscscan.com/address/0x47253E0E86FB531546ec516d357aCCB25d03e5A4) |
-| ETH/USD 1h | [`0xFe611c1c7f60243A69A5Bb0B1cfE33500C77bff0`](https://testnet.bscscan.com/address/0xFe611c1c7f60243A69A5Bb0B1cfE33500C77bff0) |
-| BNB/USD 5m | [`0x1DA7da4913FB35d1e2C02D07886655A68faC8a10`](https://testnet.bscscan.com/address/0x1DA7da4913FB35d1e2C02D07886655A68faC8a10) |
-| BNB/USD 1h | [`0xa5f2318C557F9FfF3aaE9000AA014AdEA82aC389`](https://testnet.bscscan.com/address/0xa5f2318C557F9FfF3aaE9000AA014AdEA82aC389) |
-| `TestUSDT` (faucet, 18 dec) | [`0x5a8E20563fa4Ae26f5F1183D090D5EC0e80bCCdF`](https://testnet.bscscan.com/address/0x5a8E20563fa4Ae26f5F1183D090D5EC0e80bCCdF) |
-| `RelayAggregator` BTC/USD | [`0x2D8d981eF2407D1B0eB6b24FAdB50d8c49473050`](https://testnet.bscscan.com/address/0x2D8d981eF2407D1B0eB6b24FAdB50d8c49473050) |
-| `RelayAggregator` ETH/USD | [`0x61df0e24bb23431034884c78E482CBd92A78911a`](https://testnet.bscscan.com/address/0x61df0e24bb23431034884c78E482CBd92A78911a) |
-| `RelayAggregator` BNB/USD | [`0x2756b5B78e10dE6B15f174d764E4631374d51Aca`](https://testnet.bscscan.com/address/0x2756b5B78e10dE6B15f174d764E4631374d51Aca) |
+| `UpDownRegistry` | [`0x115dAb3400CF8EE8949F71ADB7696b54dD2E45bd`](https://testnet.bscscan.com/address/0x115dAb3400CF8EE8949F71ADB7696b54dD2E45bd) |
+| BTC/USD 1m | [`0x05ee686BeB6aeefEF07BBAcc8C2F4748B23fBC9C`](https://testnet.bscscan.com/address/0x05ee686BeB6aeefEF07BBAcc8C2F4748B23fBC9C) |
+| BTC/USD 10m | [`0x167217BA44E780B084E1F585208AfBBFD0aA5bE4`](https://testnet.bscscan.com/address/0x167217BA44E780B084E1F585208AfBBFD0aA5bE4) |
+| ETH/USD 1m | [`0x1b6d890659A73950b88ce8EF980021F6DE9A7409`](https://testnet.bscscan.com/address/0x1b6d890659A73950b88ce8EF980021F6DE9A7409) |
+| ETH/USD 10m | [`0xeedE6730a89f119Bf40c1b6439FCBA85ea770241`](https://testnet.bscscan.com/address/0xeedE6730a89f119Bf40c1b6439FCBA85ea770241) |
+| BNB/USD 1m | [`0x9818De06A32a9E50125A00916b4Be707E320D4ae`](https://testnet.bscscan.com/address/0x9818De06A32a9E50125A00916b4Be707E320D4ae) |
+| BNB/USD 10m | [`0xbDa9785c1F26fe3a8e66738252418Ca9C75EDAE0`](https://testnet.bscscan.com/address/0xbDa9785c1F26fe3a8e66738252418Ca9C75EDAE0) |
+| `TestUSDT` (faucet, 18 dec) | [`0x52CdFacA6E7639e60EEdd88CE4BD24f8877b83e5`](https://testnet.bscscan.com/address/0x52CdFacA6E7639e60EEdd88CE4BD24f8877b83e5) |
+| `RelayAggregator` BTC/USD | [`0x81f6A0c6215bc0d8B3b64Ea946F58Bd159a7ed4A`](https://testnet.bscscan.com/address/0x81f6A0c6215bc0d8B3b64Ea946F58Bd159a7ed4A) |
+| `RelayAggregator` ETH/USD | [`0x0643De0C0bf26f081e4C28d11DB90f562174bF6C`](https://testnet.bscscan.com/address/0x0643De0C0bf26f081e4C28d11DB90f562174bF6C) |
+| `RelayAggregator` BNB/USD | [`0x99B5a4202B3247Bc326003a68dE5B301b1D4D541`](https://testnet.bscscan.com/address/0x99B5a4202B3247Bc326003a68dE5B301b1D4D541) |
 
-**Six markets: BTC, ETH and BNB, each over a 5-minute and a 1-hour round, every one of them settled
+**Six markets: BTC, ETH and BNB, each over a 1-minute and a 10-minute round, every one of them settled
 in USDT.** One settlement asset across the board means a trader compares six books in a single unit
 and needs one approval, rather than holding two different things to trade two different symbols.
 
 All eleven are source-verified on [Sourcify](https://sourcify.dev) (`--verifier sourcify`, no API key
 needed). Testnet substitutes keeper-fed `RelayAggregator` feeds for Chainlink because BSC testnet's
-own feeds run up to ~1500 s stale, which would void every 5-minute round.
+own feeds run up to ~1500 s stale, which would void every 1-minute round.
 
 ### BNB Smart Chain mainnet (chain 56) — not deployed
 
@@ -99,8 +99,8 @@ settlement asset to BSC-USDT and refuses to deploy the testnet-only contracts th
 The three Chainlink feeds it will deploy against are pinned in the script and each was read on chain
 — `description()`, `decimals()`, and a fresh `latestRoundData()` — before being written down. They
 are constructor arguments to an immutable contract, so a wrong one cannot be corrected, only
-abandoned. `scripts/deploy-mainnet.sh` re-checks all three are alive and inside the 5-minute
-market's 150 s staleness budget before it will broadcast.
+abandoned. `scripts/deploy-mainnet.sh` re-checks all three are alive and inside the 1-minute
+market's 50 s staleness budget before it will broadcast.
 
 | Feed | Address |
 |---|---|
@@ -234,7 +234,7 @@ clear message when the file is absent rather than falling back to a guess.
 
 | Chain | Chain id | Feeds | Status |
 |---|---|---|---|
-| BSC testnet | 97 | `RelayAggregator` — keeper-fed, because the native testnet Chainlink feeds run up to ~1500s stale and would void every 5-minute round | **Live**, all contracts source-verified |
+| BSC testnet | 97 | `RelayAggregator` — keeper-fed, because the native testnet Chainlink feeds run up to ~1500s stale and would void every 1-minute round | **Live** |
 | BSC mainnet | 56 | Real Chainlink `AggregatorV3` feeds (BTC/USD, ETH/USD, BNB/USD) | Not deployed — **owner-gated** |
 
 > **Mainnet deployment is a separate, owner-gated step.** It spends real funds, it is irreversible,

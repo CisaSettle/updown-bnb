@@ -87,9 +87,9 @@ for pair in \
   OUT=$(cast call "$ADDR" "latestRoundData()(uint80,int256,uint256,uint256,uint80)" --rpc-url "$BSC_RPC_URL" 2>/dev/null)
   UPD=$(echo "$OUT" | sed -n '4p' | sed 's/ .*//')
   AGE=$(( $(date +%s) - ${UPD:-0} ))
-  # 5-minute markets ship with oracleMaxAge = 150s; a feed staler than that would void every round.
-  if [ "${UPD:-0}" -gt 0 ] && [ "$AGE" -lt 150 ]; then ok "$NAME/USD feed is ${AGE}s old (budget 150s)"
-  else bad "feed-$NAME" "$NAME/USD feed is ${AGE}s old — a 5-minute market would void every round"; fi
+  # 1-minute markets ship with oracleMaxAge = 50s; a feed staler than that would void every round.
+  if [ "${UPD:-0}" -gt 0 ] && [ "$AGE" -lt 50 ]; then ok "$NAME/USD feed is ${AGE}s old (budget 50s)"
+  else bad "feed-$NAME" "$NAME/USD feed is ${AGE}s old — a 1-minute market would void every round"; fi
 done
 
 # ── the contracts still pass their own tests ─────────────────────────────────

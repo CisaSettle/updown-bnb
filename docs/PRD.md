@@ -516,17 +516,17 @@ signed off on the code that exists today."
 
 ## 11. Live deployment — BNB Smart Chain testnet (chain 97)
 
-Deployed, Sourcify-verified, keeper running, and proven end to end on chain on 2026-08-26.
+Deployed, Sourcify-verified, keeper running, and proven end to end on chain on 2026-08-30.
 
-> **The live stack is the reviewed source.** Chain 97 was redeployed on 2026-08-26, after the final
-> review round, with **six markets**: BTC, ETH and BNB over 5-minute and 1-hour rounds, every one
+> **The live stack matches the current source.** Chain 97 was redeployed on 2026-08-30 with
+> **six markets**: BTC, ETH and BNB over 1-minute and 10-minute rounds, every one
 > settled in USDT. The native-BNB market is no longer deployed — `UpDownMarketNative` remains in the
 > tree, built and tested, because that is a deployment choice rather than a change in what the
 > protocol supports. Confirmed on chain, not assumed: `oraclePhase()` answers, `setOracle(address)`
 > reverts because it does not exist, and `autoClaimOptIn(address)` answers. All eleven contracts
 > report `match` on Sourcify, so §5, §6 and §10 describe what is actually deployed.
 >
-> Registry `0x8180410383497E8cC4A5E2af12BeA9756fB0027d` · USDT `0x5a8E20563fa4Ae26f5F1183D090D5EC0e80bCCdF`
+> Registry `0x115dAb3400CF8EE8949F71ADB7696b54dD2E45bd` · USDT `0x52CdFacA6E7639e60EEdd88CE4BD24f8877b83e5`
 
 > The stack was **redeployed** once, on the final reviewed code. Running
 > `scripts/verify-sourcify.sh 97` against the first deployment reported `no_match` on the two ERC20
@@ -539,17 +539,17 @@ Deployed, Sourcify-verified, keeper running, and proven end to end on chain on 2
 
 | Contract | Address |
 |---|---|
-| `UpDownRegistry` | `0x8180410383497E8cC4A5E2af12BeA9756fB0027d` |
-| BTC/USD 5m | `0x4834529FF9591AD5cB6e4bb0a4e1C7F2Df3f5e0a` |
-| BTC/USD 1h | `0xF2FBbcc52f6616f8F01D7Cd3C2FFD1F93A5e81D1` |
-| ETH/USD 5m | `0x47253E0E86FB531546ec516d357aCCB25d03e5A4` |
-| ETH/USD 1h | `0xFe611c1c7f60243A69A5Bb0B1cfE33500C77bff0` |
-| BNB/USD 5m | `0x1DA7da4913FB35d1e2C02D07886655A68faC8a10` |
-| BNB/USD 1h | `0xa5f2318C557F9FfF3aaE9000AA014AdEA82aC389` |
-| `TestUSDT` (faucet, 18 dp) | `0x5a8E20563fa4Ae26f5F1183D090D5EC0e80bCCdF` |
-| `RelayAggregator` BTC/USD | `0x2D8d981eF2407D1B0eB6b24FAdB50d8c49473050` |
-| `RelayAggregator` ETH/USD | `0x61df0e24bb23431034884c78E482CBd92A78911a` |
-| `RelayAggregator` BNB/USD | `0x2756b5B78e10dE6B15f174d764E4631374d51Aca` |
+| `UpDownRegistry` | `0x115dAb3400CF8EE8949F71ADB7696b54dD2E45bd` |
+| BTC/USD 1m | `0x05ee686BeB6aeefEF07BBAcc8C2F4748B23fBC9C` |
+| BTC/USD 10m | `0x167217BA44E780B084E1F585208AfBBFD0aA5bE4` |
+| ETH/USD 1m | `0x1b6d890659A73950b88ce8EF980021F6DE9A7409` |
+| ETH/USD 10m | `0xeedE6730a89f119Bf40c1b6439FCBA85ea770241` |
+| BNB/USD 1m | `0x9818De06A32a9E50125A00916b4Be707E320D4ae` |
+| BNB/USD 10m | `0xbDa9785c1F26fe3a8e66738252418Ca9C75EDAE0` |
+| `TestUSDT` (faucet, 18 dp) | `0x52CdFacA6E7639e60EEdd88CE4BD24f8877b83e5` |
+| `RelayAggregator` BTC/USD | `0x81f6A0c6215bc0d8B3b64Ea946F58Bd159a7ed4A` |
+| `RelayAggregator` ETH/USD | `0x0643De0C0bf26f081e4C28d11DB90f562174bF6C` |
+| `RelayAggregator` BNB/USD | `0x99B5a4202B3247Bc326003a68dE5B301b1D4D541` |
 
 ### The first round, start to finish
 

@@ -104,8 +104,8 @@ export const FAQ: FaqSection[] = [
         blocks: [
           {
             p: {
-              en: 'A binary option on price, settled entirely on BNB Smart Chain. You pick UP or DOWN on BTC, ETH or BNB over a fixed round — 5 minutes or 1 hour. When the round locks, an on-chain price becomes the strike; when it closes, another on-chain price decides the outcome. The winning side splits the losing side’s stake.',
-              zh: '一个完全在 BNB 智能链上结算的价格二元期权。你在一个固定时长的轮次里（5 分钟或 1 小时）押 BTC、ETH 或 BNB 的涨或跌。轮次锁定时，一个链上价格成为行权价；轮次结束时，另一个链上价格决定结果。赢的一方瓜分输的一方的本金。',
+              en: 'A binary option on price, settled entirely on BNB Smart Chain. You pick UP or DOWN on BTC, ETH or BNB over a fixed round — 1 minute or 10 minutes. When the round locks, an on-chain price becomes the strike; when it closes, another on-chain price decides the outcome. The winning side splits the losing side’s stake.',
+              zh: '一个完全在 BNB 智能链上结算的价格二元期权。你在一个固定时长的轮次里（1 分钟或 10 分钟）押 BTC、ETH 或 BNB 的涨或跌。轮次锁定时，一个链上价格成为行权价；轮次结束时，另一个链上价格决定结果。赢的一方瓜分输的一方的本金。',
             },
           },
           {
@@ -247,8 +247,8 @@ export const FAQ: FaqSection[] = [
           },
           {
             note: {
-              en: 'On BSC testnet the feed is a relay this project runs, because the testnet’s own Chainlink feeds go up to 25 minutes stale and every 5-minute round would void. That is a testnet-only substitution and the deploy script refuses to put it on mainnet.',
-              zh: '在 BSC 测试网上，喂价是本项目自己运行的一个中继（RelayAggregator），因为测试网自带的 Chainlink 喂价最长会滞后 25 分钟，那样每个 5 分钟轮次都会作废。这是仅限测试网的替代方案，部署脚本会拒绝把它部署到主网。',
+              en: 'On BSC testnet the feed is a relay this project runs, because the testnet’s own Chainlink feeds go up to 25 minutes stale and every 1-minute round would void. That is a testnet-only substitution and the deploy script refuses to put it on mainnet.',
+              zh: '在 BSC 测试网上，喂价是本项目自己运行的一个中继（RelayAggregator），因为测试网自带的 Chainlink 喂价最长会滞后 25 分钟，那样每个 1 分钟轮次都会作废。这是仅限测试网的替代方案，部署脚本会拒绝把它部署到主网。',
             },
           },
           {
@@ -339,7 +339,7 @@ export const FAQ: FaqSection[] = [
               en: 'A real settled round on BSC testnet, checked end to end:',
               zh: 'BSC 测试网上一个真实已结算轮次的完整复查：',
             },
-            code: `# Round 9 of the BTC/USD 5-minute market on BSC testnet.
+            code: `# Archived proof from round 9 of the retired BTC/USD 5-minute testnet market.
 # Give cast the return types, or it prints one unbroken word of hex.
 
 # 1 · the round, from the market
@@ -623,8 +623,8 @@ $ cast call $FEED "getRoundData(uint80)(uint80,int256,uint256,uint256,uint80)" \
           {
             ul: [
               {
-                en: 'You can lose your whole stake. A binary option is all-or-nothing, and a 5-minute price move is close to a coin flip before fees — the 3% fee means a random bettor loses money over time.',
-                zh: '你可能亏光押进去的钱。二元期权是全有或全无，而 5 分钟的价格波动在扣费之前接近抛硬币——3% 的手续费意味着随机下注的人长期必然亏损。',
+                en: 'You can lose your whole stake. A binary option is all-or-nothing, and a 1-minute price move is close to a coin flip before fees — the 3% fee means a random bettor loses money over time.',
+                zh: '你可能亏光押进去的钱。二元期权是全有或全无，而 1 分钟的价格波动在扣费之前接近抛硬币——3% 的手续费意味着随机下注的人长期必然亏损。',
               },
               {
                 en: 'Smart contract risk. The code has been through six rounds of adversarial cross-vendor review and an independent audit, on top of a large test suite, and it is verified on chain so you can read it. The most recent of those found a critical bug — an admin path to the settlement price of an already-locked round — which is why the price source is now immutable. That is the argument for reading the review log, not for trusting that the next one finds nothing.',

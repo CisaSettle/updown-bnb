@@ -5,12 +5,12 @@ export type Address = `0x${string}`
 export interface Deployment {
   chainId: number
   registry: Address
-  btcUsd5m: Address
-  btcUsd1h: Address
-  ethUsd5m: Address
-  ethUsd1h: Address
-  bnbUsd5m: Address
-  bnbUsd1h: Address
+  btcUsd1m: Address
+  btcUsd10m: Address
+  ethUsd1m: Address
+  ethUsd10m: Address
+  bnbUsd1m: Address
+  bnbUsd10m: Address
   btcFeed: Address
   ethFeed: Address
   bnbFeed: Address

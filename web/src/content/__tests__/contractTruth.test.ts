@@ -424,7 +424,7 @@ describe('the security review log is complete and does not overstate the gate', 
     const deployment = JSON.parse(
       readFileSync(new URL('../../../../contracts/deployments/97.json', import.meta.url), 'utf8'),
     ) as Record<string, unknown>
-    for (const key of ['registry', 'btcUsd5m', 'ethUsd5m', 'bnbUsd1h', 'usdt', 'ethFeed']) {
+    for (const key of ['registry', 'btcUsd1m', 'ethUsd1m', 'bnbUsd10m', 'usdt', 'ethFeed']) {
       expect(prdHtml, `PRD.html does not name the deployed ${key}`).toContain(deployment[key] as string)
     }
     // and must not still be advertising findings that are closed
@@ -465,7 +465,7 @@ describe('the security review log is complete and does not overstate the gate', 
     ) as Record<string, unknown>
     const readme = doc('README.md')
 
-    const marketKeys = ['btcUsd5m', 'btcUsd1h', 'ethUsd5m', 'ethUsd1h', 'bnbUsd5m', 'bnbUsd1h']
+    const marketKeys = ['btcUsd1m', 'btcUsd10m', 'ethUsd1m', 'ethUsd10m', 'bnbUsd1m', 'bnbUsd10m']
     for (const key of [...marketKeys, 'registry', 'usdt', 'btcFeed', 'ethFeed', 'bnbFeed']) {
       const address = deployment[key]
       expect(typeof address, `${key} missing from deployments/97.json`).toBe('string')
@@ -473,7 +473,7 @@ describe('the security review log is complete and does not overstate the gate', 
     }
 
     // …and must not still be advertising a set of markets that is no longer the set on chain.
-    expect(readme).not.toMatch(/BNB\/USD 5m \(native\)/)
+    expect(readme).not.toMatch(/BNB\/USD 1m \(native\)/)
   })
 
   // Every symbol that has a market has to be named where the product describes itself, or a reader

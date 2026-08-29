@@ -6,7 +6,7 @@
  * contract pays matches what it quoted: the odds shown before the lock, the payout formula, the fee
  * taken only from the losing pool, the loser being unable to claim, and the solvency invariant.
  *
- *   node scripts/onchain-acceptance.mjs --chain 97 --market btcUsd5m
+ *   node scripts/onchain-acceptance.mjs --chain 97 --market btcUsd1m
  *
  * Env: RPC_URL, BETTOR_A_KEY, BETTOR_B_KEY  (both need gas; on testnet the faucet supplies USDT)
  * Reads contracts/deployments/<chain>.json for addresses.
@@ -25,7 +25,7 @@ const ROOT = join(HERE, '..')
 // ── args ─────────────────────────────────────────────────────────────────────
 const arg = (k, d) => { const i = process.argv.indexOf(`--${k}`); return i > 0 ? process.argv[i + 1] : d }
 const CHAIN = Number(arg('chain', process.env.CHAIN_ID ?? '97'))
-const MARKET_KEY = arg('market', 'btcUsd5m')
+const MARKET_KEY = arg('market', 'btcUsd1m')
 const UP_STAKE = BigInt(arg('up', '100000000000000000000'))   // 100 USDT
 const DOWN_STAKE = BigInt(arg('down', '300000000000000000000')) // 300 USDT
 

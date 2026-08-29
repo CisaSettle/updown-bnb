@@ -18,12 +18,12 @@ const REQUIRED_ADDRESS_KEYS = ['registry']
 // Written by the Foundry deploy script; treated as optional so the UI keeps building if the
 // deploy artifact gains or drops a key.
 const OPTIONAL_ADDRESS_KEYS = [
-  'btcUsd5m',
-  'btcUsd1h',
-  'ethUsd5m',
-  'ethUsd1h',
-  'bnbUsd5m',
-  'bnbUsd1h',
+  'btcUsd1m',
+  'btcUsd10m',
+  'ethUsd1m',
+  'ethUsd10m',
+  'bnbUsd1m',
+  'bnbUsd10m',
   'btcFeed',
   'ethFeed',
   'bnbFeed',

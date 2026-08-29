@@ -25,12 +25,12 @@ function fallbackMarkets(): Market[] {
     // Every market settles in USDT, BNB included: one unit to compare six books in, and one
     // approval path. `isNative` is still derived rather than assumed, so a native market added
     // later needs no change here.
-    { address: deployment.btcUsd5m, asset: deployment.usdt, oracle: deployment.btcFeed, interval: 300, label: 'BTC/USD 5m' },
-    { address: deployment.btcUsd1h, asset: deployment.usdt, oracle: deployment.btcFeed, interval: 3600, label: 'BTC/USD 1h' },
-    { address: deployment.ethUsd5m, asset: deployment.usdt, oracle: deployment.ethFeed, interval: 300, label: 'ETH/USD 5m' },
-    { address: deployment.ethUsd1h, asset: deployment.usdt, oracle: deployment.ethFeed, interval: 3600, label: 'ETH/USD 1h' },
-    { address: deployment.bnbUsd5m, asset: deployment.usdt, oracle: deployment.bnbFeed, interval: 300, label: 'BNB/USD 5m' },
-    { address: deployment.bnbUsd1h, asset: deployment.usdt, oracle: deployment.bnbFeed, interval: 3600, label: 'BNB/USD 1h' },
+    { address: deployment.btcUsd1m, asset: deployment.usdt, oracle: deployment.btcFeed, interval: 60, label: 'BTC/USD 1m' },
+    { address: deployment.btcUsd10m, asset: deployment.usdt, oracle: deployment.btcFeed, interval: 600, label: 'BTC/USD 10m' },
+    { address: deployment.ethUsd1m, asset: deployment.usdt, oracle: deployment.ethFeed, interval: 60, label: 'ETH/USD 1m' },
+    { address: deployment.ethUsd10m, asset: deployment.usdt, oracle: deployment.ethFeed, interval: 600, label: 'ETH/USD 10m' },
+    { address: deployment.bnbUsd1m, asset: deployment.usdt, oracle: deployment.bnbFeed, interval: 60, label: 'BNB/USD 1m' },
+    { address: deployment.bnbUsd10m, asset: deployment.usdt, oracle: deployment.bnbFeed, interval: 600, label: 'BNB/USD 10m' },
   ]
   return raw
     .filter((m) => m.address.toLowerCase() !== zeroAddress)

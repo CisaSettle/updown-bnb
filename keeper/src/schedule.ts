@@ -27,7 +27,10 @@ export const MAX_TIMEOUT_MS = 2_147_483_647;
  * voided into refunds. The lead is now this figure times the number of relays that can share the
  * boundary, so the schedule never assumes a relay confirms instantly.
  */
-export const DEFAULT_RELAY_LEAD_MS = 20_000;
+// The production testnet cadence has three 1-minute feeds sharing a 50-second oracle-age budget.
+// Twelve seconds per relay leaves the measured BSC confirmation path (median ~7.1s) meaningful
+// headroom while fitting all three writes plus the 10-second clock/block safety margin.
+export const DEFAULT_RELAY_LEAD_MS = 12_000;
 
 /**
  * Least time a relay needs between dequeuing and the boundary for its print to have any chance of

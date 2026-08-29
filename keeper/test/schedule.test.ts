@@ -23,19 +23,19 @@ import {
   type WakePlan,
 } from '../src/schedule.js';
 
-// A 5-minute market matching contracts/script/Deploy.s.sol: I5M=300, BUF5M=240, AGE5M=150.
-const LOCK_TS = 1_800_000_300;
+// A 1-minute market matching contracts/script/Deploy.s.sol: I1M=60, BUF1M=50, AGE1M=50.
+const LOCK_TS = 1_800_000_060;
 const round: RoundTiming = {
-  startTs: LOCK_TS - 300,
+  startTs: LOCK_TS - 60,
   lockTs: LOCK_TS,
-  closeTs: LOCK_TS + 300,
-  bufferSeconds: 240,
-  oracleMaxAge: 150,
+  closeTs: LOCK_TS + 60,
+  bufferSeconds: 50,
+  oracleMaxAge: 50,
 };
 
 const base: WakeOptions = {
   executeLeadMs: 2_000,
-  relayLeadMs: 15_000,
+  relayLeadMs: 12_000,
   relaySlots: 1,
   relayEnabled: false,
   maxTimerMs: 15 * 60_000,
@@ -46,30 +46,30 @@ const at = (secondsFromLock: number): number => (LOCK_TS + secondsFromLock) * 10
 
 describe('computeNextWake', () => {
   it('schedules executeRound just after the boundary', () => {
-    const plan = computeNextWake(at(-120), round, base);
+    const plan = computeNextWake(at(-30), round, base);
     expect(plan.action).toBe('execute');
     expect(plan.kind).toBe('on-time');
-    expect(plan.delayMs).toBe(122_000);
+    expect(plan.delayMs).toBe(32_000);
     expect(plan.targetMs).toBe(LOCK_TS * 1000 + 2_000);
   });
 
   it('fires immediately when the boundary has already passed but the window is open', () => {
-    const plan = computeNextWake(at(60), round, base);
+    const plan = computeNextWake(at(20), round, base);
     expect(plan.action).toBe('execute');
     expect(plan.kind).toBe('catch-up');
     expect(plan.delayMs).toBe(0);
   });
 
   it('flags a call past the settlement window, which can only void', () => {
-    // buffer is 240s, so 241s past the boundary is outside the window.
-    const plan = computeNextWake(at(241), round, base);
+    // buffer is 50s, so 51s past the boundary is outside the window.
+    const plan = computeNextWake(at(51), round, base);
     expect(plan.action).toBe('execute');
     expect(plan.kind).toBe('past-window');
     expect(plan.delayMs).toBe(0);
   });
 
   it('treats the last instant of the window as still settleable', () => {
-    expect(computeNextWake(at(240), round, base).kind).toBe('catch-up');
+    expect(computeNextWake(at(50), round, base).kind).toBe('catch-up');
   });
 
   it('caps a far-away wake and asks for a refresh instead of an execution', () => {
@@ -90,7 +90,7 @@ describe('computeNextWake', () => {
   });
 
   it('honours minTimerMs as a floor on catch-up wakes', () => {
-    const plan = computeNextWake(at(60), round, { ...base, minTimerMs: 500 });
+    const plan = computeNextWake(at(20), round, { ...base, minTimerMs: 500 });
     expect(plan.delayMs).toBe(500);
   });
 
@@ -98,12 +98,12 @@ describe('computeNextWake', () => {
     const relay: WakeOptions = { ...base, relayEnabled: true };
 
     it('schedules the relay before the boundary, not after it', () => {
-      const plan = computeNextWake(at(-120), round, relay);
+      const plan = computeNextWake(at(-30), round, relay);
       expect(plan.action).toBe('relay');
       expect(plan.kind).toBe('on-time');
-      // relayLeadMs 15s is within half of the 150s oracleMaxAge budget, so it is used as-is.
-      expect(plan.targetMs).toBe((LOCK_TS - 15) * 1000);
-      expect(plan.delayMs).toBe(105_000);
+      // relayLeadMs 12s is inside the 50s oracleMaxAge budget, so it is used as-is.
+      expect(plan.targetMs).toBe((LOCK_TS - 12) * 1000);
+      expect(plan.delayMs).toBe(18_000);
     });
 
     it('relays immediately when the ideal instant slipped but the boundary is still ahead', () => {
@@ -119,7 +119,7 @@ describe('computeNextWake', () => {
     });
 
     it('falls through to execute when the relay is already done for this boundary', () => {
-      const plan = computeNextWake(at(-120), round, { ...relay, relayEnabled: false });
+      const plan = computeNextWake(at(-30), round, { ...relay, relayEnabled: false });
       expect(plan.action).toBe('execute');
     });
 
@@ -127,10 +127,10 @@ describe('computeNextWake', () => {
       // Three feeds hit the same aligned boundary and one key signs for all of them, so the relays
       // go out strictly one after another. Waking a single 15s lead before `lockTs` means the third
       // relay dequeues after the boundary, can never qualify, and that market's round voids.
-      const plan = computeNextWake(at(-120), round, { ...relay, relaySlots: 3 });
+      const plan = computeNextWake(at(-50), round, { ...relay, relaySlots: 3 });
       expect(plan.action).toBe('relay');
-      expect(plan.targetMs).toBe((LOCK_TS - 45) * 1000);
-      expect(plan.delayMs).toBe(75_000);
+      expect(plan.targetMs).toBe((LOCK_TS - 36) * 1000);
+      expect(plan.delayMs).toBe(14_000);
     });
 
     it('serves six relays on a 150s feed instead of clamping half of them out of the window', () => {
@@ -138,7 +138,7 @@ describe('computeNextWake', () => {
       // anything up to the full 150s `oracleMaxAge`, so 120s is well inside what the contract
       // permits. Capping at half the budget woke the keeper only 75s early, the last three relays
       // dequeued after `lockTs`, and their rounds voided into refunds.
-      const plan = computeNextWake(at(-300), round, { ...relay, relayLeadMs: 20_000, relaySlots: 6 });
+      const plan = computeNextWake(at(-300), { ...round, oracleMaxAge: 150 }, { ...relay, relayLeadMs: 20_000, relaySlots: 6 });
       expect(plan.action).toBe('relay');
       expect(plan.targetMs).toBe((LOCK_TS - 120) * 1000);
     });
@@ -147,9 +147,10 @@ describe('computeNextWake', () => {
       // Twelve feeds would want 240s of lead on a 150s budget: a print that old at the boundary is
       // refused by `_priceAt` just as surely as a late one, so the lead stops at the budget less the
       // block-time/clock-skew margin — 140s, not an arbitrary fraction of it.
-      const plan = computeNextWake(at(-300), round, { ...relay, relayLeadMs: 20_000, relaySlots: 12 });
+      const wideAgeRound = { ...round, oracleMaxAge: 150 };
+      const plan = computeNextWake(at(-300), wideAgeRound, { ...relay, relayLeadMs: 20_000, relaySlots: 12 });
       expect(plan.targetMs).toBe((LOCK_TS - 140) * 1000);
-      expect(round.oracleMaxAge * 1000 - 140_000).toBe(RELAY_LEAD_SAFETY_MS);
+      expect(wideAgeRound.oracleMaxAge * 1000 - 140_000).toBe(RELAY_LEAD_SAFETY_MS);
     });
   });
 });
@@ -265,8 +266,10 @@ describe('computeRelayLeadMs', () => {
   });
 
   it('defaults to a per-relay budget wide enough for a real BSC confirmation', () => {
-    // The old 15s was the whole lead for every feed at once; it is now the budget for one relay.
-    expect(DEFAULT_RELAY_LEAD_MS).toBeGreaterThan(15_000);
+    // Live receipts have never confirmed faster than 5.35s; the default still gives one relay
+    // more than twice that floor while allowing three writes inside a 50s one-minute budget.
+    expect(DEFAULT_RELAY_LEAD_MS).toBeGreaterThanOrEqual(12_000);
+    expect(relayCapacity(DEFAULT_RELAY_LEAD_MS, 50)).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -296,6 +299,10 @@ describe('relayCanStillLand', () => {
 });
 
 describe('relayCapacity', () => {
+  it('carries all three one-minute feeds inside the shipped 50-second age budget', () => {
+    expect(relayCapacity(DEFAULT_RELAY_LEAD_MS, 50)).toBe(3);
+  });
+
   it('reports how many relays the staleness budget can genuinely carry', () => {
     // 150s budget, 10s margin, 20s per relay: seven. Half the budget only ever bought three, so a
     // keeper on six testnet feeds silently voided the tail of every shared boundary.
@@ -355,8 +362,8 @@ describe('secondsUntilLockable', () => {
 
 describe('isPastSettlementWindow', () => {
   it('matches the contract boundary exactly', () => {
-    expect(isPastSettlementWindow(LOCK_TS + 240, round)).toBe(false);
-    expect(isPastSettlementWindow(LOCK_TS + 241, round)).toBe(true);
+    expect(isPastSettlementWindow(LOCK_TS + 50, round)).toBe(false);
+    expect(isPastSettlementWindow(LOCK_TS + 51, round)).toBe(true);
   });
 });
 

@@ -17,7 +17,7 @@ import {TestUSDT} from "../src/testnet/TestUSDT.sol";
  *    OPERATOR     keeper address allowed to call executeRound() inside the buffer
  *
  *  Testnet substitutes a keeper-fed `RelayAggregator` for Chainlink and a faucet `TestUSDT`,
- *  because BSC testnet's own feeds are far too stale to drive 5-minute rounds.
+ *  because BSC testnet's own feeds are far too stale to drive 1-minute rounds.
  *
  *  Usage (testnet):
  *    forge script script/Deploy.s.sol --rpc-url $BSC_TESTNET_RPC_URL --broadcast --verify
@@ -25,17 +25,19 @@ import {TestUSDT} from "../src/testnet/TestUSDT.sol";
 contract Deploy is Script {
     uint16 constant FEE_BPS = 300; // 3% of the losing pool
 
-    // 5-minute rounds
-    uint256 constant I5M = 300;
+    // 1-minute rounds. Both windows must stay below the interval; 50 seconds leaves the keeper a
+    // practical BSC confirmation budget while refusing a price from the preceding minute.
+    uint256 constant I1M = 60;
     // Settlement is deterministic (price is a pure function of the round boundary), so a late
     // keeper still settles at exactly the right price. The buffer is therefore a generous safety
     // bound, not an economic lever — it only decides when a round gives up and refunds instead.
-    uint16 constant BUF5M = 240; // must stay < interval
-    uint32 constant AGE5M = 150; // must stay < interval
-    // 1-hour rounds
-    uint256 constant I1H = 3600;
-    uint16 constant BUF1H = 1800;
-    uint32 constant AGE1H = 900;
+    uint16 constant BUF1M = 50;
+    uint32 constant AGE1M = 50;
+    // 10-minute rounds. These share the same per-symbol relay with the 1-minute market, so their
+    // boundary proof is already refreshed every minute; the wider windows absorb RPC outages.
+    uint256 constant I10M = 600;
+    uint16 constant BUF10M = 300;
+    uint32 constant AGE10M = 180;
 
     // USDT limits (18 decimals on BSC)
     uint256 constant USDT_MIN = 1e18;
@@ -119,12 +121,12 @@ contract Deploy is Script {
         // different thing to reason about — one settlement asset across the board means a trader
         // compares six books in one unit, and the whole surface has one approval path.
         MarketSpec[] memory specs = new MarketSpec[](6);
-        specs[0] = MarketSpec("btcUsd5m", "BTC/USD 5m", btcFeed, I5M, BUF5M, AGE5M);
-        specs[1] = MarketSpec("btcUsd1h", "BTC/USD 1h", btcFeed, I1H, BUF1H, AGE1H);
-        specs[2] = MarketSpec("ethUsd5m", "ETH/USD 5m", ethFeed, I5M, BUF5M, AGE5M);
-        specs[3] = MarketSpec("ethUsd1h", "ETH/USD 1h", ethFeed, I1H, BUF1H, AGE1H);
-        specs[4] = MarketSpec("bnbUsd5m", "BNB/USD 5m", bnbFeed, I5M, BUF5M, AGE5M);
-        specs[5] = MarketSpec("bnbUsd1h", "BNB/USD 1h", bnbFeed, I1H, BUF1H, AGE1H);
+        specs[0] = MarketSpec("btcUsd1m", "BTC/USD 1m", btcFeed, I1M, BUF1M, AGE1M);
+        specs[1] = MarketSpec("btcUsd10m", "BTC/USD 10m", btcFeed, I10M, BUF10M, AGE10M);
+        specs[2] = MarketSpec("ethUsd1m", "ETH/USD 1m", ethFeed, I1M, BUF1M, AGE1M);
+        specs[3] = MarketSpec("ethUsd10m", "ETH/USD 10m", ethFeed, I10M, BUF10M, AGE10M);
+        specs[4] = MarketSpec("bnbUsd1m", "BNB/USD 1m", bnbFeed, I1M, BUF1M, AGE1M);
+        specs[5] = MarketSpec("bnbUsd10m", "BNB/USD 10m", bnbFeed, I10M, BUF10M, AGE10M);
 
         address[] memory deployed = new address[](specs.length);
         for (uint256 i; i < specs.length; ++i) {

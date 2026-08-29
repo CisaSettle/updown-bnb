@@ -37,7 +37,7 @@ Two facts drive the whole design:
    round is heading for a timeout.
 
 On testnet the oracle is a keeper-fed `RelayAggregator`, because BSC testnet's own Chainlink feeds
-run up to ~1480 s stale and would void every 5-minute round. The relay print must land **at or
+run up to ~1480 s stale and would void every 1-minute round. The relay print must land **at or
 before** the boundary and within the round's `oracleMaxAge` of it, so each round gets two wakes:
 
 ```
@@ -107,7 +107,7 @@ redeployed.
 ### Testnet feed density — `RELAY_TICK_MS` (optional, off by default)
 
 The relay above publishes **one print per boundary**, which is all settlement needs and all it ever
-did. It also means a 5-minute testnet market has one price point every five minutes, so the chart in
+did. It also means a 1-minute testnet market has one price point every minute, so the chart in
 the web app is four points wide where mainnet Chainlink would print roughly every 60 s (or on a 0.5 %
 deviation). `RELAY_TICK_MS` closes that gap: set it to, say, `30000` and the keeper publishes an
 extra `relay(price)` roughly every 30 s **between** boundaries, purely so the feed looks like the one
@@ -215,7 +215,7 @@ Only the first three are required.
 | `METRICS_PORT` | `9464` | HTTP port for `/healthz` and `/metrics`. `0` disables the server. |
 | `METRICS_HOST` | `0.0.0.0` | Bind address. |
 | `EXECUTE_LEAD_MS` | `2000` | Fire `executeRound` this long **after** `lockTs`. |
-| `RELAY_LEAD_MS` | `20000` | Budget for **one** relay before `lockTs` (testnet only). The actual lead is this × the relay feeds sharing the boundary, capped at the round's `oracleMaxAge` less a 10 s block-time/clock-skew margin. |
+| `RELAY_LEAD_MS` | `12000` | Budget for **one** relay before `lockTs` (testnet only). The actual lead is this × the relay feeds sharing the boundary, capped at the round's `oracleMaxAge` less a 10 s block-time/clock-skew margin. Twelve seconds fits all three 1-minute feeds inside their 50-second age budget while retaining headroom over observed confirmation latency. |
 | `RELAY_TICK_MS` | `0` (off) | **Testnet only.** Publish an extra relay print roughly this often *between* boundaries, so the feed has a mainnet-like density to chart. Minimum `30000`; refused on `CHAIN_ID=56`. Ticks are skipped rather than queued whenever a boundary relay on that feed is due, never take the boundary's queue slot or claim, and get two attempts at an 8 s receipt wait so a tick clears its own nonce rather than leaving one in front of a relay. See [Testnet feed density](#testnet-feed-density--relay_tick_ms-optional-off-by-default). |
 | `MAX_TIMER_MS` | `900000` | Cap on a single timer; state is re-read at least this often. |
 | `IDLE_POLL_MS` | `30000` | Poll interval for a market with nothing to do: `genesisStart()` not called, or paused with no locked round left to settle. A paused market whose previous epoch is still **locked** is not idle — it is driven on the normal round schedule (relay lead, then `executeRound`) until that round settles. |
@@ -245,7 +245,7 @@ Every value is validated at boot. A bad configuration prints **all** problems at
 
 Market addresses come from the deployments JSON written by `contracts/script/Deploy.s.sol`. Any key
 that is not a reserved one (`chainId`, `registry`, `usdt`, `owner`, `operator`, `relayFeeds`,
-`feeBps`, `*Feed`) and holds an address is treated as a market — so a future `ethUsd5m` needs no
+`feeBps`, `*Feed`) and holds an address is treated as a market — so a future `ethUsd1m` needs no
 keeper change. Each market's `interval`, `bufferSeconds`, `oracleMaxAge`, `oracle`, `oraclePhase` and
 `settlementAsset` are then read from the chain, never assumed. `oraclePhase()` is part of that set on
 purpose: without it the keeper cannot know which boundary ids the contract will accept, so it would
@@ -276,7 +276,7 @@ Structured JSON, one object per line — `level`, `ts`, `msg`, plus `market`, `e
 numbers. RPC URLs are redacted before logging.
 
 ```bash
-journalctl -u updown-keeper -f -o cat | jq 'select(.market=="btcUsd5m")'
+journalctl -u updown-keeper -f -o cat | jq 'select(.market=="btcUsd1m")'
 ```
 
 **`GET /healthz`** → `200` when every market has executed within `HEALTH_INTERVALS × interval`,

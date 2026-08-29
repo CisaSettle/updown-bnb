@@ -136,7 +136,7 @@ forge script script/Deploy.s.sol \
 ```
 
 It deploys, in order: (testnet only) relay feeds + TestUSDT → `UpDownRegistry` → six ERC20 markets
-from the `MarketSpec[]` table in the script — BTC, ETH and BNB over 5-minute and 1-hour rounds —
+from the `MarketSpec[]` table in the script — BTC, ETH and BNB over 1-minute and 10-minute rounds —
 registering each as it goes, then transfers registry ownership to `OWNER` (two-step; `OWNER` must
 accept).
 
@@ -150,9 +150,9 @@ Output artifact — **`contracts/deployments/<chainId>.json`**:
 ```json
 {
   "chainId": 97, "registry": "0x…",
-  "btcUsd5m": "0x…", "btcUsd1h": "0x…",
-  "ethUsd5m": "0x…", "ethUsd1h": "0x…",
-  "bnbUsd5m": "0x…", "bnbUsd1h": "0x…",
+  "btcUsd1m": "0x…", "btcUsd10m": "0x…",
+  "ethUsd1m": "0x…", "ethUsd10m": "0x…",
+  "bnbUsd1m": "0x…", "bnbUsd10m": "0x…",
   "btcFeed": "0x…", "ethFeed": "0x…", "bnbFeed": "0x…", "usdt": "0x…",
   "owner": "0x…", "operator": "0x…",
   "relayFeeds": true, "feeBps": 300
@@ -274,7 +274,7 @@ gets an opaque revert. Re-export whenever `contracts/src/` changes shape.
 
 ```bash
 BETTOR_A_KEY=0x... BETTOR_B_KEY=0x... \
-  node scripts/onchain-acceptance.mjs --chain 97 --market btcUsd5m
+  node scripts/onchain-acceptance.mjs --chain 97 --market btcUsd1m
 ```
 Plays a full round against the live chain and asserts, with exact integer arithmetic, that the
 contract pays what it quoted: the odds formula, the payout, the fee taken only from the losing pool,
@@ -419,7 +419,7 @@ Boot fails loudly and lists **every** problem at once if any value is invalid.
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `METRICS_PORT` / `METRICS_HOST` | `9464` / `0.0.0.0` | `/healthz` and `/metrics` listener |
 | `EXECUTE_LEAD_MS` | `2000` | Delay after the boundary before calling `executeRound` |
-| `RELAY_LEAD_MS` | `20000` | Budget for **one** relay before the boundary (testnet only). The actual lead is this multiplied by the number of relays sharing that boundary, then clamped to `oracleMaxAge` less a 10s margin — `relayCapacity()` reports how many a feed can genuinely carry. |
+| `RELAY_LEAD_MS` | `12000` | Budget for **one** relay before the boundary (testnet only). The actual lead is this multiplied by the number of relays sharing that boundary, then clamped to `oracleMaxAge` less a 10s margin — `relayCapacity()` reports how many a feed can genuinely carry. |
 | `IDLE_POLL_MS` | `30000` | Re-poll interval for a paused / not-yet-started market |
 | `FIND_ROUND_MAX_STEPS` | `64` | Bound on the `findRoundIdAt` walk-back |
 | `PRICE_API` | Binance ticker | Spot price source for testnet relays |
@@ -504,8 +504,8 @@ Setting `RELAY_TICK_MS=0` removes that interference completely; merely raising t
 makes it rarer.
 
 The bigger cause of a stale-boundary refund is the keeper missing boundary relays outright — down,
-unfunded, or rate-limited — because `oracleMaxAge` (150s on the 5-minute markets, 900s on the
-hourly) is measured against the last usable print at the boundary. That is a keeper-health problem,
+unfunded, or rate-limited — because `oracleMaxAge` (50s on the 1-minute markets, 180s on the
+10-minute markets) is measured against the last usable print at the boundary. That is a keeper-health problem,
 and §3.1 is where it is handled.
 
 The refill loop, every few days:
@@ -614,8 +614,8 @@ changes which print qualifies, which is worse. Replace it rather than operate it
   4. Deploy a fresh market against the new feed and `register` it. On mainnet the feed address is a
      Chainlink *proxy*, whose address is stable by design, so this is the rare case, not the routine one.
 
-- If the round cadence no longer matches the feed cadence, the same applies: a 5-minute market cannot
-  tolerate a feed slower than ~5 minutes and there is no parameter left to loosen, so the honest fix
+- If the round cadence no longer matches the feed cadence, the same applies: a 1-minute market cannot
+  tolerate a feed slower than ~1 minute and there is no parameter left to loosen, so the honest fix
   is a new market with a longer `interval`, not a degraded one.
 
 ### 3.3 Wrong price relayed on testnet
@@ -836,8 +836,8 @@ section is where the note is kept.)
    only, by design, and never deployed to mainnet.
 6. **Keeper punctuality.** A slow keeper costs product quality (rounds refund), never solvency.
 
-> **The live BSC-testnet stack is the current source.** Chain 97 was redeployed on 2026-08-26 with
-> six markets — BTC, ETH and BNB over 5-minute and 1-hour rounds, all settled in USDT. Confirmed on
+> **The live BSC-testnet stack is the current source.** Chain 97 was redeployed on 2026-08-30 with
+> six markets — BTC, ETH and BNB over 1-minute and 10-minute rounds, all settled in USDT. Confirmed on
 > chain rather than assumed: `oraclePhase()` answers, `setOracle(address)` reverts because it no
 > longer exists, and `autoClaimOptIn(address)` answers. `./scripts/verify-sourcify.sh 97` reports
 > `match` for all eleven contracts. The addresses are in the README and in
@@ -853,7 +853,7 @@ section is where the note is kept.)
 It will not broadcast until a preflight passes: `OWNER` must be a **contract** (a Safe or Timelock —
 an EOA is refused unless you set `ALLOW_EOA_OWNER=1` and mean it), the deployer must hold gas, the
 RPC must really be chain 56, the settlement asset must be BSC-USDT with 18 decimals, **all three
-Chainlink feeds — BTC, ETH and BNB — must be live inside the 150 s budget the 5-minute markets ship
+Chainlink feeds — BTC, ETH and BNB — must be live inside the 50 s budget the 1-minute markets ship
 with**, and the full
 Foundry suite must be green. It then simulates against real chain state, prints the gas estimate,
 and asks you to type `DEPLOY MAINNET`. As of 2026-08-26 the whole stack costs **0.00073 BNB**.

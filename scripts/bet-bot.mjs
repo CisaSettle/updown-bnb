@@ -3,7 +3,7 @@
  * The testnet betting bot: keeps every live market showing a real, moving book.
  *
  * Each round of each configured market it stakes varying amounts from two accounts — usually on
- * both sides, sometimes deliberately one-sided, occasionally sitting a round out — and collects
+ * both sides, sometimes deliberately one-sided — and collects
  * whatever earlier rounds owe. Anyone opening the page sees genuine pools, odds that move, and
  * genuine settlements with winners and losers, instead of an empty book. Its predecessor
  * (demo-liquidity.mjs) did this for one market; this one runs the whole board.
@@ -22,7 +22,10 @@
  *   BET_MIN/MAX   stake range in USDT          (default: 3 / 12)
  *   FUNDER_KEY    optional key that tops the bot accounts up with gas when they run low
  *   MIN_GAS_BNB   gas floor that triggers a top-up or a loud warning   (default: 0.01)
- *   GAS_TOPUP_BNB amount a top-up sends                                (default: 0.05)
+ *   GAS_TOPUP_BNB target balance for a bot top-up                       (default: 0.05)
+ *   KEEPER_MIN_GAS_BNB floor that triggers a keeper top-up              (default: 0.08)
+ *   KEEPER_TARGET_GAS_BNB keeper balance after a top-up                 (default: 0.17)
+ *   FUNDER_RESERVE_BNB balance never spent from the funder              (default: 0.01)
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -47,7 +50,7 @@ const MULTICALL = '0xcA11bde05977b3631167028862bE2a173976CA11'
 /** How far back the claim sweep looks. Newest first: money older than this was collected long ago. */
 const CLAIM_WINDOW = 40n
 
-const ALL_MARKETS = ['btcUsd5m', 'btcUsd1h', 'ethUsd5m', 'ethUsd1h', 'bnbUsd5m', 'bnbUsd1h']
+const ALL_MARKETS = ['btcUsd1m', 'btcUsd10m', 'ethUsd1m', 'ethUsd10m', 'bnbUsd1m', 'bnbUsd10m']
 const MARKET_KEYS = (process.env.MARKETS ?? ALL_MARKETS.join(','))
   .split(',')
   .map((k) => k.trim())
@@ -66,8 +69,16 @@ if (!Number.isFinite(BET_MIN) || !Number.isFinite(BET_MAX) || BET_MIN <= 0 || BE
 }
 const MIN_GAS = parseEther(process.env.MIN_GAS_BNB ?? '0.01')
 const GAS_TOPUP = parseEther(process.env.GAS_TOPUP_BNB ?? '0.05')
-/** How the book varies: mostly two-sided, sometimes one-sided, occasionally quiet. */
-const SKIP_PROB = 0.1
+const KEEPER_MIN_GAS = parseEther(process.env.KEEPER_MIN_GAS_BNB ?? '0.08')
+const KEEPER_TARGET_GAS = parseEther(process.env.KEEPER_TARGET_GAS_BNB ?? '0.17')
+const FUNDER_RESERVE = parseEther(process.env.FUNDER_RESERVE_BNB ?? '0.01')
+if (GAS_TOPUP <= MIN_GAS || KEEPER_TARGET_GAS <= KEEPER_MIN_GAS) {
+  console.error('Gas targets must stay above their trigger floors.')
+  process.exit(1)
+}
+/** How the book varies: mostly two-sided, sometimes one-sided. A completely empty synthetic book
+ * is indistinguishable from a dead market to a visitor, so the bot never deliberately skips one. */
+const SKIP_PROB = 0
 const ONE_SIDED_PROB = 0.05
 
 const MARKET = parseAbi([
@@ -213,26 +224,43 @@ async function faucetTopUp(who) {
   }
 }
 
-/** Gas is the one thing the faucet cannot mint. Top up from the funder, or say so loudly. */
-async function gasGuard(who) {
+/** Gas is the one thing the faucet cannot mint. Top up to a target while preserving the funding
+ * account's reserve; a depleted funder is loud and never turns into an overdrawn transaction. */
+async function gasGuardAddress(address, floor, target, label) {
   if (stopping) return
-  const gas = await pub.getBalance({ address: who.address })
-  if (gas >= MIN_GAS) return
+  const gas = await pub.getBalance({ address })
+  if (gas >= floor) return
   if (FUNDER) {
     try {
+      const funderBalance = await pub.getBalance({ address: FUNDER.address })
+      const gasPrice = await pub.getGasPrice()
+      const fee = gasPrice * 21_000n
+      const available = funderBalance - FUNDER_RESERVE - fee
+      const gap = target - gas
+      const value = available < gap ? available : gap
+      if (value <= 0n) throw new Error(`funder holds ${formatEther(funderBalance)} BNB at its ${formatEther(FUNDER_RESERVE)} reserve`)
       const hash = await enqueue(FUNDER, async () => {
-        const h = await wallet(FUNDER).sendTransaction({ to: who.address, value: GAS_TOPUP })
+        const h = await wallet(FUNDER).sendTransaction({ to: address, value, gas: 21_000n, gasPrice })
         const receipt = await pub.waitForTransactionReceipt({ hash: h })
         if (receipt.status !== 'success') throw new Error(`top-up reverted (${h})`)
         return h
       })
-      log(`gas top-up ${formatEther(GAS_TOPUP)} BNB -> ${who.address.slice(0, 8)} (${hash.slice(0, 10)})`)
+      log(`gas top-up ${formatEther(value)} BNB -> ${label} ${address.slice(0, 8)} (${hash.slice(0, 10)})`)
       return
     } catch (e) {
-      log(`gas top-up failed: ${short(e)}`)
+      log(`${label} gas top-up failed: ${short(e)}`)
     }
   }
-  log(`LOW GAS: ${who.address} holds ${formatEther(gas)} BNB — bets will start failing`)
+  log(`LOW GAS: ${label} ${address} holds ${formatEther(gas)} BNB — transactions will start failing`)
+}
+
+async function gasGuard(who) {
+  return gasGuardAddress(who.address, MIN_GAS, GAS_TOPUP, 'bot')
+}
+
+async function keeperGasGuard() {
+  if (!FUNDER) return
+  return gasGuardAddress(getAddress(dep.operator), KEEPER_MIN_GAS, KEEPER_TARGET_GAS, 'keeper')
 }
 
 /**
@@ -366,6 +394,7 @@ if (A.address === B.address || FUNDER?.address === A.address || FUNDER?.address 
 log(`bet bot on chain 97 · ${markets.map((m) => m.key).join(', ')}`)
 log(`accounts ${A.address} / ${B.address}${FUNDER ? ` · gas funder ${FUNDER.address}` : ''}`)
 
+await keeperGasGuard()
 for (const who of [A, B]) {
   if (stopping) break
   await gasGuard(who)
@@ -412,6 +441,11 @@ for (;;) {
   // carries its own catch: a failing read on one market must not starve the rest, and a failing
   // sweep must never starve the gas and faucet checks.
   if (beat++ % 6 === 0 && !stopping) {
+    try {
+      await keeperGasGuard()
+    } catch (e) {
+      log(`keeper gas check failed: ${short(e)}`)
+    }
     for (const who of [A, B]) {
       for (const market of markets) {
         if (stopping) break

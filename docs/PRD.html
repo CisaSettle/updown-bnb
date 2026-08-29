@@ -1793,7 +1793,7 @@ function settlementAsset() external view returns (address);         <span class=
           <tr><th>Contracts, cross-vendor</th><td><b>Rounds 7–9 have run.</b> R7 found that <code>claimFor</code> could be front-run to strand a contract holder's payout; R8 showed the <code>code.length</code> fix for it could itself be bypassed by a contract that bets from its own constructor and self-destructs. Both are closed, each pinned by a regression test proved to fail against the old code. R8 also corrected the off-chain <code>_priceAt</code> mirror, reviewed and approved in the other direction. <b>R9 returned CHANGES-REQUIRED</b> on release surfaces left stale by the six-market redeploy; those are fixed here and await re-review, so <b>the current tree carries no cross-vendor approval</b>.</td></tr>
           <tr><th>Off-chain, cross-vendor</th><td>Both keeper findings <b>closed</b>, each pinned by a regression test verified to fail against the old code.</td></tr>
           <tr><th>Independent audit</th><td>2 of 6 dimensions FAIL. The three high findings are closed; the documentation dimension is what this section is answering.</td></tr>
-          <tr><th>Live testnet deployment</th><td><b>Is the current source</b>: chain 97 was redeployed on 2026-08-26 with six markets — BTC, ETH and BNB over 5-minute and 1-hour rounds, all settled in USDT. Checkable on chain: <code>oraclePhase()</code> answers, <code>setOracle</code> is gone, and all eleven contracts report <code>match</code> on Sourcify.</td></tr>
+          <tr><th>Live testnet deployment</th><td><b>Is the current source</b>: chain 97 was redeployed on 2026-08-30 with six markets — BTC, ETH and BNB over 1-minute and 10-minute rounds, all settled in USDT. Checkable on chain: <code>oraclePhase()</code> answers, <code>setOracle</code> is gone, and all eleven contracts report <code>match</code> on Sourcify.</td></tr>
         </tbody>
       </table></div>
       <p>
@@ -2048,7 +2048,7 @@ function settlementAsset() external view returns (address);         <span class=
           <tr><th>合约 · 跨厂商</th><td><b>第 7–9 轮已完成。</b>第 7 轮发现 <code>claimFor</code> 可被抢跑，使合约持有人的赔付永久锁死；第 8 轮又证明为此所写的 <code>code.length</code> 判据本身可被绕过——合约可在自己的构造函数里下注随即自毁。两项均已关闭，各有一条经验证能在旧代码上失败的回归测试。第 8 轮还纠正了链下 <code>_priceAt</code> 镜像，该项由我复核批准，方向与其余相反。<b>第 9 轮返回要求整改</b>：六市场重部署遗留的若干发布面陈旧内容，已在本次修复并等待复审，因此<b>当前代码树仍无跨厂商批准</b>。</td></tr>
           <tr><th>链下 · 跨厂商</th><td>两项 keeper 问题均已<b>关闭</b>，各有一条经验证会在旧代码上失败的回归测试。</td></tr>
           <tr><th>独立审计</th><td>六个维度中 2 项不通过。三项「高」已关闭；文档维度正是本节在回应的那一项。</td></tr>
-          <tr><th>测试网现网部署</th><td><b>就是当前源码</b>：97 链已于 2026-08-26 重新部署，六个市场（BTC / ETH / BNB 各 5 分钟与 1 小时），全部以 USDT 结算。链上可自行核实：<code>oraclePhase()</code> 能回答，<code>setOracle</code> 已不存在，11 个合约在 Sourcify 全部 <code>match</code>。</td></tr>
+          <tr><th>测试网现网部署</th><td><b>就是当前源码</b>：97 链已于 2026-08-30 重新部署，六个市场（BTC / ETH / BNB 各 5 分钟与 1 小时），全部以 USDT 结算。链上可自行核实：<code>oraclePhase()</code> 能回答，<code>setOracle</code> 已不存在，11 个合约在 Sourcify 全部 <code>match</code>。</td></tr>
         </tbody>
       </table></div>
       <p>
@@ -2068,13 +2068,13 @@ function settlementAsset() external view returns (address);         <span class=
     <div class="body">
       <p>
         <span class="l-en">BNB Smart Chain testnet, chain 97, redeployed 2026-08-26 on the code in this tree.
-          <b>Six markets</b> — BTC, ETH and BNB over a 5-minute and a 1-hour round — every one of them settled
+          <b>Six markets</b> — BTC, ETH and BNB over a 1-minute and a 10-minute round — every one of them settled
           in USDT. The native-BNB market is deliberately not deployed: one settlement asset means a trader
           compares six books in a single unit and needs one approval. <code>UpDownMarketNative</code> stays in
           the tree, built and tested, because that is a deployment choice rather than a change in what the
           protocol supports.</span>
         <span class="l-zh">BNB 智能链测试网，链 97，已于 2026-08-26 在本代码树上重新部署。<b>六个市场</b>——BTC、ETH、BNB
-          各配 5 分钟与 1 小时轮次——全部以 USDT 结算。原生 BNB 市场是刻意不部署的：统一结算资产意味着交易者用同一个单位
+          各配 1 分钟与 10 分钟轮次——全部以 USDT 结算。原生 BNB 市场是刻意不部署的：统一结算资产意味着交易者用同一个单位
           比较六个盘口，只需要一次授权。<code>UpDownMarketNative</code> 仍留在代码树里、照常构建与测试，因为这是一个部署
           选择，而不是协议能力的削减。</span>
       </p>
@@ -2084,17 +2084,17 @@ function settlementAsset() external view returns (address);         <span class=
           <th><span class="l-en">Address</span><span class="l-zh">地址</span></th>
         </tr></thead>
         <tbody>
-          <tr><th>UpDownRegistry</th><td><code>0x8180410383497E8cC4A5E2af12BeA9756fB0027d</code></td></tr>
-          <tr><th>BTC/USD 5m</th><td><code>0x4834529FF9591AD5cB6e4bb0a4e1C7F2Df3f5e0a</code></td></tr>
-          <tr><th>BTC/USD 1h</th><td><code>0xF2FBbcc52f6616f8F01D7Cd3C2FFD1F93A5e81D1</code></td></tr>
-          <tr><th>ETH/USD 5m</th><td><code>0x47253E0E86FB531546ec516d357aCCB25d03e5A4</code></td></tr>
-          <tr><th>ETH/USD 1h</th><td><code>0xFe611c1c7f60243A69A5Bb0B1cfE33500C77bff0</code></td></tr>
-          <tr><th>BNB/USD 5m</th><td><code>0x1DA7da4913FB35d1e2C02D07886655A68faC8a10</code></td></tr>
-          <tr><th>BNB/USD 1h</th><td><code>0xa5f2318C557F9FfF3aaE9000AA014AdEA82aC389</code></td></tr>
-          <tr><th>TestUSDT</th><td><code>0x5a8E20563fa4Ae26f5F1183D090D5EC0e80bCCdF</code></td></tr>
-          <tr><th>RelayAggregator BTC/USD</th><td><code>0x2D8d981eF2407D1B0eB6b24FAdB50d8c49473050</code></td></tr>
-          <tr><th>RelayAggregator ETH/USD</th><td><code>0x61df0e24bb23431034884c78E482CBd92A78911a</code></td></tr>
-          <tr><th>RelayAggregator BNB/USD</th><td><code>0x2756b5B78e10dE6B15f174d764E4631374d51Aca</code></td></tr>
+          <tr><th>UpDownRegistry</th><td><code>0x115dAb3400CF8EE8949F71ADB7696b54dD2E45bd</code></td></tr>
+          <tr><th>BTC/USD 1m</th><td><code>0x05ee686BeB6aeefEF07BBAcc8C2F4748B23fBC9C</code></td></tr>
+          <tr><th>BTC/USD 10m</th><td><code>0x167217BA44E780B084E1F585208AfBBFD0aA5bE4</code></td></tr>
+          <tr><th>ETH/USD 1m</th><td><code>0x1b6d890659A73950b88ce8EF980021F6DE9A7409</code></td></tr>
+          <tr><th>ETH/USD 10m</th><td><code>0xeedE6730a89f119Bf40c1b6439FCBA85ea770241</code></td></tr>
+          <tr><th>BNB/USD 1m</th><td><code>0x9818De06A32a9E50125A00916b4Be707E320D4ae</code></td></tr>
+          <tr><th>BNB/USD 10m</th><td><code>0xbDa9785c1F26fe3a8e66738252418Ca9C75EDAE0</code></td></tr>
+          <tr><th>TestUSDT</th><td><code>0x52CdFacA6E7639e60EEdd88CE4BD24f8877b83e5</code></td></tr>
+          <tr><th>RelayAggregator BTC/USD</th><td><code>0x81f6A0c6215bc0d8B3b64Ea946F58Bd159a7ed4A</code></td></tr>
+          <tr><th>RelayAggregator ETH/USD</th><td><code>0x0643De0C0bf26f081e4C28d11DB90f562174bF6C</code></td></tr>
+          <tr><th>RelayAggregator BNB/USD</th><td><code>0x99B5a4202B3247Bc326003a68dE5B301b1D4D541</code></td></tr>
         </tbody>
       </table></div>
       <p class="small">

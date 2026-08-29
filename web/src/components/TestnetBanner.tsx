@@ -5,8 +5,12 @@ import * as ui from '../content/ui'
 import { activeChain } from '../config/chains'
 import { deployment } from '../config/deployment'
 import { useTxRunner } from '../hooks/useTxRunner'
+import { DEMO_WALLET_CONNECTOR_ID } from '../lib/demoWallet'
 import { t, useLang } from '../lib/i18n'
 import { pushToast } from '../lib/toast'
+
+const GAS_FAUCET_URL = 'https://www.bnbchain.org/en/testnet-faucet'
+const GAS_OPTIONS_URL = 'https://docs.bnbchain.org/bnb-smart-chain/developers/faucet/'
 
 /**
  * Testnet-only affordances. `relayFeeds` means the price feeds are keeper-fed `RelayAggregator`s,
@@ -14,11 +18,12 @@ import { pushToast } from '../lib/toast'
  */
 export function TestnetBanner({ onFaucet }: { onFaucet?: () => void }) {
   const lang = useLang()
-  const { isConnected } = useAccount()
+  const { connector, isConnected } = useAccount()
   const queryClient = useQueryClient()
   const { writeContractAsync, run, busyKey } = useTxRunner()
   const faucetBusy = busyKey === 'faucet'
   const hasFaucetToken = deployment.usdt !== '0x0000000000000000000000000000000000000000'
+  const isDemoWallet = connector?.id === DEMO_WALLET_CONNECTOR_ID
 
   return (
     <div className="border-b border-amber-300 bg-amber-100 text-amber-950 dark:border-amber-900 dark:bg-amber-950/70 dark:text-amber-100">
@@ -28,17 +33,17 @@ export function TestnetBanner({ onFaucet }: { onFaucet?: () => void }) {
         {/*
           The USDT faucet is a transaction, and a fresh test wallet cannot pay for one: every step
           of the funnel needs a little tBNB for gas, and nothing else on the page said where it
-          comes from. This link is the difference between a tester who starts and one who is stuck
-          at "insufficient funds" on their very first click.
+          comes from. Regular wallets go straight to BNB Chain's faucet; the disposable demo
+          wallet keeps the no-mainnet-funds options because the faucet requires 0.002 mainnet BNB.
         */}
         <a
           className="btn h-8 shrink-0 border border-amber-600 px-3 py-1 text-xs text-amber-900 hover:bg-amber-200 dark:text-amber-100 dark:hover:bg-amber-900"
-          href="https://docs.bnbchain.org/bnb-smart-chain/developers/faucet/"
+          href={isDemoWallet ? GAS_OPTIONS_URL : GAS_FAUCET_URL}
           target="_blank"
           rel="noreferrer"
-          title={t(lang, ui.testnet.gasFaucetTitle)}
+          title={t(lang, isDemoWallet ? ui.testnet.gasOptionsTitle : ui.testnet.gasFaucetTitle)}
         >
-          {t(lang, ui.testnet.gasFaucet)}
+          {t(lang, isDemoWallet ? ui.testnet.gasOptions : ui.testnet.gasFaucet)}
         </a>
         {hasFaucetToken ? (
           <button

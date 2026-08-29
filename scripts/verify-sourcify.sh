@@ -31,8 +31,8 @@ RELAY=$(j relayFeeds)
 
 # Must mirror the constants in script/Deploy.s.sol.
 FEE=300
-I5M=300;  BUF5M=240;  AGE5M=150
-I1H=3600; BUF1H=1800; AGE1H=900
+I1M=60;   BUF1M=50;   AGE1M=50
+I10M=600; BUF10M=300; AGE10M=180
 U_MIN=1000000000000000000; U_MAX=5000000000000000000000; U_SIDE=100000000000000000000000
 
 # One row per market, in the same order and with the same parameters as Deploy.s.sol builds them.
@@ -40,12 +40,12 @@ U_MIN=1000000000000000000; U_MAX=5000000000000000000000; U_SIDE=1000000000000000
 # different market set from the deploy script does not fail loudly — it verifies the wrong source
 # against the right address, or quietly skips a contract nobody then notices is unverified.
 MARKETS=(
-  "btcUsd5m|BTC/USD 5m|$BTCF|$I5M|$BUF5M|$AGE5M"
-  "btcUsd1h|BTC/USD 1h|$BTCF|$I1H|$BUF1H|$AGE1H"
-  "ethUsd5m|ETH/USD 5m|$ETHF|$I5M|$BUF5M|$AGE5M"
-  "ethUsd1h|ETH/USD 1h|$ETHF|$I1H|$BUF1H|$AGE1H"
-  "bnbUsd5m|BNB/USD 5m|$BNBF|$I5M|$BUF5M|$AGE5M"
-  "bnbUsd1h|BNB/USD 1h|$BNBF|$I1H|$BUF1H|$AGE1H"
+  "btcUsd1m|BTC/USD 1m|$BTCF|$I1M|$BUF1M|$AGE1M"
+  "btcUsd10m|BTC/USD 10m|$BTCF|$I10M|$BUF10M|$AGE10M"
+  "ethUsd1m|ETH/USD 1m|$ETHF|$I1M|$BUF1M|$AGE1M"
+  "ethUsd10m|ETH/USD 10m|$ETHF|$I10M|$BUF10M|$AGE10M"
+  "bnbUsd1m|BNB/USD 1m|$BNBF|$I1M|$BUF1M|$AGE1M"
+  "bnbUsd10m|BNB/USD 10m|$BNBF|$I10M|$BUF10M|$AGE10M"
 )
 
 # Testnet relay feeds: the seed price is part of the constructor, so it has to match Deploy.s.sol.

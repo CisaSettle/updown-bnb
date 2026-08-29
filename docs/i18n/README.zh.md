@@ -62,24 +62,24 @@
 
 | 合约 | 地址 |
 |---|---|
-| `UpDownRegistry` | [`0x8180410383497E8cC4A5E2af12BeA9756fB0027d`](https://testnet.bscscan.com/address/0x8180410383497E8cC4A5E2af12BeA9756fB0027d) |
-| BTC/USD 5m | [`0x4834529FF9591AD5cB6e4bb0a4e1C7F2Df3f5e0a`](https://testnet.bscscan.com/address/0x4834529FF9591AD5cB6e4bb0a4e1C7F2Df3f5e0a) |
-| BTC/USD 1h | [`0xF2FBbcc52f6616f8F01D7Cd3C2FFD1F93A5e81D1`](https://testnet.bscscan.com/address/0xF2FBbcc52f6616f8F01D7Cd3C2FFD1F93A5e81D1) |
-| ETH/USD 5m | [`0x47253E0E86FB531546ec516d357aCCB25d03e5A4`](https://testnet.bscscan.com/address/0x47253E0E86FB531546ec516d357aCCB25d03e5A4) |
-| ETH/USD 1h | [`0xFe611c1c7f60243A69A5Bb0B1cfE33500C77bff0`](https://testnet.bscscan.com/address/0xFe611c1c7f60243A69A5Bb0B1cfE33500C77bff0) |
-| BNB/USD 5m | [`0x1DA7da4913FB35d1e2C02D07886655A68faC8a10`](https://testnet.bscscan.com/address/0x1DA7da4913FB35d1e2C02D07886655A68faC8a10) |
-| BNB/USD 1h | [`0xa5f2318C557F9FfF3aaE9000AA014AdEA82aC389`](https://testnet.bscscan.com/address/0xa5f2318C557F9FfF3aaE9000AA014AdEA82aC389) |
-| `TestUSDT`（水龙头，18 位小数） | [`0x5a8E20563fa4Ae26f5F1183D090D5EC0e80bCCdF`](https://testnet.bscscan.com/address/0x5a8E20563fa4Ae26f5F1183D090D5EC0e80bCCdF) |
-| `RelayAggregator` BTC/USD | [`0x2D8d981eF2407D1B0eB6b24FAdB50d8c49473050`](https://testnet.bscscan.com/address/0x2D8d981eF2407D1B0eB6b24FAdB50d8c49473050) |
-| `RelayAggregator` ETH/USD | [`0x61df0e24bb23431034884c78E482CBd92A78911a`](https://testnet.bscscan.com/address/0x61df0e24bb23431034884c78E482CBd92A78911a) |
-| `RelayAggregator` BNB/USD | [`0x2756b5B78e10dE6B15f174d764E4631374d51Aca`](https://testnet.bscscan.com/address/0x2756b5B78e10dE6B15f174d764E4631374d51Aca) |
+| `UpDownRegistry` | [`0x115dAb3400CF8EE8949F71ADB7696b54dD2E45bd`](https://testnet.bscscan.com/address/0x115dAb3400CF8EE8949F71ADB7696b54dD2E45bd) |
+| BTC/USD 1m | [`0x05ee686BeB6aeefEF07BBAcc8C2F4748B23fBC9C`](https://testnet.bscscan.com/address/0x05ee686BeB6aeefEF07BBAcc8C2F4748B23fBC9C) |
+| BTC/USD 10m | [`0x167217BA44E780B084E1F585208AfBBFD0aA5bE4`](https://testnet.bscscan.com/address/0x167217BA44E780B084E1F585208AfBBFD0aA5bE4) |
+| ETH/USD 1m | [`0x1b6d890659A73950b88ce8EF980021F6DE9A7409`](https://testnet.bscscan.com/address/0x1b6d890659A73950b88ce8EF980021F6DE9A7409) |
+| ETH/USD 10m | [`0xeedE6730a89f119Bf40c1b6439FCBA85ea770241`](https://testnet.bscscan.com/address/0xeedE6730a89f119Bf40c1b6439FCBA85ea770241) |
+| BNB/USD 1m | [`0x9818De06A32a9E50125A00916b4Be707E320D4ae`](https://testnet.bscscan.com/address/0x9818De06A32a9E50125A00916b4Be707E320D4ae) |
+| BNB/USD 10m | [`0xbDa9785c1F26fe3a8e66738252418Ca9C75EDAE0`](https://testnet.bscscan.com/address/0xbDa9785c1F26fe3a8e66738252418Ca9C75EDAE0) |
+| `TestUSDT`（水龙头，18 位小数） | [`0x52CdFacA6E7639e60EEdd88CE4BD24f8877b83e5`](https://testnet.bscscan.com/address/0x52CdFacA6E7639e60EEdd88CE4BD24f8877b83e5) |
+| `RelayAggregator` BTC/USD | [`0x81f6A0c6215bc0d8B3b64Ea946F58Bd159a7ed4A`](https://testnet.bscscan.com/address/0x81f6A0c6215bc0d8B3b64Ea946F58Bd159a7ed4A) |
+| `RelayAggregator` ETH/USD | [`0x0643De0C0bf26f081e4C28d11DB90f562174bF6C`](https://testnet.bscscan.com/address/0x0643De0C0bf26f081e4C28d11DB90f562174bF6C) |
+| `RelayAggregator` BNB/USD | [`0x99B5a4202B3247Bc326003a68dE5B301b1D4D541`](https://testnet.bscscan.com/address/0x99B5a4202B3247Bc326003a68dE5B301b1D4D541) |
 
-**六个市场：BTC、ETH、BNB，每个各有 5 分钟与 1 小时两种轮长，全部以 USDT 结算。** 统一的结算资产意味着交易者可以用
+**六个市场：BTC、ETH、BNB，每个各有 1 分钟与 10 分钟两种轮长，全部以 USDT 结算。** 统一的结算资产意味着交易者可以用
 同一个单位比较六个盘口，并且只需要一次授权，而不必为了交易两个不同的标的去持有两种不同的东西。
 
 十一个合约全部在 [Sourcify](https://sourcify.dev) 上完成源码验证（`--verifier sourcify`，不需要任何 API key）。
 测试网用 keeper 推送的 `RelayAggregator` 代替 Chainlink，因为测试网自带的 Chainlink 喂价最多能滞后约 1500 秒，
-那会让每一个 5 分钟轮次都作废。
+那会让每一个 1 分钟轮次都作废。
 
 ### BNB 智能链主网（链 56）—— 尚未部署
 
@@ -88,7 +88,7 @@
 
 它将要绑定的三个 Chainlink 喂价已经写死在脚本里，每一个都在写下之前做过链上读取核实——`description()`、
 `decimals()`，以及一次新鲜的 `latestRoundData()`。它们是不可变合约的构造函数参数，写错了没法更正，只能弃用。
-`scripts/deploy-mainnet.sh` 会在广播之前重新确认这三个喂价都活着，并且都在 5 分钟市场 150 秒的陈旧度预算之内。
+`scripts/deploy-mainnet.sh` 会在广播之前重新确认这三个喂价都活着，并且都在 1 分钟市场 50 秒的陈旧度预算之内。
 
 | 喂价 | 地址 |
 |---|---|
@@ -215,7 +215,7 @@ npm run build                     # tsc --noEmit && vite build → static bundle
 
 | 链 | 链 ID | 喂价 | 状态 |
 |---|---|---|---|
-| BSC 测试网 | 97 | `RelayAggregator` —— 由 keeper 推送，因为测试网自带的 Chainlink 喂价最多滞后约 1500 秒，会让每个 5 分钟轮次作废 | **运行中**，全部合约已源码验证 |
+| BSC 测试网 | 97 | `RelayAggregator` —— 由 keeper 推送，因为测试网自带的 Chainlink 喂价最多滞后约 1500 秒，会让每个 1 分钟轮次作废 | **运行中** |
 | BSC 主网 | 56 | 真实的 Chainlink `AggregatorV3` 喂价（BTC/USD、ETH/USD、BNB/USD） | 尚未部署 —— **需业主授权** |
 
 > **主网部署是一个独立的、需业主授权的步骤。** 它花费真实资金、不可撤销，并且需要业主明确点头外加一个已充值的部署

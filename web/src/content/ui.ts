@@ -117,10 +117,15 @@ export const testnet = {
   },
   // Every transaction here — the USDT faucet included — needs a little testnet BNB for gas, and a
   // fresh test wallet has none. This is the one link that unblocks step one of the funnel.
-  gasFaucet: { en: 'Gas options (tBNB) ↗', zh: 'gas 领取方式（tBNB）↗' },
+  gasFaucet: { en: 'Get tBNB from official faucet ↗', zh: '去官方水龙头领 tBNB ↗' },
   gasFaucetTitle: {
-    en: 'Every transaction needs testnet BNB for gas. BNB Chain lists its support bot, Discord, and third-party faucet options here.',
-    zh: '每笔交易都需要测试网 BNB 付 gas。BNB Chain 在这里列出了官方支持机器人、Discord 和第三方水龙头。',
+    en: 'Open BNB Chain’s official testnet faucet. It requires this address to hold 0.002 BNB on BSC mainnet.',
+    zh: '打开 BNB Chain 官方测试网水龙头。领取地址需要在 BSC 主网持有 0.002 BNB。',
+  },
+  gasOptions: { en: 'Gas options (tBNB) ↗', zh: 'gas 领取方式（tBNB）↗' },
+  gasOptionsTitle: {
+    en: 'This disposable wallet should not hold real BNB. See BNB Chain’s support bot and other testnet gas options.',
+    zh: '这个一次性钱包不应持有真实 BNB。请查看 BNB Chain 官方机器人和其他测试网 gas 领取方式。',
   },
   faucetBusy: { en: 'Minting…', zh: '铸造中…' },
   faucet: { en: 'Get 1,000 test USDT', zh: '领 1,000 测试 USDT' },
@@ -129,8 +134,8 @@ export const testnet = {
 
 export function testnetNotice(lang: Lang): Text {
   return {
-    en: `You are on ${activeChain.name}. Funds here are worthless. Prices come from a keeper-fed relay feed, not Chainlink, because the testnet Chainlink feeds are far too stale for 5-minute rounds.`,
-    zh: `你在 ${chainLabel(lang)}上。这里的钱没有价值。价格来自 keeper 推送的中继喂价，不是 Chainlink——测试网自带的 Chainlink 喂价滞后得太厉害，5 分钟的轮次撑不住。`,
+    en: `You are on ${activeChain.name}. Funds here are worthless. Prices come from a keeper-fed relay feed, not Chainlink, because the testnet Chainlink feeds are far too stale for 1-minute rounds.`,
+    zh: `你在 ${chainLabel(lang)}上。这里的钱没有价值。价格来自 keeper 推送的中继喂价，不是 Chainlink——测试网自带的 Chainlink 喂价滞后得太厉害，1 分钟的轮次撑不住。`,
   }
 }
 
@@ -235,7 +240,7 @@ export const marketPicker = {
   collectableDot: { en: 'Money to collect in this market', zh: '这个市场有可领的钱' },
 } satisfies Record<string, Text>
 
-/** `5m rounds · settles in USDT` / `5 分钟一轮 · 用 USDT 结算`. */
+/** `1m rounds · settles in USDT` / `1 分钟一轮 · 用 USDT 结算`. */
 export function marketSubtitle(interval: string, asset: string): Text {
   return {
     en: `${interval} rounds · settles in ${asset}`,

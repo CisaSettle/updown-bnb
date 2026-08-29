@@ -4,12 +4,12 @@
 declare const __DEPLOYMENT__: {
   chainId: number
   registry: `0x${string}`
-  btcUsd5m: `0x${string}`
-  btcUsd1h: `0x${string}`
-  ethUsd5m: `0x${string}`
-  ethUsd1h: `0x${string}`
-  bnbUsd5m: `0x${string}`
-  bnbUsd1h: `0x${string}`
+  btcUsd1m: `0x${string}`
+  btcUsd10m: `0x${string}`
+  ethUsd1m: `0x${string}`
+  ethUsd10m: `0x${string}`
+  bnbUsd1m: `0x${string}`
+  bnbUsd10m: `0x${string}`
   btcFeed: `0x${string}`
   ethFeed: `0x${string}`
   bnbFeed: `0x${string}`

@@ -123,7 +123,7 @@ forge script script/Deploy.s.sol \
 ```
 
 部署顺序为：（仅测试网）中继喂价 + TestUSDT → `UpDownRegistry` → 依据脚本里 `MarketSpec[]` 表格部署六个 ERC20
-市场——BTC、ETH、BNB 各配 5 分钟与 1 小时轮次——边部署边注册，最后把注册表所有权转交给 `OWNER`（两步式；
+市场——BTC、ETH、BNB 各配 1 分钟与 10 分钟轮次——边部署边注册，最后把注册表所有权转交给 `OWNER`（两步式；
 `OWNER` 必须自行接受）。
 
 所有市场都以 USDT 结算。`UpDownMarketNative` 是刻意不部署的：原生 BNB 市场是另一种要持有、也要另行推理的东西，
@@ -135,9 +135,9 @@ forge script script/Deploy.s.sol \
 ```json
 {
   "chainId": 97, "registry": "0x…",
-  "btcUsd5m": "0x…", "btcUsd1h": "0x…",
-  "ethUsd5m": "0x…", "ethUsd1h": "0x…",
-  "bnbUsd5m": "0x…", "bnbUsd1h": "0x…",
+  "btcUsd1m": "0x…", "btcUsd10m": "0x…",
+  "ethUsd1m": "0x…", "ethUsd10m": "0x…",
+  "bnbUsd1m": "0x…", "bnbUsd10m": "0x…",
   "btcFeed": "0x…", "ethFeed": "0x…", "bnbFeed": "0x…", "usdt": "0x…",
   "owner": "0x…", "operator": "0x…",
   "relayFeeds": true, "feeBps": 300
@@ -254,7 +254,7 @@ cd ../web && npm run sync:abi          # regenerates web/src/abi/*.ts from packa
 
 ```bash
 BETTOR_A_KEY=0x... BETTOR_B_KEY=0x... \
-  node scripts/onchain-acceptance.mjs --chain 97 --market btcUsd5m
+  node scripts/onchain-acceptance.mjs --chain 97 --market btcUsd1m
 ```
 它对着线上链跑完整一轮，并用精确整数运算断言合约兑现了它所报的价：赔率公式、赔付金额、手续费只从输的池子收取、
 输家的 `claim()` 在链上是真的回滚（而不仅仅是读出来不可领取），以及偿付能力不变量。两个账户都需要 gas；
@@ -382,7 +382,7 @@ node --env-file=.env dist/index.js
 | `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `METRICS_PORT` / `METRICS_HOST` | `9464` / `0.0.0.0` | `/healthz` 与 `/metrics` 的监听地址 |
 | `EXECUTE_LEAD_MS` | `2000` | 边界之后延迟多久再调用 `executeRound` |
-| `RELAY_LEAD_MS` | `20000` | 边界之前**一次**中继的时间预算（仅测试网）。实际提前量为该值乘以共享该边界的中继数量，再压到 `oracleMaxAge` 减去 10 秒余量以内 —— `relayCapacity()` 会报告一个喂价真正能承载多少次 |
+| `RELAY_LEAD_MS` | `12000` | 边界之前**一次**中继的时间预算（仅测试网）。实际提前量为该值乘以共享该边界的中继数量，再压到 `oracleMaxAge` 减去 10 秒余量以内 —— `relayCapacity()` 会报告一个喂价真正能承载多少次 |
 | `IDLE_POLL_MS` | `30000` | 对已暂停 / 尚未启动的市场的重新轮询间隔 |
 | `FIND_ROUND_MAX_STEPS` | `64` | `findRoundIdAt` 回溯步数的上限 |
 | `PRICE_API` | 币安 ticker | 测试网中继的现货价格来源 |
@@ -454,7 +454,7 @@ A_KEY=$BOT_A_KEY B_KEY=$BOT_B_KEY node scripts/bet-bot.mjs
 自己会大声报出来（`density tick failed after replacing itself; a pending tick may delay the next relay`）。把 `RELAY_TICK_MS`
 设成 0 可以彻底消除这种干扰；只是调大间隔，只能让它更少发生。
 
-更主要的边界过期退款成因，是 keeper 干脆漏掉了边界中继——挂了、没 gas、或者被限流——因为 `oracleMaxAge`（5 分钟市场 150 秒，1 小时市场 900
+更主要的边界过期退款成因，是 keeper 干脆漏掉了边界中继——挂了、没 gas、或者被限流——因为 `oracleMaxAge`（1 分钟市场 50 秒，10 分钟市场 180
 秒）算的是边界时刻那一笔可用报价。那是 keeper 的健康问题，处理办法在 §3.1。
 
 补给流程，每几天一次：
@@ -479,8 +479,8 @@ SRC_KEY=0x… BOT_ADDRESSES=<botA>,<botB> node scripts/fund-gas.mjs --dry   # �
 
 **症状。** `/healthz` 返回 503，市场处于 `stale`；没有 `RoundLocked` / `RoundSettled` 事件。
 
-**链上正在发生什么。** 每一个受影响的轮次都会耗完它自己快照的 `bufferSeconds`（5 分钟市场 240 秒，1 小时市场
-1800 秒）。超过之后它就再也无法结算，转为**全额可退款、零手续费**。`refundable(epoch, user)` 会在无需任何管理
+**链上正在发生什么。** 每一个受影响的轮次都会耗完它自己快照的 `bufferSeconds`（1 分钟市场 50 秒，10 分钟市场
+300 秒）。超过之后它就再也无法结算，转为**全额可退款、零手续费**。`refundable(epoch, user)` 会在无需任何管理
 操作的情况下变为 true。用户不会亏钱；他们只是失去了这一轮。
 
 **处理。**
@@ -547,7 +547,7 @@ cast call <FEED> 'latestRoundData()(uint80,int256,uint256,uint256,uint80)' --rpc
   4. 针对新喂价部署一个全新的市场并 `register`。在主网上，喂价地址是 Chainlink 的**代理**地址，其地址按设计
      是稳定的，因此这属于罕见情况，而非日常。
 
-- 如果轮次节奏已经跟不上喂价节奏，同样的逻辑适用：一个 5 分钟市场无法容忍比约 5 分钟更慢的喂价，而且已经没有
+- 如果轮次节奏已经跟不上喂价节奏，同样的逻辑适用：一个 1 分钟市场无法容忍比约 1 分钟更慢的喂价，而且已经没有
   任何参数可以放宽，所以诚实的做法是用更长的 `interval` 新建一个市场，而不是让现有市场带病运行。
 
 ### 3.3 测试网上中继了错误价格
@@ -730,8 +730,8 @@ cast send <MARKET> 'claimTreasury(address)' <TO> --private-key $OWNER_KEY --rpc-
    到主网。
 6. **keeper 的准时性。** 迟缓的 keeper 损害的是产品质量（轮次退款），从不损害偿付能力。
 
-> **线上的 BSC 测试网这套栈就是当前源码。** 97 链已于 2026-08-26 重新部署，包含六个市场——BTC、ETH、BNB 各配
-> 5 分钟与 1 小时轮次，全部以 USDT 结算。这是链上确认的，不是假定的：`oraclePhase()` 能回答，
+> **线上的 BSC 测试网这套栈就是当前源码。** 97 链已于 2026-08-30 重新部署，包含六个市场——BTC、ETH、BNB 各配
+> 1 分钟与 10 分钟轮次，全部以 USDT 结算。这是链上确认的，不是假定的：`oraclePhase()` 能回答，
 > `setOracle(address)` 因为不存在而回滚，`autoClaimOptIn(address)` 能回答。`./scripts/verify-sourcify.sh 97`
 > 对全部十一个合约报告 `match`。地址在 README 与 `contracts/deployments/97.json` 里，并且有一条测试会在两者
 > 不一致时让构建失败。
@@ -745,7 +745,7 @@ cast send <MARKET> 'claimTreasury(address)' <TO> --private-key $OWNER_KEY --rpc-
 ```
 在预检通过之前它不会广播：`OWNER` 必须是一个**合约**（Safe 或 Timelock —— 除非你设置 `ALLOW_EOA_OWNER=1`
 并且确实是这个意思，否则 EOA 会被拒绝）、部署账户必须持有 gas、RPC 必须真的是 56 链、结算资产必须是 18 位小数
-的 BSC-USDT、**三个 Chainlink 喂价（BTC、ETH、BNB）都必须活着并落在 5 分钟市场所带的 150 秒预算之内**，
+的 BSC-USDT、**三个 Chainlink 喂价（BTC、ETH、BNB）都必须活着并落在 1 分钟市场所带的 50 秒预算之内**，
 并且整套 Foundry 测试必须为绿。随后它会对着真实链状态做模拟、打印 gas 估算，并要求你手动输入 `DEPLOY MAINNET`。
 截至 2026-08-26，整套栈的成本是 **0.00073 BNB**。
 
