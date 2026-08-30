@@ -11,6 +11,8 @@
 - **线上应用（BNB 测试网）：** <https://updown.bluffking.ai> — 连接钱包，从水龙头领 1,000 测试 USDT，然后下一注。
   它显示的每一个价格都能从链上重新推导出来；应用自带的证明面板会指名每个行权价与结算价背后的 Chainlink 轮次编号，
   你不必信任这个页面也能自己核对。
+- **BSC 测试网 tBNB 水龙头：** <https://www.bnbchain.org/en/testnet-faucet>
+- **网站更新记录（中文 / English）：** <https://updown.bluffking.ai/#/changelog>
 - **产品规格（双语 EN / 中文）：** [`docs/PRD.html`](docs/PRD.html) — 在浏览器里打开
 - **工程规格：** [`docs/PRD.md`](docs/PRD.md)
 - **运维：** [`docs/RUNBOOK.md`](docs/RUNBOOK.md)

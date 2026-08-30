@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "id": "2026-08-30-one-and-ten-minute-markets",
+      "releaseId": "web-2026.08.30.1",
+      "releasedAt": "2026-08-30",
+      "status": "released",
+      "title": {
+        "zh": "1 分钟与 10 分钟市场上线",
+        "en": "One- and ten-minute markets are live"
+      },
+      "summary": {
+        "zh": "BTC、ETH、BNB 现在各提供 1 分钟与 10 分钟两个 USDT 结算档位，测试网运行与领取指引也同步加固。",
+        "en": "BTC, ETH, and BNB now each offer one- and ten-minute USDT-settled markets, alongside stronger testnet operations and funding guidance."
+      },
+      "highlights": {
+        "zh": [
+          "审查流程现在会在跨厂商 reviewer 返回结构化额度耗尽后，自动切换到固定的同厂商独立模型，并明确记录 cross_vendor=false。",
+          "手机端市场选择器改为自动换行网格，六个市场不再产生页面横向滚动或裁切。",
+          "六个市场已迁移到新的 BSC 测试网合约，并全部通过源码验证。",
+          "keeper 以更适合 1 分钟边界的节奏运行，下注账户增加低余额与 24 小时主动补充检查。",
+          "页面直接提供 BNB Chain 官方 tBNB 水龙头，并新增中英文更新记录。"
+        ],
+        "en": [
+          "The review workflow now switches to a pinned same-vendor independent model after structured opposite-vendor quota exhaustion, recording cross_vendor=false explicitly.",
+          "The mobile market picker now wraps into a responsive grid, removing page-level horizontal scrolling and clipped markets.",
+          "All six markets moved to newly deployed BSC testnet contracts with verified source code.",
+          "The keeper now runs on a cadence sized for one-minute boundaries, while betting accounts gain low-balance and 24-hour proactive refill checks.",
+          "The site links directly to BNB Chain’s official tBNB faucet and now includes bilingual release notes."
+        ]
+      }
+    }
+  ]
+}

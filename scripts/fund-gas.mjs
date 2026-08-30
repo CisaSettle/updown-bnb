@@ -9,7 +9,8 @@
  * qualifying address every few days, and this script spreads it.
  *
  * Top-up-to-target rather than send-fixed-amounts: the accounts drain at very different rates, so
- * a fixed split starves one and floods another. Targets below are ~2.5 days at measured burn.
+ * a fixed split starves one and floods another. Targets below are operational buffers; their
+ * runway changes with market cadence, gas price and claim volume.
  *
  *   SRC_KEY=0x.. node scripts/fund-gas.mjs [--dry]
  *
@@ -38,8 +39,8 @@ if (RESERVE < 0n) {
 }
 
 /**
- * Target balance per account, in tBNB. Sized from measured burn (keeper ≈ 0.067/day, each bot
- * ≈ 0.019/day) so a full board lands at roughly the same expiry rather than one starving first.
+ * Target balance per account, in tBNB. The one-minute board drains materially faster than the old
+ * five-minute deployment, so these are early-warning buffers rather than a promise of N days.
  * The bot addresses are not in the deployment file — they are the accounts bet-bot.mjs runs as.
  */
 const TARGETS = []

@@ -3,7 +3,7 @@ name: Deploy web to GitHub Pages
 on:
   push:
     branches: [main]
-    paths: ['web/**', 'contracts/deployments/**', 'packages/abi/**', '.github/workflows/pages.yml']
+    paths: ['web/**', 'contracts/deployments/**', 'packages/abi/**', 'scripts/release-changelog-guard.mjs', 'scripts/lib/release-changelog.mjs', '.github/workflows/pages.yml']
   workflow_dispatch:
     inputs:
       chain_id:
@@ -25,11 +25,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Require one changelog entry for this release
+        env:
+          EVENT_BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual recovery may only redeploy the exact current main tip. Selecting another ref
+            # in the Actions UI must not turn validate-only into a changelog bypass.
+            git fetch --no-tags origin main
+            if [ "${{ github.ref }}" != "refs/heads/main" ] || [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+              echo "Manual Pages deployment is restricted to the exact current main SHA."
+              exit 1
+            fi
+            node scripts/release-changelog-guard.mjs --validate-only
+          else
+            BASE="$EVENT_BEFORE"
+            if [ -z "$BASE" ]; then BASE="$(git rev-parse HEAD^ 2>/dev/null || printf '%040d' 0)"; fi
+            node scripts/release-changelog-guard.mjs --require-release-entry --base "$BASE" --head "${{ github.sha }}"
+          fi
       - run: npm ci
         working-directory: web
       # The deploy path is independent of the CI workflow, so without this the site could ship

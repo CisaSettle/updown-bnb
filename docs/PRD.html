@@ -432,14 +432,14 @@ footer{
     <div class="chips l-en">
       <span class="chip"><strong>Chain:</strong> BSC 56 / 97</span>
       <span class="chip"><strong>Settlement:</strong> USDT (18 dec)</span>
-      <span class="chip"><strong>Durations:</strong> 5&nbsp;min / 1&nbsp;hour</span>
+      <span class="chip"><strong>Durations:</strong> 1&nbsp;min / 10&nbsp;min</span>
       <span class="chip"><strong>Fee:</strong> 3% of the losing pool</span>
       <span class="chip"><strong>Custody:</strong> none — funds stay in the market contract</span>
     </div>
     <div class="chips l-zh">
       <span class="chip"><strong>网络：</strong>BSC 主网 56 / 测试网 97</span>
       <span class="chip"><strong>结算资产：</strong>USDT（18 位小数）</span>
-      <span class="chip"><strong>轮次周期：</strong>5 分钟 / 1 小时</span>
+      <span class="chip"><strong>轮次周期：</strong>1 分钟 / 10 分钟</span>
       <span class="chip"><strong>手续费：</strong>输方资金池的 3%</span>
       <span class="chip"><strong>托管：</strong>无托管方，资金只存放于市场合约</span>
     </div>
@@ -489,8 +489,8 @@ footer{
       </p>
       <div class="cards">
         <div class="card"><div class="k">Markets in v1</div><div class="v">
-          <b>BTC</b>, <b>ETH</b> and <b>BNB</b> against USD, each over a <b>5-minute</b> and a
-          <b>1-hour</b> round — six markets, every one settled in <b>USDT</b>. One contract instance =
+          <b>BTC</b>, <b>ETH</b> and <b>BNB</b> against USD, each over a <b>1-minute</b> and a
+          <b>10-minute</b> round — six markets, every one settled in <b>USDT</b>. One contract instance =
           one (asset, duration) pair.</div></div>
         <div class="card"><div class="k">Price source</div><div class="v">
           Chainlink <b>AggregatorV3</b> on BSC, 8 decimals. Read on-chain, verifiable by anyone.</div></div>
@@ -515,7 +515,7 @@ footer{
       </p>
       <div class="cards">
         <div class="card"><div class="k">v1 上线的市场</div><div class="v">
-          <b>BTC</b>、<b>ETH</b>、<b>BNB</b> 对 USD，每个各有 <b>5 分钟</b>与 <b>1 小时</b>两种轮长——共六个市场，
+          <b>BTC</b>、<b>ETH</b>、<b>BNB</b> 对 USD，每个各有 <b>1 分钟</b>与 <b>10 分钟</b>两种轮长——共六个市场，
           全部以 <b>USDT</b> 结算。一个合约实例对应一组（资产，周期）。</div></div>
         <div class="card"><div class="k">价格来源</div><div class="v">
           BSC 上的 Chainlink <b>AggregatorV3</b> 喂价，8 位小数。链上读取，人人可核验。</div></div>
@@ -548,7 +548,7 @@ footer{
           <tr><th>Custody</th><td>Exchange custodial</td><td>On-chain (Polygon)</td><td>On-chain, non-custodial (BSC)</td></tr>
           <tr><th>Pricing</th><td>House-set fixed payout ratio from an internal volatility model</td><td>CLOB order book; shares priced 0–1 USDC = implied probability</td><td>Parimutuel pool ratio — no house, no market maker, zero cold-start liquidity need</td></tr>
           <tr><th>Settlement source</th><td>Binance internal Price Index</td><td>Chainlink BTC/USD 60s TWAP data stream</td><td>Chainlink AggregatorV3 on-chain feed (BSC) — verifiable by anyone</td></tr>
-          <tr><th>Durations</th><td>10m / 30m / 1h / 1d</td><td>5m</td><td>5m / 1h in v1, extensible per (asset, duration)</td></tr>
+          <tr><th>Durations</th><td>10m / 30m / 1h / 1d</td><td>5m</td><td>1m / 10m in v1, extensible per (asset, duration)</td></tr>
           <tr><th>Strike</th><td>Index price at order time (per user)</td><td>Price at window start (per market)</td><td>Price at round lock (per round, shared by everyone)</td></tr>
           <tr><th>Tie handling</th><td>Payout = premium (refund)</td><td><code>&gt;=</code> resolves UP (favours bulls)</td><td>Refund both sides, zero fee — strictly fairer than both</td></tr>
           <tr><th>Early close</th><td>Not allowed</td><td>Allowed (sell on the book)</td><td>Not in v1 — a parimutuel pool has no counterparty to sell back to</td></tr>
@@ -575,7 +575,7 @@ footer{
           <tr><th>资金托管</th><td>交易所托管</td><td>链上（Polygon）</td><td>链上、非托管（BSC）</td></tr>
           <tr><th>定价机制</th><td>平台依据内部波动率模型给出固定赔付倍率</td><td>中央限价订单簿（CLOB），份额价格 0–1 USDC，即隐含概率</td><td>平价池比例定价——无庄家、无做市商，冷启动不需要任何初始流动性</td></tr>
           <tr><th>结算数据源</th><td>币安内部价格指数</td><td>Chainlink BTC/USD 60 秒 TWAP 数据流</td><td>BSC 上的 Chainlink AggregatorV3 链上喂价——任何人可核验</td></tr>
-          <tr><th>轮次周期</th><td>10 分钟 / 30 分钟 / 1 小时 / 1 天</td><td>5 分钟</td><td>v1 提供 5 分钟 / 1 小时，可按（资产，周期）扩展</td></tr>
+          <tr><th>轮次周期</th><td>10 分钟 / 30 分钟 / 1 小时 / 1 天</td><td>5 分钟</td><td>v1 提供 1 分钟 / 10 分钟，可按（资产，周期）扩展</td></tr>
           <tr><th>行权价</th><td>下单时刻的指数价（因人而异）</td><td>窗口开始时的价格（每个市场一个）</td><td>轮次锁定时刻的价格（每轮一个，所有人共用）</td></tr>
           <tr><th>平局处理</th><td>赔付等于权利金（即退款）</td><td><code>&gt;=</code> 判为看涨获胜（偏向多头）</td><td>双方全额退款、零手续费——严格优于上述两者</td></tr>
           <tr><th>提前平仓</th><td>不允许</td><td>允许（在订单簿卖出）</td><td>v1 不支持——平价池中不存在可供卖回的交易对手</td></tr>
@@ -958,7 +958,7 @@ upImpliedProb = 1 / upMultiple                    <span class="c">Polymarket-sty
 
       <h3>Worked example</h3>
       <p>
-        A 5-minute BTC round with a 3% fee. Alice stakes 100 USDT on UP; the book closes at
+        A 1-minute BTC round with a 3% fee. Alice stakes 100 USDT on UP; the book closes at
         1,100 UP against 3,000 DOWN. BTC ends higher, so UP wins.
       </p>
       <div class="calc"><dl>
@@ -1031,7 +1031,7 @@ upImpliedProb = 1 / upMultiple                    <span class="c">Polymarket 式
 
       <h3>完整算例</h3>
       <p>
-        一轮 5 分钟的 BTC 市场，手续费 3%。Alice 在看涨方下注 100 USDT；锁定时盘口为看涨 1,100、看跌 3,000。
+        一轮 1 分钟的 BTC 市场，手续费 3%。Alice 在看涨方下注 100 USDT；锁定时盘口为看涨 1,100、看跌 3,000。
         BTC 收在更高价位，看涨方获胜。
       </p>
       <div class="calc"><dl>
@@ -1137,8 +1137,8 @@ findRoundIdAt(targetTs, startFrom, maxSteps)   <span class="c">// walks back to 
         </tbody>
       </table></div>
       <p class="small">
-        All three feeds — BTC/USD, ETH/USD and BNB/USD — are wired into markets, each over a 5-minute and
-        a 1-hour round. Settlement in USDT uses BSC-USDT at
+        All three feeds — BTC/USD, ETH/USD and BNB/USD — are wired into markets, each over a 1-minute and
+        a 10-minute round. Settlement in USDT uses BSC-USDT at
         <code>0x55d398326f99059fF775485246999027B3197955</code>, which has <strong>18 decimals</strong>
         on BNB Chain, not the 6 that USDT has on Ethereum.
       </p>
@@ -1146,7 +1146,7 @@ findRoundIdAt(targetTs, startFrom, maxSteps)   <span class="c">// walks back to 
       <div class="note">
         <div class="t">Testnet uses a relayed feed, and why</div>
         <p>
-          BSC testnet's own Chainlink feeds update far too infrequently to drive 5-minute rounds —
+          BSC testnet's own Chainlink feeds update far too infrequently to drive 1-minute rounds —
           BNB/USD was measured 1,480 seconds stale on 2026-08-26, which would void every short round
           and prove nothing. Testnet therefore deploys <code>RelayAggregator</code>: a Chainlink-shaped
           feed <em>with round history</em>, so <code>getRoundData</code> behaves exactly as the real
@@ -1227,7 +1227,7 @@ findRoundIdAt(targetTs, startFrom, maxSteps)   <span class="c">// 回溯查找�
         </tbody>
       </table></div>
       <p class="small">
-        v1 只把 BTC/USD 与 BNB/USD 接入市场；ETH/USD 已核验，预留给下一个市场。USDT 结算使用 BNB 链上的
+        BTC/USD、ETH/USD 与 BNB/USD 三个喂价都已接入市场，并各自服务 1 分钟与 10 分钟两个轮次。USDT 结算使用 BNB 链上的
         BSC-USDT，地址 <code>0x55d398326f99059fF775485246999027B3197955</code>，其小数位是
         <strong>18 位</strong>，而不是以太坊上 USDT 的 6 位。
       </p>
@@ -1235,7 +1235,7 @@ findRoundIdAt(targetTs, startFrom, maxSteps)   <span class="c">// 回溯查找�
       <div class="note">
         <div class="t">测试网为何使用中继喂价</div>
         <p>
-          BSC 测试网自带的 Chainlink 喂价更新频率过低，根本无法支撑 5 分钟轮次——2026-08-26 实测 BNB/USD 已经
+          BSC 测试网自带的 Chainlink 喂价更新频率过低，根本无法支撑 1 分钟轮次——2026-08-26 实测 BNB/USD 已经
           陈旧了 1,480 秒，这会让每一轮短周期市场都作废，什么也验证不了。因此测试网改为部署
           <code>RelayAggregator</code>：一个与 Chainlink 接口一致、<em>带轮次历史</em>的喂价合约，使
           <code>getRoundData</code> 的行为与真实聚合器完全一致，并由 keeper 推送真实现货价格。写入权限被限制为
@@ -1258,8 +1258,8 @@ findRoundIdAt(targetTs, startFrom, maxSteps)   <span class="c">// 回溯查找�
           <tr><th><code>maxBetAmount</code></th><td>5,000 USDT · 10 BNB per tx</td><td>Limits whale concentration in one transaction</td></tr>
           <tr><th><code>maxSideAmount</code></th><td>100,000 USDT · 500 BNB per side per round</td><td>Caps the payoff from manipulating the settlement print — the exact attack surface criticised in Polymarket's 5m markets</td></tr>
           <tr><th><code>feeBps</code></th><td>300 (3%), hard cap 1000 (10%)</td><td>Protocol revenue; the cap is a constant, not an admin setting</td></tr>
-          <tr><th><code>bufferSeconds</code></th><td>240s (5m rounds) · 1800s (1h rounds)</td><td>How late a round may still be settled, measured from its own boundary. Past it, the round can only void into refunds. Forced <code>&lt; interval</code></td></tr>
-          <tr><th><code>oracleMaxAge</code></th><td>150s (5m rounds) · 900s (1h rounds)</td><td>How stale the boundary print may be. <strong>Immutable</strong>, and forced <code>&lt; interval</code>, so two boundaries can never share one print and the budget cannot be tuned to steer an outcome</td></tr>
+          <tr><th><code>bufferSeconds</code></th><td>50s (1m rounds) · 300s (10m rounds)</td><td>How late a round may still be settled, measured from its own boundary. Past it, the round can only void into refunds. Forced <code>&lt; interval</code></td></tr>
+          <tr><th><code>oracleMaxAge</code></th><td>50s (1m rounds) · 180s (10m rounds)</td><td>How stale the boundary print may be. <strong>Immutable</strong>, and forced <code>&lt; interval</code>, so two boundaries can never share one print and the budget cannot be tuned to steer an outcome</td></tr>
           <tr><th><code>oracle</code></th><td>the feed address, fixed at deploy</td><td><strong>Immutable</strong>; there is no <code>setOracle</code>. A settable price source is a path from the admin key to the settlement price of a round that is already locked, and a locked position has no exit — so no timelock would mitigate it</td></tr>
           <tr><th><code>oraclePhase</code></th><td>the aggregator phase at deploy</td><td><strong>Immutable</strong>. A print from any other phase is not a valid proof and reverts. If the feed truly changes phase, nothing can be proved, every round times out into a full refund, and the market retires</td></tr>
           <tr><th>No settlement role</th><td>—</td><td><code>executeRound</code> is permissionless and the price is a pure function of the boundary, so no address holds a settlement or timing option</td></tr>
@@ -1315,8 +1315,8 @@ findRoundIdAt(targetTs, startFrom, maxSteps)   <span class="c">// 回溯查找�
           <tr><th><code>maxBetAmount</code></th><td>单笔 5,000 USDT · 10 BNB</td><td>限制单笔巨鲸集中度</td></tr>
           <tr><th><code>maxSideAmount</code></th><td>每轮每边 100,000 USDT · 500 BNB</td><td>限制操纵结算价所能获得的收益上限——这正是 Polymarket 5 分钟市场被诟病的攻击面</td></tr>
           <tr><th><code>feeBps</code></th><td>300（3%），硬上限 1000（10%）</td><td>协议收入；上限是常量，管理员无法调高</td></tr>
-          <tr><th><code>bufferSeconds</code></th><td>5 分钟轮次 240 秒 · 1 小时轮次 1800 秒</td><td>自该轮自身边界起算，最晚仍可完成结算的时限。超过之后该轮只能作废退款。强制 <code>&lt; interval</code></td></tr>
-          <tr><th><code>oracleMaxAge</code></th><td>5 分钟轮次 150 秒 · 1 小时轮次 900 秒</td><td>边界报价允许的最大陈旧程度。<strong>不可变</strong>，且强制 <code>&lt; interval</code>，因此两个边界不可能共用同一条报价，这个时限也无法被调来影响结果</td></tr>
+          <tr><th><code>bufferSeconds</code></th><td>1 分钟轮次 50 秒 · 10 分钟轮次 300 秒</td><td>自该轮自身边界起算，最晚仍可完成结算的时限。超过之后该轮只能作废退款。强制 <code>&lt; interval</code></td></tr>
+          <tr><th><code>oracleMaxAge</code></th><td>1 分钟轮次 50 秒 · 10 分钟轮次 180 秒</td><td>边界报价允许的最大陈旧程度。<strong>不可变</strong>，且强制 <code>&lt; interval</code>，因此两个边界不可能共用同一条报价，这个时限也无法被调来影响结果</td></tr>
           <tr><th><code>oracle</code></th><td>部署时定死的喂价地址</td><td><strong>不可变</strong>；合约里没有 <code>setOracle</code>。可设置的价格来源等于给管理员私钥开了一条直通已锁定轮次结算价的路，而已锁定的仓位没有退出通道——所以时间锁也救不了</td></tr>
           <tr><th><code>oraclePhase</code></th><td>部署时所处的聚合器相位</td><td><strong>不可变</strong>。来自其他相位的报价不是有效证明，会直接回滚。喂价若真的换代，任何价格都无法被证明，每一轮都会耗尽时限、全额退款，市场就此退役</td></tr>
           <tr><th>不存在结算角色</th><td>—</td><td><code>executeRound</code> 无需许可，且价格是边界的纯函数，因此没有任何地址握有结算权或时机期权</td></tr>
@@ -2048,7 +2048,7 @@ function settlementAsset() external view returns (address);         <span class=
           <tr><th>合约 · 跨厂商</th><td><b>第 7–9 轮已完成。</b>第 7 轮发现 <code>claimFor</code> 可被抢跑，使合约持有人的赔付永久锁死；第 8 轮又证明为此所写的 <code>code.length</code> 判据本身可被绕过——合约可在自己的构造函数里下注随即自毁。两项均已关闭，各有一条经验证能在旧代码上失败的回归测试。第 8 轮还纠正了链下 <code>_priceAt</code> 镜像，该项由我复核批准，方向与其余相反。<b>第 9 轮返回要求整改</b>：六市场重部署遗留的若干发布面陈旧内容，已在本次修复并等待复审，因此<b>当前代码树仍无跨厂商批准</b>。</td></tr>
           <tr><th>链下 · 跨厂商</th><td>两项 keeper 问题均已<b>关闭</b>，各有一条经验证会在旧代码上失败的回归测试。</td></tr>
           <tr><th>独立审计</th><td>六个维度中 2 项不通过。三项「高」已关闭；文档维度正是本节在回应的那一项。</td></tr>
-          <tr><th>测试网现网部署</th><td><b>就是当前源码</b>：97 链已于 2026-08-30 重新部署，六个市场（BTC / ETH / BNB 各 5 分钟与 1 小时），全部以 USDT 结算。链上可自行核实：<code>oraclePhase()</code> 能回答，<code>setOracle</code> 已不存在，11 个合约在 Sourcify 全部 <code>match</code>。</td></tr>
+          <tr><th>测试网现网部署</th><td><b>就是当前源码</b>：97 链已于 2026-08-30 重新部署，六个市场（BTC / ETH / BNB 各 1 分钟与 10 分钟），全部以 USDT 结算。链上可自行核实：<code>oraclePhase()</code> 能回答，<code>setOracle</code> 已不存在，11 个合约在 Sourcify 全部 <code>match</code>。</td></tr>
         </tbody>
       </table></div>
       <p>
@@ -2067,13 +2067,13 @@ function settlementAsset() external view returns (address);         <span class=
 
     <div class="body">
       <p>
-        <span class="l-en">BNB Smart Chain testnet, chain 97, redeployed 2026-08-26 on the code in this tree.
+        <span class="l-en">BNB Smart Chain testnet, chain 97, redeployed 2026-08-30 on the code in this tree.
           <b>Six markets</b> — BTC, ETH and BNB over a 1-minute and a 10-minute round — every one of them settled
           in USDT. The native-BNB market is deliberately not deployed: one settlement asset means a trader
           compares six books in a single unit and needs one approval. <code>UpDownMarketNative</code> stays in
           the tree, built and tested, because that is a deployment choice rather than a change in what the
           protocol supports.</span>
-        <span class="l-zh">BNB 智能链测试网，链 97，已于 2026-08-26 在本代码树上重新部署。<b>六个市场</b>——BTC、ETH、BNB
+        <span class="l-zh">BNB 智能链测试网，链 97，已于 2026-08-30 在本代码树上重新部署。<b>六个市场</b>——BTC、ETH、BNB
           各配 1 分钟与 10 分钟轮次——全部以 USDT 结算。原生 BNB 市场是刻意不部署的：统一结算资产意味着交易者用同一个单位
           比较六个盘口，只需要一次授权。<code>UpDownMarketNative</code> 仍留在代码树里、照常构建与测试，因为这是一个部署
           选择，而不是协议能力的削减。</span>

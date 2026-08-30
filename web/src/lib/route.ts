@@ -8,9 +8,10 @@
  */
 import { useSyncExternalStore } from 'react'
 
-export type Route = { name: 'trade' } | { name: 'faq'; entry?: string }
+export type Route = { name: 'trade' } | { name: 'faq'; entry?: string } | { name: 'changelog' }
 
 export const FAQ_HASH = '#/faq'
+export const CHANGELOG_HASH = '#/changelog'
 
 /** Direct link to one question. */
 export function faqEntryHash(entryId: string): string {
@@ -24,6 +25,7 @@ export function faqEntryDomId(entryId: string): string {
 
 export function parseHash(hash: string): Route {
   const path = hash.replace(/^#/, '')
+  if (path === '/changelog' || path === '/changelog/') return { name: 'changelog' }
   if (path !== '/faq' && !path.startsWith('/faq/')) return { name: 'trade' }
   const entry = path.slice('/faq/'.length)
   return entry ? { name: 'faq', entry: decodeURIComponent(entry) } : { name: 'faq' }

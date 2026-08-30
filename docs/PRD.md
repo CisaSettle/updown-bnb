@@ -26,7 +26,7 @@ losing side's pool pro-rata, minus a protocol fee. Nobody can lose more than the
 | Custody | Exchange custodial | On-chain (Polygon) | **On-chain, non-custodial (BSC)** |
 | Pricing | House-set fixed payout ratio from an internal volatility model | CLOB order book, shares 0–1 USDC = implied probability | **Parimutuel pool ratio** — no house, no market maker, zero cold-start liquidity need |
 | Settlement source | Binance internal Price Index | Chainlink BTC/USD 60s TWAP Data Stream | **Chainlink AggregatorV3 on-chain feed (BSC)** — verifiable by anyone |
-| Durations | 10m / 30m / 1h / 1d | 5m | **5m / 15m / 1h** (factory-extensible) |
+| Durations | 10m / 30m / 1h / 1d | 5m | **1m / 10m** (factory-extensible per asset and duration) |
 | Strike | Index price at order time (per-user) | Price at window start (per-market) | **Price at round lock (per-round, shared)** |
 | Tie handling | Payout = premium (refund) | `>=` resolves **Up** (favours bulls) | **Refund both sides, zero fee** (strictly fairer than both) |
 | Early close | Not allowed | Allowed (sell on book) | Not in v1 (parimutuel property) |
@@ -108,8 +108,8 @@ privilege. The only thing lateness can do is void a round into refunds once its 
 `bufferSeconds` has elapsed — and because winners are the ones with a reason to call, the economics
 themselves keep the market live.
 
-Because lateness no longer costs correctness, `bufferSeconds` is set generously (240 s on a 300 s
-round): a keeper four minutes late still settles at exactly the right price.
+Because lateness no longer costs correctness, `bufferSeconds` leaves a practical confirmation
+budget while staying below each interval: 50 s on a 60 s round and 300 s on a 600 s round.
 
 ---
 
@@ -174,7 +174,7 @@ upMultiple   = (bull + bear*(1-fee)) / bull        (Binance-style "payout ratio"
 upImpliedProb= 1 / upMultiple                       (Polymarket-style "share price", 0..1)
 ```
 
-**Worked example** — 5m BTC round, bull 1,000 USDT, bear 3,000 USDT, fee 3%:
+**Worked example** — 1m BTC round, bull 1,000 USDT, bear 3,000 USDT, fee 3%:
 - Alice stakes 100 UP (bull becomes 1,100 with her in it). Assume final book 1,100 / 3,000.
 - UP wins. `fee = 3000*0.03 = 90`. `rewardPool = 1100 + 3000 - 90 = 4010`. `rewardBase = 1100`.
 - Alice payout `= 100 * 4010 / 1100 = 364.5 USDT` → profit **+264.5** on a 100 stake (3.645×).
@@ -224,7 +224,7 @@ anyone. Reverting rather than voiding is what stops a losing bettor from front-r
 with a bogus round id to force everyone into a refund.
 
 BSC testnet's own feeds update far less frequently than mainnet (observed BNB/USD age 1480 s on
-2026-08-26), which would void every 5-minute round. Testnet therefore deploys `RelayAggregator`, a
+2026-08-26), which would void every 1-minute round. Testnet therefore deploys `RelayAggregator`, a
 Chainlink-shaped feed with real round history whose writes are restricted to the owner and a single
 keeper `updater`, fed from a real spot price. It is never deployed on mainnet.
 
@@ -238,8 +238,8 @@ keeper `updater`, fed from a real spot price. It is never deployed on mainnet.
 | `maxBetAmount` | 5,000 USDT per tx | per-transaction size. It does **not** bound a single address: nothing stops one account sending many transactions up to `maxSideAmount`. `maxSideAmount` is the real cap. |
 | `maxSideAmount` | 100,000 USDT per side per round | caps the payoff from manipulating the settlement print — the exact attack surface criticised in Polymarket's 5m markets |
 | `feeBps` | 300 (3%), hard-capped at 1000 | revenue |
-| `bufferSeconds` | 240s (5m rounds) | how late a round may still settle before it voids into refunds; snapshotted per round; must be `< interval` |
-| `oracleMaxAge` | 150s (5m rounds) | how stale the boundary print may be. **Immutable** — two rounds sharing a boundary must agree on what a valid proof is, and it removes the last parameter an admin could tune to steer an outcome |
+| `bufferSeconds` | 50s (1m rounds) · 300s (10m rounds) | how late a round may still settle before it voids into refunds; snapshotted per round; must be `< interval` |
+| `oracleMaxAge` | 50s (1m rounds) · 180s (10m rounds) | how stale the boundary print may be. **Immutable** — two rounds sharing a boundary must agree on what a valid proof is, and it removes the last parameter an admin could tune to steer an outcome |
 | `oracle` | the feed address, set at deploy | **Immutable.** There is no `setOracle`. A settable price source is a path from the admin key to the settlement price of a round that is *already locked* — pause, point the market at a feed you control, settle at a price of your choosing, point it back, unpause. A locked position has no exit, so no timelock mitigates it |
 | `oraclePhase` | the aggregator phase at deploy | **Immutable.** A print from any other phase is not a valid proof and reverts. If the feed truly changes phase, nothing can be proved, every round times out into a full refund, and the market retires |
 | Treasury withdrawal | only `treasuryAmount` accrued | admin can never touch user principal |
@@ -503,7 +503,7 @@ regression test fail.
 | Contracts, cross-vendor | **Rounds 7–9 have run.** R7 found that `claimFor` could be front-run to strand a contract holder's payout, and R8 showed my `code.length` fix could itself be bypassed by a contract that bets from its own constructor and self-destructs; both are closed, each pinned by a regression test proved to fail against the old code. R8 also corrected my off-chain `_priceAt` mirror, which I reviewed and approved — the one item running the other way round. **R9 returned CHANGES-REQUIRED** on release surfaces left stale by the six-market redeploy; those are fixed here and await re-review, so **the current tree still carries no cross-vendor approval**. |
 | Off-chain, cross-vendor | Both keeper findings **closed**, each pinned by a regression test verified to fail against the old code. |
 | Independent audit | 2 of 6 dimensions FAIL. The three high findings are closed; the documentation dimension is what this section and the runbook are answering. |
-| Live testnet deployment | **Is the current source.** Redeployed 2026-08-26 with six markets. See §11. |
+| Live testnet deployment | **Is the current source.** Redeployed 2026-08-30 with six markets. See §11. |
 
 Across the six contract rounds: **6 high-severity findings** — one of which an independent review
 escalated to critical, having reproduced it taking an entire opposing pool — **11 medium** and

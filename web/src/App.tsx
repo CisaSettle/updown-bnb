@@ -37,6 +37,7 @@ import { useTheme } from './lib/theme'
  * kilobytes of prose that a trader who never opens it should not have to download to place a bet.
  */
 const FaqPage = lazy(() => import('./components/FaqPage').then((m) => ({ default: m.FaqPage })))
+const ChangelogPage = lazy(() => import('./components/ChangelogPage').then((m) => ({ default: m.ChangelogPage })))
 
 const SELECTED_KEY = 'updown.market'
 
@@ -230,7 +231,7 @@ export default function App() {
   const [selectedAddress, setSelectedAddress] = useState<string | undefined>(() => readSelected())
   // Money won in one market must be findable from every other tab — this is what puts the dot on.
   // Paused on the FAQ route, which exists precisely so nothing polls behind it.
-  const collectableMarkets = useCollectableMarkets(markets, address, route.name !== 'faq')
+  const collectableMarkets = useCollectableMarkets(markets, address, route.name === 'trade')
 
   const selected = useMemo(
     () => markets.find((m) => m.address.toLowerCase() === selectedAddress?.toLowerCase()) ?? markets[0],
@@ -261,7 +262,13 @@ export default function App() {
   return (
     <div className="min-h-full">
       {showTestnetHelpers ? <TestnetBanner /> : null}
-      <Header themePref={pref} onCycleTheme={cycle} lang={lang} onFaq={route.name === 'faq'} />
+      <Header
+        themePref={pref}
+        onCycleTheme={cycle}
+        lang={lang}
+        onFaq={route.name === 'faq'}
+        onChangelog={route.name === 'changelog'}
+      />
 
       {/*
         The FAQ is a route of its own rather than a panel inside the trading view: it unmounts the
@@ -276,6 +283,16 @@ export default function App() {
           }
         >
           <FaqPage />
+        </Suspense>
+      ) : route.name === 'changelog' ? (
+        <Suspense
+          fallback={
+            <main className="mx-auto max-w-3xl px-4 py-6 sm:px-6">
+              <SkeletonCard />
+            </main>
+          }
+        >
+          <ChangelogPage />
         </Suspense>
       ) : isPlaceholderDeployment ? (
         <NoDeployment />

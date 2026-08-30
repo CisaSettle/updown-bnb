@@ -53,7 +53,7 @@ describe('loadConfig', () => {
     expect(config.price.endpoint).toBe('https://api.binance.com/api/v3/ticker/price');
     expect(config.schedule.executeLeadMs).toBe(2_000);
     // Per RELAY, not per boundary: the scheduler multiplies it by the relays sharing the queue.
-    expect(config.schedule.relayLeadMs).toBe(20_000);
+    expect(config.schedule.relayLeadMs).toBe(12_000);
     expect(config.health.intervalsAllowed).toBe(2);
     expect(config.health.minBalanceWei).toBe(50_000_000_000_000_000n);
     expect(config.tx.maxAttempts).toBe(4);

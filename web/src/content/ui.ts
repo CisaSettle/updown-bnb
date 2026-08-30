@@ -59,6 +59,7 @@ export const meta = {
 
 export const header = {
   faq: { en: 'FAQ', zh: '常见问题' },
+  changelog: { en: 'Changelog', zh: '更新记录' },
 } satisfies Record<string, Text>
 
 export function headerTagline(lang: Lang): Text {

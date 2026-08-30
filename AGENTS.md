@@ -37,6 +37,23 @@ than failing obscurely. A review or inspection session that changes nothing has 
 anyway; if such a session does learn something the next one needs, put it in the final message so
 the owner or the next session can enter it. The obligation is on sessions that change things.
 
+## Reviewer quota fallback
+
+Run `node scripts/review-change.mjs` for the final review of a
+substantive local change. It snapshots tracked and untracked bytes into an immutable Git tree,
+binds the review to its patch digest, and rechecks that the worktree did not move before accepting
+the verdict. The author vendor is derived from the live signed controller process ancestry; a
+caller-supplied vendor cannot select the route or label the receipt.
+
+The opposite vendor is always first. Only a provider-structured terminal `quota_exhausted` event
+may activate the pinned same-vendor independent reviewer under owner policy
+`reviewer-quota-auto-auth-2026-07-24`. Generic errors, timeouts, prose-only quota messages,
+findings, and missing verdicts never select a fallback. A fallback must return `APPROVED` with
+`findings=[]` and `open=[]`; recursive fallback is forbidden. Its receipt must state
+`cross_vendor=false`, `fallback_reason=quota_exhausted`, and the policy id. This degraded approval
+allows the normal commit/push path without waiting for a per-run owner confirmation, but it must
+never be described as cross-vendor consensus.
+
 You do not have to remember the preflight: both vendors' `SessionStart` hooks run it for you and
 put anything open in front of you, and a `Stop` hook says so when a commit lands after the last
 ledger write. Both call the same two scripts in `scripts/hooks/` — one copy, so the vendors cannot

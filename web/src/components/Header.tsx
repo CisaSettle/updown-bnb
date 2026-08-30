@@ -3,7 +3,7 @@ import { LangToggle } from './LangToggle'
 import { ThemeToggle } from './ThemeToggle'
 import * as ui from '../content/ui'
 import { setLang, t, type Lang } from '../lib/i18n'
-import { FAQ_HASH } from '../lib/route'
+import { CHANGELOG_HASH, FAQ_HASH } from '../lib/route'
 import type { ThemePref } from '../lib/theme'
 
 export function Header({
@@ -11,12 +11,15 @@ export function Header({
   onCycleTheme,
   lang,
   onFaq,
+  onChangelog,
 }: {
   themePref: ThemePref
   onCycleTheme: () => void
   lang: Lang
   /** True while the FAQ is the page on screen, so the link can say so. */
   onFaq: boolean
+  /** True while the public release history is on screen. */
+  onChangelog: boolean
 }) {
   return (
     <header className="sticky top-0 z-20 border-b border-slate-200 bg-slate-50/85 backdrop-blur dark:border-slate-800 dark:bg-slate-950/85">
@@ -42,6 +45,15 @@ export function Header({
         </a>
 
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5 sm:gap-2">
+          <a
+            href={CHANGELOG_HASH}
+            aria-current={onChangelog ? 'page' : undefined}
+            className={`btn-secondary h-10 px-3 text-xs sm:text-sm ${
+              onChangelog ? '!border-slate-900 !bg-slate-900 !text-white dark:!border-white dark:!bg-white dark:!text-slate-900' : ''
+            }`}
+          >
+            {t(lang, ui.header.changelog)}
+          </a>
           {/*
             The one page a reader is sent to when they ask where the strike came from, so it is a
             labelled link in the chrome rather than a footnote — and it labels itself in the

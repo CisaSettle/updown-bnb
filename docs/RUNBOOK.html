@@ -196,7 +196,7 @@ forge script script/Deploy.s.sol \
 }</code></pre>
 <p>Commit this file. The keeper and the web app both read it, and both fail loudly if it is missing.</p>
 <p>Round parameters baked into the deploy (<code>Deploy.s.sol</code> constants):</p>
-<div class="scroll"><table><thead><tr><th>Market</th><th><code>interval</code></th><th><code>bufferSeconds</code></th><th><code>oracleMaxAge</code></th><th><code>feeBps</code></th><th>min / max / side cap</th></tr></thead><tbody><tr><td>BTC/USD 5m</td><td>300</td><td>240</td><td>150</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BTC/USD 1h</td><td>3600</td><td>1800</td><td>900</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>ETH/USD 5m</td><td>300</td><td>240</td><td>150</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>ETH/USD 1h</td><td>3600</td><td>1800</td><td>900</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BNB/USD 5m</td><td>300</td><td>240</td><td>150</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BNB/USD 1h</td><td>3600</td><td>1800</td><td>900</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr></tbody></table></div>
+<div class="scroll"><table><thead><tr><th>Market</th><th><code>interval</code></th><th><code>bufferSeconds</code></th><th><code>oracleMaxAge</code></th><th><code>feeBps</code></th><th>min / max / side cap</th></tr></thead><tbody><tr><td>BTC/USD 1m</td><td>60</td><td>50</td><td>50</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BTC/USD 10m</td><td>600</td><td>300</td><td>180</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>ETH/USD 1m</td><td>60</td><td>50</td><td>50</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>ETH/USD 10m</td><td>600</td><td>300</td><td>180</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BNB/USD 1m</td><td>60</td><td>50</td><td>50</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BNB/USD 10m</td><td>600</td><td>300</td><td>180</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr></tbody></table></div>
 <h3 id="1-4a-verify-sources-the-scripted-way">1.4a Verify sources — the scripted way</h3>
 <pre data-lang="bash"><code>./scripts/verify-sourcify.sh 97      # or 56</code></pre>
 <p>Verifies every deployed contract on Sourcify with no API key, then polls each job and prints the result. It reads the addresses out of <code>contracts/deployments/&lt;chainId&gt;.json</code> and reconstructs the constructor arguments from the same constants <code>Deploy.s.sol</code> uses, so it stays in step with a parameter change. <code>already verified</code> counts as success.</p>
@@ -212,14 +212,10 @@ forge verify-contract &lt;MARKET_ADDR&gt; src/UpDownMarketERC20.sol:UpDownMarket
   --chain 97 --watch --etherscan-api-key "$ETHERSCAN_API_KEY" \
   --constructor-args "$(cast abi-encode \
      'constructor(address,address,address,uint256,uint16,uint16,uint32,uint256,uint256,uint256)' \
-     &lt;OWNER&gt; &lt;BTC_FEED&gt; &lt;USDT&gt; 300 300 240 150 1000000000000000000 5000000000000000000000 100000000000000000000000)"
+     &lt;OWNER&gt; &lt;BTC_FEED&gt; &lt;USDT&gt; 60 300 50 50 1000000000000000000 5000000000000000000000 100000000000000000000000)"
 
-# Native market: same list without `asset`
-forge verify-contract &lt;MARKET_ADDR&gt; src/UpDownMarketNative.sol:UpDownMarketNative \
-  --chain 97 --watch --etherscan-api-key "$ETHERSCAN_API_KEY" \
-  --constructor-args "$(cast abi-encode \
-     'constructor(address,address,uint256,uint16,uint16,uint32,uint256,uint256,uint256)' \
-     &lt;OWNER&gt; &lt;BNB_FEED&gt; 300 300 240 150 5000000000000000 10000000000000000000 500000000000000000000)"
+# For a 10-minute ERC20 market, use interval/buffer/max-age = 600/300/180.
+# UpDownMarketNative is not part of the six-market deployment.
 
 # Registry: (initialOwner) — note this is the DEPLOYER, ownership is transferred afterwards
 forge verify-contract &lt;REGISTRY_ADDR&gt; src/UpDownRegistry.sol:UpDownRegistry \
@@ -318,16 +314,17 @@ curl -fsS localhost:9464/metrics            # Prometheus text format</code></pre
 <h3 id="the-betting-bot-testnet-demo-liquidity">The betting bot (testnet demo liquidity)</h3>
 <p><code>scripts/bet-bot.mjs</code> keeps every market showing a real, moving book: each round it stakes varying amounts from two dedicated accounts — usually both sides, sometimes deliberately one-sided, occasionally sitting a round out — and collects what earlier rounds owe, so the standing cost per market is roughly the protocol fee on the losing pool. It drips its own TestUSDT from the faucet (1,000 per hour per address) and refuses to start on any chain but 97.</p>
 <pre data-lang="bash"><code>A_KEY=$BOT_A_KEY B_KEY=$BOT_B_KEY node scripts/bet-bot.mjs</code></pre>
-<p>Env: <code>RPC_URL</code>; <code>MARKETS</code> (csv of deployment keys, default all six); <code>BET_MIN</code>/<code>BET_MAX</code> (USDT, default 3/12); <code>MIN_GAS_BNB</code> (default 0.01) below which it tops up <code>GAS_TOPUP_BNB</code> (default 0.05) of BNB from an optional <code>FUNDER_KEY</code> or logs <code>LOW GAS</code> loudly. Use dedicated keys for all three of <code>A_KEY</code>, <code>B_KEY</code> and <code>FUNDER_KEY</code> — none of them may be the keeper or owner key, because a second sender on those accounts races their nonces, and the bot refuses to start on such a clash. Gas is the one thing the faucet cannot mint — the accounts need occasional tBNB from <a href="https://www.bnbchain.org/en/testnet-faucet" target="_blank" rel="noreferrer">https://www.bnbchain.org/en/testnet-faucet</a>.</p>
+<p>Env: <code>RPC_URL</code>; <code>MARKETS</code> (csv of deployment keys, default all six); <code>BET_MIN</code>/<code>BET_MAX</code> (USDT, default 3/12); <code>MIN_GAS_BNB</code> (default 0.01) below which it tops up <code>GAS_TOPUP_BNB</code> (default 0.05) of BNB from an optional <code>FUNDER_KEY</code>; and <code>GAS_REFILL_MAX_AGE_HOURS</code> (default 24), which tops the accounts up proactively even when they have not yet crossed the floor. A partial funding balance is split proportionally, so account A can no longer drain the source and strand account B. Use dedicated keys for all three of <code>A_KEY</code>, <code>B_KEY</code> and <code>FUNDER_KEY</code> — none of them may be the keeper or owner key, because a second sender on those accounts races their nonces, and the bot refuses to start on such a clash.</p>
+<p>When the source cannot cover a due refill, the bot emits <code>FAUCET_REQUIRED</code> with the funding address and <a href="https://www.bnbchain.org/en/testnet-faucet" target="_blank" rel="noreferrer">https://www.bnbchain.org/en/testnet-faucet</a>. <code>OPEN_FAUCET_ON_DUE=1</code> opens that official link at most once per 24-hour refill window on macOS. It cannot complete the claim: BNB Chain requires a human captcha, so any claim of fully unattended replenishment would be false.</p>
 <h3 id="keeping-the-testnet-in-gas">Keeping the testnet in gas</h3>
-<p>The board burns roughly <strong>0.10 tBNB/day</strong> — the keeper about 0.067 of it, each bot about 0.019. Only the chain's own faucet mints tBNB, so this is a standing chore rather than a one-time setup.</p>
+<p>At the current one-minute cadence, the full board burns roughly <strong>0.25–0.30 tBNB/day</strong>; the exact number moves with BSC testnet gas price and how many claims the bots sweep. Only the chain's own faucet mints tBNB, so this is a daily operating dependency rather than a one-time setup.</p>
 <p>Watch the keeper first. A dry bot only means a still book; a dry keeper means markets go stale and already-locked rounds run out their settlement windows and refund — the one failure mode users see. The keeper's own <code>MIN_BALANCE_BNB</code> warning (default 0.05) is the early signal, and it fires in <code>/healthz</code> <code>warnings[]</code> well before anything stops.</p>
 <p><strong><code>RELAY_TICK_MS</code> is the lever, and <code>0</code> is the setting that costs nothing.</strong> Two different things publish prices, and only one of them matters for money. Every boundary gets its own required relay print, which settlement depends on absolutely. <code>RELAY_TICK_MS</code> (30s here, off by default) buys <em>extra</em> prints between boundaries for nothing but chart density: a tick is skipped rather than queued whenever a boundary relay is due, and it never takes a <code>(feed, boundary)</code> claim. Turning it off makes the chart coarser and takes a large bite out of the keeper's gas.</p>
 <p>Settlement never <em>depends</em> on a density tick, but an enabled tick is not entirely free of it either. The two share one key and therefore one nonce, so a tick that was broadcast and never confirmed sits in front of the next boundary relay until it clears — the keeper says so itself, loudly (<code>density tick failed after replacing itself; a pending tick may delay the next relay</code>). Setting <code>RELAY_TICK_MS=0</code> removes that interference completely; merely raising the interval only makes it rarer.</p>
 <p>The bigger cause of a stale-boundary refund is the keeper missing boundary relays outright — down, unfunded, or rate-limited — because <code>oracleMaxAge</code> (50s on the 1-minute markets, 180s on the 10-minute markets) is measured against the last usable print at the boundary. That is a keeper-health problem, and §3.1 is where it is handled.</p>
-<p>The refill loop, every few days:</p>
+<p>The refill loop, checked continuously and completed at least daily:</p>
 <ol>
-<li>Claim 0.3 tBNB at <a href="https://www.bnbchain.org/en/testnet-faucet" target="_blank" rel="noreferrer">https://www.bnbchain.org/en/testnet-faucet</a> into the funding address. The faucet serves only an address holding <strong>0.002 BNB on BSC mainnet</strong> — an anti-sybil price on identity, not scarcity — and raises a captcha that a human must clear. An EVM address is the same on both chains, so one address can hold the mainnet qualifier and receive the testnet coin. One claim feeds the board for about three days.</li>
+<li>Claim the currently available tBNB at <a href="https://www.bnbchain.org/en/testnet-faucet" target="_blank" rel="noreferrer">https://www.bnbchain.org/en/testnet-faucet</a> into the funding address. The faucet serves only an address holding <strong>0.002 BNB on BSC mainnet</strong> — an anti-sybil price on identity, not scarcity — and raises a captcha that a human must clear. An EVM address is the same on both chains, so one address can hold the mainnet qualifier and receive the testnet coin. The faucet amount and policy are external and can change; do not encode a promised number or pretend the captcha can be automated.</li>
 <li>Spread it, topping every account back up to its target:</li>
 </ol>
 <pre data-lang="bash"><code>SRC_KEY=0x… BOT_ADDRESSES=&lt;botA&gt;,&lt;botB&gt; node scripts/fund-gas.mjs --dry   # then without --dry</code></pre>
@@ -336,7 +333,7 @@ curl -fsS localhost:9464/metrics            # Prometheus text format</code></pre
 <h2 id="3-incident-playbook">3 · Incident playbook</h2>
 <h3 id="3-1-keeper-down-no-user-funds-at-risk">3.1 Keeper down — <em>no user funds at risk</em></h3>
 <p><strong>Symptom.</strong> <code>/healthz</code> 503, markets <code>stale</code>; no <code>RoundLocked</code> / <code>RoundSettled</code> events.</p>
-<p><strong>What is happening on-chain.</strong> Each affected round waits out its own snapshotted <code>bufferSeconds</code> (240s on 5m markets, 1800s on 1h markets). Past that, it can no longer settle and becomes <strong>refundable in full, zero fee</strong>. <code>refundable(epoch, user)</code> flips to true with no admin action. Users lose nothing; they lose the round.</p>
+<p><strong>What is happening on-chain.</strong> Each affected round waits out its own snapshotted <code>bufferSeconds</code> (50s on 1m markets, 300s on 10m markets). Past that, it can no longer settle and becomes <strong>refundable in full, zero fee</strong>. <code>refundable(epoch, user)</code> flips to true with no admin action. Users lose nothing; they lose the round.</p>
 <p><strong>Response.</strong></p>
 <ol>
 <li>Anyone can turn the crank in the meantime — this is not privileged: ``<code>bash # cast prints decoded uints as </code>1756180800 [1.756e9]<code>, so keep only the first field TS=$(cast call &lt;MARKET&gt; 'boundaryTimestamp()(uint256)' --rpc-url "$RPC" | awk '{print $1}') # prints the boundary round id and a </code>found<code> flag; proceed only if found is true cast call &lt;MARKET&gt; 'findRoundIdAt(uint256,uint80,uint256)(uint80,bool)' "$TS" 0 64 --rpc-url "$RPC" cast send &lt;MARKET&gt; 'executeRound(uint80)' &lt;ROUND_ID&gt; --private-key "$KEY" --rpc-url "$RPC" </code>``</li>
@@ -557,7 +554,7 @@ forge script script/Deploy.s.sol \
 }</code></pre>
 <p>把这个文件提交进仓库。keeper 与前端都读它，缺失时两者都会大声失败。</p>
 <p>烘焙进部署的轮次参数（<code>Deploy.s.sol</code> 常量）：</p>
-<div class="scroll"><table><thead><tr><th>市场</th><th><code>interval</code></th><th><code>bufferSeconds</code></th><th><code>oracleMaxAge</code></th><th><code>feeBps</code></th><th>最小 / 最大 / 单边上限</th></tr></thead><tbody><tr><td>BTC/USD 5m</td><td>300</td><td>240</td><td>150</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BTC/USD 1h</td><td>3600</td><td>1800</td><td>900</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>ETH/USD 5m</td><td>300</td><td>240</td><td>150</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>ETH/USD 1h</td><td>3600</td><td>1800</td><td>900</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BNB/USD 5m</td><td>300</td><td>240</td><td>150</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BNB/USD 1h</td><td>3600</td><td>1800</td><td>900</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr></tbody></table></div>
+<div class="scroll"><table><thead><tr><th>市场</th><th><code>interval</code></th><th><code>bufferSeconds</code></th><th><code>oracleMaxAge</code></th><th><code>feeBps</code></th><th>最小 / 最大 / 单边上限</th></tr></thead><tbody><tr><td>BTC/USD 1m</td><td>60</td><td>50</td><td>50</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BTC/USD 10m</td><td>600</td><td>300</td><td>180</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>ETH/USD 1m</td><td>60</td><td>50</td><td>50</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>ETH/USD 10m</td><td>600</td><td>300</td><td>180</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BNB/USD 1m</td><td>60</td><td>50</td><td>50</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BNB/USD 10m</td><td>600</td><td>300</td><td>180</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr></tbody></table></div>
 <h3 id="1-4a-源码验证-脚本方式">1.4a 源码验证 —— 脚本方式</h3>
 <pre data-lang="bash"><code>./scripts/verify-sourcify.sh 97      # or 56</code></pre>
 <p>它在 Sourcify 上验证每一个已部署合约，不需要 API key，然后轮询每个任务并打印结果。它从 <code>contracts/deployments/&lt;chainId&gt;.json</code> 读取地址，并用 <code>Deploy.s.sol</code> 所用的同一批常量重建构造函数参数， 因此参数变更时它会自动跟上。<code>already verified</code> 计为成功。</p>
@@ -573,14 +570,10 @@ forge verify-contract &lt;MARKET_ADDR&gt; src/UpDownMarketERC20.sol:UpDownMarket
   --chain 97 --watch --etherscan-api-key "$ETHERSCAN_API_KEY" \
   --constructor-args "$(cast abi-encode \
      'constructor(address,address,address,uint256,uint16,uint16,uint32,uint256,uint256,uint256)' \
-     &lt;OWNER&gt; &lt;BTC_FEED&gt; &lt;USDT&gt; 300 300 240 150 1000000000000000000 5000000000000000000000 100000000000000000000000)"
+     &lt;OWNER&gt; &lt;BTC_FEED&gt; &lt;USDT&gt; 60 300 50 50 1000000000000000000 5000000000000000000000 100000000000000000000000)"
 
-# Native market: same list without `asset`
-forge verify-contract &lt;MARKET_ADDR&gt; src/UpDownMarketNative.sol:UpDownMarketNative \
-  --chain 97 --watch --etherscan-api-key "$ETHERSCAN_API_KEY" \
-  --constructor-args "$(cast abi-encode \
-     'constructor(address,address,uint256,uint16,uint16,uint32,uint256,uint256,uint256)' \
-     &lt;OWNER&gt; &lt;BNB_FEED&gt; 300 300 240 150 5000000000000000 10000000000000000000 500000000000000000000)"
+# 对 10 分钟 ERC20 市场，interval/buffer/max-age 使用 600/300/180。
+# UpDownMarketNative 不属于这次六市场部署。
 
 # Registry: (initialOwner) — note this is the DEPLOYER, ownership is transferred afterwards
 forge verify-contract &lt;REGISTRY_ADDR&gt; src/UpDownRegistry.sol:UpDownRegistry \
@@ -679,16 +672,16 @@ curl -fsS localhost:9464/metrics            # Prometheus text format</code></pre
 <h3 id="下注机器人-测试网演示流动性">下注机器人（测试网演示流动性）</h3>
 <p><code>scripts/bet-bot.mjs</code> 让每个市场都展示一个真实、会动的盘口：每一轮它用两个专用账户押入不等的金额——通常两边都押，偶尔故意只押一边，偶尔整轮不押——并领取此前轮次欠它的钱，所以每个市场的持续成本大致就是输的那一边池子上的协议手续费。它自己从水龙头补给 TestUSDT（每地址每小时 1,000），并且在链 id 不是 97 时拒绝启动。</p>
 <pre data-lang="bash"><code>A_KEY=$BOT_A_KEY B_KEY=$BOT_B_KEY node scripts/bet-bot.mjs</code></pre>
-<p>环境变量：<code>RPC_URL</code>；<code>MARKETS</code>（部署文件里的市场键名，逗号分隔，默认全部六个）；<code>BET_MIN</code>/<code>BET_MAX</code> （USDT，默认 3/12）；<code>MIN_GAS_BNB</code>（默认 0.01），低于它就从可选的 <code>FUNDER_KEY</code> 补 <code>GAS_TOPUP_BNB</code>（默认 0.05）的 gas，否则在日志里报出 <code>LOW GAS</code>。<code>A_KEY</code>、<code>B_KEY</code>、<code>FUNDER_KEY</code> 三者都要用专门的私钥，谁都不能是 keeper 或 owner 的私钥：同一账户出现第二个发送方就会和它的 nonce 打架，机器人在启动时检测到这种冲突会直接拒绝。gas 是水龙头唯一铸不出来的东西——账户偶尔需要从 <a href="https://www.bnbchain.org/en/testnet-faucet" target="_blank" rel="noreferrer">https://www.bnbchain.org/en/testnet-faucet</a> 领一点 tBNB。</p>
+<p>环境变量：<code>RPC_URL</code>；<code>MARKETS</code>（部署文件里的市场键名，逗号分隔，默认全部六个）；<code>BET_MIN</code>/<code>BET_MAX</code> （USDT，默认 3/12）；<code>MIN_GAS_BNB</code>（默认 0.01），低于它就从可选的 <code>FUNDER_KEY</code> 补 <code>GAS_TOPUP_BNB</code>（默认 0.05）的 gas；以及 <code>GAS_REFILL_MAX_AGE_HOURS</code>（默认 24），即使尚未跌破阈值，满 24 小时也会主动补齐。资金不足时会按缺口比例分配，账户 A 不会再先耗尽资金、让账户 B 断气。<code>A_KEY</code>、<code>B_KEY</code>、<code>FUNDER_KEY</code> 三者都要用专门的私钥，谁都不能是 keeper 或 owner 的私钥：同一账户出现第二个发送方就会和它的 nonce 打架，机器人在启动时检测到这种冲突会直接拒绝。gas 来源不足时，机器人会打印 <code>FAUCET_REQUIRED</code>、出资地址和 <a href="https://www.bnbchain.org/en/testnet-faucet" target="_blank" rel="noreferrer">https://www.bnbchain.org/en/testnet-faucet</a>；macOS 上设置 <code>OPEN_FAUCET_ON_DUE=1</code> 后，每个 24 小时补充窗口最多自动打开一次官方链接。它不能替人完成领取：BNB Chain 强制要求人工验证码，所以声称可以完全无人值守补币是不真实的。</p>
 <h3 id="让测试网不断气">让测试网不断气</h3>
-<p>整盘每天烧掉大约 <strong>0.10 tBNB</strong>：keeper 占 0.067，两个机器人各约 0.019。tBNB 只有链自己的水龙头能铸，所以这是一件要长期做的杂活，而不是一次性的配置。</p>
+<p>按当前 1 分钟节奏，整盘每天大约烧掉 <strong>0.25–0.30 tBNB</strong>；实际数字会随 BSC 测试网 gas 价格和机器人领取历史仓位的次数波动。tBNB 只有链自己的水龙头能铸，所以这是每天都要保障的运行依赖，而不是一次性的配置。</p>
 <p>先盯 keeper。机器人断气只是盘口不动；keeper 断气则市场转 stale，已锁定的轮次会耗尽结算窗口转为退款——这是唯一一个用户看得见的故障模式。keeper 自己的 <code>MIN_BALANCE_BNB</code> 告警（默认 0.05）就是早期信号，它会在任何东西停下来之前很久就出现在 <code>/healthz</code> 的 <code>warnings[]</code> 里。</p>
 <p><strong><code>RELAY_TICK_MS</code> 就是那个杠杆，而设成 <code>0</code> 是完全没有代价的那一档。</strong> 推价的其实是两件不同的事，只有其中一件跟钱有关：每一个边界时刻都有自己那笔<strong>必需</strong>的中继报价，结算完全依赖它；而 <code>RELAY_TICK_MS</code>（这里是 30 秒，默认关闭）买的是边界之间的<strong>额外</strong>报价，作用只有让价格图更密——一旦有边界中继要发，密度推送是被跳过而不是排队，它也从不占用 <code>(feed, boundary)</code> 的认领。关掉它只会让价格图变粗，同时削掉 keeper 相当一部分 gas。</p>
 <p>结算<strong>不依赖</strong>密度推送，但开着它也并非全无影响：两者共用同一把私钥、因而共用同一个 nonce，所以一笔已广播却始终没确认的密度推送，会挡在下一笔边界中继前面直到它清掉——keeper 自己会大声报出来（<code>density tick failed after replacing itself; a pending tick may delay the next relay</code>）。把 <code>RELAY_TICK_MS</code> 设成 0 可以彻底消除这种干扰；只是调大间隔，只能让它更少发生。</p>
 <p>更主要的边界过期退款成因，是 keeper 干脆漏掉了边界中继——挂了、没 gas、或者被限流——因为 <code>oracleMaxAge</code>（1 分钟市场 50 秒，10 分钟市场 180 秒）算的是边界时刻那一笔可用报价。那是 keeper 的健康问题，处理办法在 §3.1。</p>
-<p>补给流程，每几天一次：</p>
+<p>补给流程由程序持续检查，并且至少每天完成一次：</p>
 <ol>
-<li>到 <a href="https://www.bnbchain.org/en/testnet-faucet" target="_blank" rel="noreferrer">https://www.bnbchain.org/en/testnet-faucet</a> 领 0.3 tBNB 到出资地址。水龙头只服务在 <strong>BSC 主网上持有 0.002 BNB</strong> 的地址——那是给身份标价的反女巫手段，不是因为币稀缺——并且会弹一道必须由人来过的验证码。EVM 地址在两条链上本来就是同一个，所以同一个地址既可以持有主网的资格余额、又可以接收测试网的币。领一次够整盘烧三天左右。</li>
+<li>到 <a href="https://www.bnbchain.org/en/testnet-faucet" target="_blank" rel="noreferrer">https://www.bnbchain.org/en/testnet-faucet</a> 把当前可领取的 tBNB 领到出资地址。水龙头只服务在 <strong>BSC 主网上持有 0.002 BNB</strong> 的地址——那是给身份标价的反女巫手段，不是因为币稀缺——并且会弹一道必须由人来过的验证码。EVM 地址在两条链上本来就是同一个，所以同一个地址既可以持有主网的资格余额、又可以接收测试网的币。水龙头的额度与政策属于外部条件，可能变化；不要在代码里承诺固定数量，也不要假装验证码可以自动完成。</li>
 <li>分发下去，把每个账户补回各自的目标余额：</li>
 </ol>
 <pre data-lang="bash"><code>SRC_KEY=0x… BOT_ADDRESSES=&lt;botA&gt;,&lt;botB&gt; node scripts/fund-gas.mjs --dry   # 确认无误后去掉 --dry</code></pre>

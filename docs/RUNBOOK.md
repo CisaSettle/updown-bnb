@@ -165,12 +165,12 @@ Round parameters baked into the deploy (`Deploy.s.sol` constants):
 
 | Market | `interval` | `bufferSeconds` | `oracleMaxAge` | `feeBps` | min / max / side cap |
 |---|---|---|---|---|---|
-| BTC/USD 5m | 300 | 240 | 150 | 300 | 1 / 5,000 / 100,000 USDT |
-| BTC/USD 1h | 3600 | 1800 | 900 | 300 | 1 / 5,000 / 100,000 USDT |
-| ETH/USD 5m | 300 | 240 | 150 | 300 | 1 / 5,000 / 100,000 USDT |
-| ETH/USD 1h | 3600 | 1800 | 900 | 300 | 1 / 5,000 / 100,000 USDT |
-| BNB/USD 5m | 300 | 240 | 150 | 300 | 1 / 5,000 / 100,000 USDT |
-| BNB/USD 1h | 3600 | 1800 | 900 | 300 | 1 / 5,000 / 100,000 USDT |
+| BTC/USD 1m | 60 | 50 | 50 | 300 | 1 / 5,000 / 100,000 USDT |
+| BTC/USD 10m | 600 | 300 | 180 | 300 | 1 / 5,000 / 100,000 USDT |
+| ETH/USD 1m | 60 | 50 | 50 | 300 | 1 / 5,000 / 100,000 USDT |
+| ETH/USD 10m | 600 | 300 | 180 | 300 | 1 / 5,000 / 100,000 USDT |
+| BNB/USD 1m | 60 | 50 | 50 | 300 | 1 / 5,000 / 100,000 USDT |
+| BNB/USD 10m | 600 | 300 | 180 | 300 | 1 / 5,000 / 100,000 USDT |
 
 ### 1.4a Verify sources — the scripted way
 
@@ -202,14 +202,10 @@ forge verify-contract <MARKET_ADDR> src/UpDownMarketERC20.sol:UpDownMarketERC20 
   --chain 97 --watch --etherscan-api-key "$ETHERSCAN_API_KEY" \
   --constructor-args "$(cast abi-encode \
      'constructor(address,address,address,uint256,uint16,uint16,uint32,uint256,uint256,uint256)' \
-     <OWNER> <BTC_FEED> <USDT> 300 300 240 150 1000000000000000000 5000000000000000000000 100000000000000000000000)"
+     <OWNER> <BTC_FEED> <USDT> 60 300 50 50 1000000000000000000 5000000000000000000000 100000000000000000000000)"
 
-# Native market: same list without `asset`
-forge verify-contract <MARKET_ADDR> src/UpDownMarketNative.sol:UpDownMarketNative \
-  --chain 97 --watch --etherscan-api-key "$ETHERSCAN_API_KEY" \
-  --constructor-args "$(cast abi-encode \
-     'constructor(address,address,uint256,uint16,uint16,uint32,uint256,uint256,uint256)' \
-     <OWNER> <BNB_FEED> 300 300 240 150 5000000000000000 10000000000000000000 500000000000000000000)"
+# For a 10-minute ERC20 market, use interval/buffer/max-age = 600/300/180.
+# UpDownMarketNative is not part of the six-market deployment.
 
 # Registry: (initialOwner) — note this is the DEPLOYER, ownership is transferred afterwards
 forge verify-contract <REGISTRY_ADDR> src/UpDownRegistry.sol:UpDownRegistry \
@@ -474,15 +470,23 @@ A_KEY=$BOT_A_KEY B_KEY=$BOT_B_KEY node scripts/bet-bot.mjs
 
 Env: `RPC_URL`; `MARKETS` (csv of deployment keys, default all six); `BET_MIN`/`BET_MAX` (USDT,
 default 3/12); `MIN_GAS_BNB` (default 0.01) below which it tops up `GAS_TOPUP_BNB` (default 0.05)
-of BNB from an optional `FUNDER_KEY` or logs `LOW GAS` loudly. Use dedicated keys for all three of `A_KEY`, `B_KEY` and `FUNDER_KEY` —
+of BNB from an optional `FUNDER_KEY`; and `GAS_REFILL_MAX_AGE_HOURS` (default 24), which tops the
+accounts up proactively even when they have not yet crossed the floor. A partial funding balance
+is split proportionally, so account A can no longer drain the source and strand account B. Use
+dedicated keys for all three of `A_KEY`, `B_KEY` and `FUNDER_KEY` —
 none of them may be the keeper or owner key, because a second sender on those accounts races their
-nonces, and the bot refuses to start on such a clash. Gas is the one thing the faucet cannot mint —
-the accounts need occasional tBNB from <https://www.bnbchain.org/en/testnet-faucet>.
+nonces, and the bot refuses to start on such a clash.
+
+When the source cannot cover a due refill, the bot emits `FAUCET_REQUIRED` with the funding address
+and <https://www.bnbchain.org/en/testnet-faucet>. `OPEN_FAUCET_ON_DUE=1` opens that official link at
+most once per 24-hour refill window on macOS. It cannot complete the claim: BNB Chain requires a
+human captcha, so any claim of fully unattended replenishment would be false.
 
 ### Keeping the testnet in gas
 
-The board burns roughly **0.10 tBNB/day** — the keeper about 0.067 of it, each bot about 0.019.
-Only the chain's own faucet mints tBNB, so this is a standing chore rather than a one-time setup.
+At the current one-minute cadence, the full board burns roughly **0.25–0.30 tBNB/day**; the exact
+number moves with BSC testnet gas price and how many claims the bots sweep. Only the chain's own
+faucet mints tBNB, so this is a daily operating dependency rather than a one-time setup.
 
 Watch the keeper first. A dry bot only means a still book; a dry keeper means markets go stale and
 already-locked rounds run out their settlement windows and refund — the one failure mode users
@@ -508,13 +512,14 @@ unfunded, or rate-limited — because `oracleMaxAge` (50s on the 1-minute market
 10-minute markets) is measured against the last usable print at the boundary. That is a keeper-health problem,
 and §3.1 is where it is handled.
 
-The refill loop, every few days:
+The refill loop, checked continuously and completed at least daily:
 
-1. Claim 0.3 tBNB at <https://www.bnbchain.org/en/testnet-faucet> into the funding address. The
+1. Claim the currently available tBNB at <https://www.bnbchain.org/en/testnet-faucet> into the funding address. The
    faucet serves only an address holding **0.002 BNB on BSC mainnet** — an anti-sybil price on
    identity, not scarcity — and raises a captcha that a human must clear. An EVM address is the
-   same on both chains, so one address can hold the mainnet qualifier and receive the testnet
-   coin. One claim feeds the board for about three days.
+   same on both chains, so one address can hold the mainnet qualifier and receive the testnet coin.
+   The faucet amount and policy are external and can change; do not encode a promised number or
+   pretend the captcha can be automated.
 2. Spread it, topping every account back up to its target:
 
 ```bash
@@ -536,7 +541,7 @@ filling the first account and starving the last.
 **Symptom.** `/healthz` 503, markets `stale`; no `RoundLocked` / `RoundSettled` events.
 
 **What is happening on-chain.** Each affected round waits out its own snapshotted `bufferSeconds`
-(240s on 5m markets, 1800s on 1h markets). Past that, it can no longer settle and becomes
+(50s on 1m markets, 300s on 10m markets). Past that, it can no longer settle and becomes
 **refundable in full, zero fee**. `refundable(epoch, user)` flips to true with no admin action.
 Users lose nothing; they lose the round.
 

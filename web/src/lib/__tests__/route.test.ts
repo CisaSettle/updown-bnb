@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { faqEntryDomId, faqEntryHash, parseHash } from '../route'
+import { CHANGELOG_HASH, faqEntryDomId, faqEntryHash, parseHash } from '../route'
 
 describe('parseHash', () => {
   it('sends an empty or unrelated hash to the trading view', () => {
@@ -14,6 +14,12 @@ describe('parseHash', () => {
   it('opens the FAQ', () => {
     expect(parseHash('#/faq')).toEqual({ name: 'faq' })
     expect(parseHash('#/faq/')).toEqual({ name: 'faq' })
+  })
+
+  it('opens the changelog and only the changelog route', () => {
+    expect(parseHash(CHANGELOG_HASH)).toEqual({ name: 'changelog' })
+    expect(parseHash('#/changelog/')).toEqual({ name: 'changelog' })
+    expect(parseHash('#/changelog-entry')).toEqual({ name: 'trade' })
   })
 
   it('opens one question directly', () => {

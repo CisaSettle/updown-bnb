@@ -150,12 +150,12 @@ forge script script/Deploy.s.sol \
 
 | 市场 | `interval` | `bufferSeconds` | `oracleMaxAge` | `feeBps` | 最小 / 最大 / 单边上限 |
 |---|---|---|---|---|---|
-| BTC/USD 5m | 300 | 240 | 150 | 300 | 1 / 5,000 / 100,000 USDT |
-| BTC/USD 1h | 3600 | 1800 | 900 | 300 | 1 / 5,000 / 100,000 USDT |
-| ETH/USD 5m | 300 | 240 | 150 | 300 | 1 / 5,000 / 100,000 USDT |
-| ETH/USD 1h | 3600 | 1800 | 900 | 300 | 1 / 5,000 / 100,000 USDT |
-| BNB/USD 5m | 300 | 240 | 150 | 300 | 1 / 5,000 / 100,000 USDT |
-| BNB/USD 1h | 3600 | 1800 | 900 | 300 | 1 / 5,000 / 100,000 USDT |
+| BTC/USD 1m | 60 | 50 | 50 | 300 | 1 / 5,000 / 100,000 USDT |
+| BTC/USD 10m | 600 | 300 | 180 | 300 | 1 / 5,000 / 100,000 USDT |
+| ETH/USD 1m | 60 | 50 | 50 | 300 | 1 / 5,000 / 100,000 USDT |
+| ETH/USD 10m | 600 | 300 | 180 | 300 | 1 / 5,000 / 100,000 USDT |
+| BNB/USD 1m | 60 | 50 | 50 | 300 | 1 / 5,000 / 100,000 USDT |
+| BNB/USD 10m | 600 | 300 | 180 | 300 | 1 / 5,000 / 100,000 USDT |
 
 ### 1.4a 源码验证 —— 脚本方式
 
@@ -185,14 +185,10 @@ forge verify-contract <MARKET_ADDR> src/UpDownMarketERC20.sol:UpDownMarketERC20 
   --chain 97 --watch --etherscan-api-key "$ETHERSCAN_API_KEY" \
   --constructor-args "$(cast abi-encode \
      'constructor(address,address,address,uint256,uint16,uint16,uint32,uint256,uint256,uint256)' \
-     <OWNER> <BTC_FEED> <USDT> 300 300 240 150 1000000000000000000 5000000000000000000000 100000000000000000000000)"
+     <OWNER> <BTC_FEED> <USDT> 60 300 50 50 1000000000000000000 5000000000000000000000 100000000000000000000000)"
 
-# Native market: same list without `asset`
-forge verify-contract <MARKET_ADDR> src/UpDownMarketNative.sol:UpDownMarketNative \
-  --chain 97 --watch --etherscan-api-key "$ETHERSCAN_API_KEY" \
-  --constructor-args "$(cast abi-encode \
-     'constructor(address,address,uint256,uint16,uint16,uint32,uint256,uint256,uint256)' \
-     <OWNER> <BNB_FEED> 300 300 240 150 5000000000000000 10000000000000000000 500000000000000000000)"
+# 对 10 分钟 ERC20 市场，interval/buffer/max-age 使用 600/300/180。
+# UpDownMarketNative 不属于这次六市场部署。
 
 # Registry: (initialOwner) — note this is the DEPLOYER, ownership is transferred afterwards
 forge verify-contract <REGISTRY_ADDR> src/UpDownRegistry.sol:UpDownRegistry \
@@ -434,14 +430,14 @@ A_KEY=$BOT_A_KEY B_KEY=$BOT_B_KEY node scripts/bet-bot.mjs
 
 环境变量：`RPC_URL`；`MARKETS`（部署文件里的市场键名，逗号分隔，默认全部六个）；`BET_MIN`/`BET_MAX`
 （USDT，默认 3/12）；`MIN_GAS_BNB`（默认 0.01），低于它就从可选的 `FUNDER_KEY` 补
-`GAS_TOPUP_BNB`（默认 0.05）的 gas，否则在日志里报出 `LOW GAS`。`A_KEY`、`B_KEY`、`FUNDER_KEY` 三者都要用专门的私钥，谁都不能是 keeper 或 owner
+`GAS_TOPUP_BNB`（默认 0.05）的 gas；以及 `GAS_REFILL_MAX_AGE_HOURS`（默认 24），即使尚未跌破阈值，满 24 小时也会主动补齐。资金不足时会按缺口比例分配，账户 A 不会再先耗尽资金、让账户 B 断气。`A_KEY`、`B_KEY`、`FUNDER_KEY` 三者都要用专门的私钥，谁都不能是 keeper 或 owner
 的私钥：同一账户出现第二个发送方就会和它的 nonce 打架，机器人在启动时检测到这种冲突会直接拒绝。gas
-是水龙头唯一铸不出来的东西——账户偶尔需要从 <https://www.bnbchain.org/en/testnet-faucet> 领一点 tBNB。
+来源不足时，机器人会打印 `FAUCET_REQUIRED`、出资地址和 <https://www.bnbchain.org/en/testnet-faucet>；macOS 上设置
+`OPEN_FAUCET_ON_DUE=1` 后，每个 24 小时补充窗口最多自动打开一次官方链接。它不能替人完成领取：BNB Chain 强制要求人工验证码，所以声称可以完全无人值守补币是不真实的。
 
 ### 让测试网不断气
 
-整盘每天烧掉大约 **0.10 tBNB**：keeper 占 0.067，两个机器人各约
-0.019。tBNB 只有链自己的水龙头能铸，所以这是一件要长期做的杂活，而不是一次性的配置。
+按当前 1 分钟节奏，整盘每天大约烧掉 **0.25–0.30 tBNB**；实际数字会随 BSC 测试网 gas 价格和机器人领取历史仓位的次数波动。tBNB 只有链自己的水龙头能铸，所以这是每天都要保障的运行依赖，而不是一次性的配置。
 
 先盯 keeper。机器人断气只是盘口不动；keeper 断气则市场转 stale，已锁定的轮次会耗尽结算窗口转为退款——这是唯一一个用户看得见的故障模式。keeper
 自己的 `MIN_BALANCE_BNB` 告警（默认 0.05）就是早期信号，它会在任何东西停下来之前很久就出现在 `/healthz` 的 `warnings[]` 里。
@@ -457,11 +453,11 @@ A_KEY=$BOT_A_KEY B_KEY=$BOT_B_KEY node scripts/bet-bot.mjs
 更主要的边界过期退款成因，是 keeper 干脆漏掉了边界中继——挂了、没 gas、或者被限流——因为 `oracleMaxAge`（1 分钟市场 50 秒，10 分钟市场 180
 秒）算的是边界时刻那一笔可用报价。那是 keeper 的健康问题，处理办法在 §3.1。
 
-补给流程，每几天一次：
+补给流程由程序持续检查，并且至少每天完成一次：
 
-1. 到 <https://www.bnbchain.org/en/testnet-faucet> 领 0.3 tBNB 到出资地址。水龙头只服务在 **BSC 主网上持有 0.002 BNB**
+1. 到 <https://www.bnbchain.org/en/testnet-faucet> 把当前可领取的 tBNB 领到出资地址。水龙头只服务在 **BSC 主网上持有 0.002 BNB**
    的地址——那是给身份标价的反女巫手段，不是因为币稀缺——并且会弹一道必须由人来过的验证码。EVM
-   地址在两条链上本来就是同一个，所以同一个地址既可以持有主网的资格余额、又可以接收测试网的币。领一次够整盘烧三天左右。
+   地址在两条链上本来就是同一个，所以同一个地址既可以持有主网的资格余额、又可以接收测试网的币。水龙头的额度与政策属于外部条件，可能变化；不要在代码里承诺固定数量，也不要假装验证码可以自动完成。
 2. 分发下去，把每个账户补回各自的目标余额：
 
 ```bash

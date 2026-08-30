@@ -1,5 +1,24 @@
 # UpDown Protocol
 
+<!-- GITHUB_ZH_START -->
+**中文**
+
+UpDown 是运行在 BNB 智能链上的非托管、全链上二元期权协议。用户可以对 BTC、ETH 或 BNB
+在固定轮次内选择 **UP（涨）** 或 **DOWN（跌）**；合约依据预言机边界价格结算，赢家按比例
+瓜分输方资金池，协议费只从输方池收取。管理员无法动用用户资金；无法可靠结算的轮次会全额退款。
+
+- **线上应用（BSC 测试网）：** <https://updown.bluffking.ai>
+- **当前市场：** BTC、ETH、BNB，各有 **1 分钟**和 **10 分钟**两个 USDT 结算档位
+- **领取测试网 tBNB：** <https://www.bnbchain.org/en/testnet-faucet>
+- **完整中文项目说明：** [`docs/README.html`](docs/README.html)（默认中文，可切换 English）
+- **网站更新记录：** <https://updown.bluffking.ai/#/changelog>（中文 / English）
+- **产品规格：** [`docs/PRD.html`](docs/PRD.html)（中文 / English）
+- **运维手册：** [`docs/RUNBOOK.html`](docs/RUNBOOK.html)（中文 / English）
+
+<!-- GITHUB_ZH_END -->
+
+**English**
+
 **Non-custodial, on-chain binary options (Up/Down) on BNB Smart Chain.** Settled by Chainlink price
 feeds, priced by a parimutuel two-sided pool — no house, no market maker, no order book.
 
@@ -13,6 +32,8 @@ their own principal. Nobody can lose more than their stake, and no admin key can
   1,000 test USDT, and place a bet. Every price it shows can be re-derived from the chain; the app's
   own proof panel names the Chainlink round id behind each strike and settlement so you can check it
   without trusting the page.
+- **BSC testnet tBNB faucet:** <https://www.bnbchain.org/en/testnet-faucet>
+- **Public changelog (中文 / English):** <https://updown.bluffking.ai/#/changelog>
 - **Product spec (bilingual EN / 中文):** [`docs/PRD.html`](docs/PRD.html) — open it in a browser
 - **Engineering spec:** [`docs/PRD.md`](docs/PRD.md)
 - **Operations:** [`docs/RUNBOOK.md`](docs/RUNBOOK.md)

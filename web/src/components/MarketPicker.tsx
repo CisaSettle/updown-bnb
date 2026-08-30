@@ -39,9 +39,9 @@ export function MarketPicker({
 
   if (isLoading) {
     return (
-      <div className="flex gap-2 overflow-x-auto pb-1">
+      <div className="grid grid-cols-2 gap-2 pb-1 sm:grid-cols-3 xl:grid-cols-6">
         {[0, 1, 2].map((i) => (
-          <Skeleton key={i} className="h-16 w-44 shrink-0 rounded-xl" />
+          <Skeleton key={i} className="h-16 min-w-0 rounded-xl" />
         ))}
       </div>
     )
@@ -73,7 +73,7 @@ export function MarketPicker({
 
   return (
     <div
-      className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1"
+      className="grid grid-cols-2 gap-2 pb-1 sm:grid-cols-3 xl:grid-cols-6"
       role="tablist"
       aria-label={t(lang, ui.marketPicker.tablist)}
       onKeyDown={onKeyDown}
@@ -95,13 +95,13 @@ export function MarketPicker({
             }}
             type="button"
             onClick={() => onSelect(m)}
-            className={`shrink-0 rounded-xl border px-4 py-3 text-left transition-colors ${
+            className={`min-w-0 rounded-xl border px-3 py-3 text-left transition-colors sm:px-4 ${
               active
                 ? 'border-slate-900 bg-slate-900 text-white dark:border-white dark:bg-white dark:text-slate-900'
                 : 'border-slate-200 bg-white text-slate-800 hover:border-slate-400 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-100 dark:hover:border-slate-600'
             }`}
           >
-            <span className="block text-sm font-bold">
+            <span className="block break-words text-sm font-bold">
               {m.label}
               {dot ? (
                 <>
@@ -113,7 +113,7 @@ export function MarketPicker({
                 </>
               ) : null}
             </span>
-            <span className={`mt-0.5 block text-xs ${active ? 'opacity-80' : 'text-slate-500 dark:text-slate-400'}`}>
+            <span className={`mt-0.5 block break-words text-xs ${active ? 'opacity-80' : 'text-slate-500 dark:text-slate-400'}`}>
               {t(lang, ui.marketSubtitle(formatInterval(m.interval, lang), assetLabel(m)))}
             </span>
           </button>

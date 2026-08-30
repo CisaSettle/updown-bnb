@@ -5,6 +5,31 @@ on:
   pull_request:
 
 jobs:
+  release-changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Validate changelog and require it for release-surface changes
+        env:
+          PUSH_BASE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          BASE="${PR_BASE:-$PUSH_BASE}"
+          if [ -z "$BASE" ]; then BASE="$(git rev-parse HEAD^ 2>/dev/null || printf '%040d' 0)"; fi
+          node scripts/release-changelog-guard.mjs --base "$BASE" --head "${{ github.sha }}"
+
+  scripts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Test operational and release rails
+        run: node --test scripts/tests/*.test.mjs
+
   contracts:
     runs-on: ubuntu-latest
     steps:
@@ -80,10 +105,10 @@ jobs:
       - run: node scripts/build-bilingual-docs.mjs
       - name: the committed bilingual docs are up to date
         run: |
-          if ! git diff --quiet -- docs/README.html docs/RUNBOOK.html; then
-            echo "docs/README.html or docs/RUNBOOK.html is stale."
+          if ! git diff --quiet -- docs/README.html docs/RUNBOOK.html docs/PRD.html; then
+            echo "A generated README, RUNBOOK, or PRD HTML file is stale."
             echo "Run: node scripts/build-bilingual-docs.mjs  — and commit the result."
-            git diff --stat -- docs/README.html docs/RUNBOOK.html
+            git diff --stat -- docs/README.html docs/RUNBOOK.html docs/PRD.html
             exit 1
           fi
 

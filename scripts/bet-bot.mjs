@@ -26,8 +26,12 @@
  *   KEEPER_MIN_GAS_BNB floor that triggers a keeper top-up              (default: 0.08)
  *   KEEPER_TARGET_GAS_BNB keeper balance after a top-up                 (default: 0.17)
  *   FUNDER_RESERVE_BNB balance never spent from the funder              (default: 0.01)
+ *   GAS_REFILL_MAX_AGE_HOURS refill bots proactively after this age      (default: 24)
+ *   GAS_STATE_PATH persisted refill/alert timestamps                     (default: .bet-bot-gas-state.json)
+ *   OPEN_FAUCET_ON_DUE open the official faucet when human action is due (default: false)
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -41,6 +45,7 @@ import {
   getAddress,
 } from '../keeper/node_modules/viem/_esm/index.js'
 import { privateKeyToAccount } from '../keeper/node_modules/viem/_esm/accounts/index.js'
+import { allocateGasRefills, selectGasRefills } from './lib/gas-refill.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const dep = JSON.parse(readFileSync(join(ROOT, 'contracts/deployments', '97.json'), 'utf8'))
@@ -72,8 +77,18 @@ const GAS_TOPUP = parseEther(process.env.GAS_TOPUP_BNB ?? '0.05')
 const KEEPER_MIN_GAS = parseEther(process.env.KEEPER_MIN_GAS_BNB ?? '0.08')
 const KEEPER_TARGET_GAS = parseEther(process.env.KEEPER_TARGET_GAS_BNB ?? '0.17')
 const FUNDER_RESERVE = parseEther(process.env.FUNDER_RESERVE_BNB ?? '0.01')
+const GAS_REFILL_MAX_AGE_HOURS = Number(process.env.GAS_REFILL_MAX_AGE_HOURS ?? '24')
+const GAS_REFILL_MAX_AGE_MS = GAS_REFILL_MAX_AGE_HOURS * 60 * 60 * 1_000
+const GAS_STATE_PATH = process.env.GAS_STATE_PATH ?? join(ROOT, '.bet-bot-gas-state.json')
+const OPEN_FAUCET_ON_DUE = /^(1|true|yes|on)$/i.test(process.env.OPEN_FAUCET_ON_DUE ?? '')
+const GAS_FAUCET_URL = 'https://www.bnbchain.org/en/testnet-faucet'
+const GAS_TRANSFER_DUST = parseEther('0.0001')
 if (GAS_TOPUP <= MIN_GAS || KEEPER_TARGET_GAS <= KEEPER_MIN_GAS) {
   console.error('Gas targets must stay above their trigger floors.')
+  process.exit(1)
+}
+if (!Number.isFinite(GAS_REFILL_MAX_AGE_HOURS) || GAS_REFILL_MAX_AGE_HOURS <= 0) {
+  console.error('GAS_REFILL_MAX_AGE_HOURS must be a positive number.')
   process.exit(1)
 }
 /** How the book varies: mostly two-sided, sometimes one-sided. A completely empty synthetic book
@@ -155,6 +170,55 @@ const U = (n) => BigInt(Math.round(n * 100)) * 10n ** 16n
 const fromU = (v) => Number(formatUnits(v, 18))
 const stake = () => BET_MIN + Math.random() * (BET_MAX - BET_MIN)
 const short = (e) => String(e?.message ?? e).slice(0, 90)
+
+/** Native transfers have no event the bot can query portably after a restart, so the 24-hour
+ * proactive-refill clock is persisted locally. Losing this file is safe: the bot starts a fresh
+ * clock instead of immediately draining the funder. Low balances still trigger at once. */
+function readGasState() {
+  try {
+    const parsed = JSON.parse(readFileSync(GAS_STATE_PATH, 'utf8'))
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+const gasState = readGasState()
+function writeGasState() {
+  try {
+    writeFileSync(GAS_STATE_PATH, `${JSON.stringify(gasState, null, 2)}\n`, { mode: 0o600 })
+  } catch (e) {
+    log(`gas state write failed: ${short(e)}`)
+  }
+}
+function lastRefillAt(address) {
+  const value = gasState.accounts?.[address.toLowerCase()]?.lastRefillAt
+  return Number.isFinite(value) ? value : undefined
+}
+function markRefilled(address, at = Date.now()) {
+  gasState.accounts ??= {}
+  gasState.accounts[address.toLowerCase()] = { lastRefillAt: at }
+  writeGasState()
+}
+
+function alertFaucetNeeded(reason) {
+  const nowMs = Date.now()
+  // A dry source stays dry until a human clears the official captcha. One alert per hour is loud
+  // enough without opening a new browser tab on every minute-level gas check.
+  if (nowMs - Number(gasState.lastFaucetAlertAt ?? 0) < 60 * 60 * 1_000) return
+  gasState.lastFaucetAlertAt = nowMs
+  const target = FUNDER?.address ?? `${A.address},${B.address}`
+  log(`FAUCET_REQUIRED: ${reason}; claim tBNB for ${target} at ${GAS_FAUCET_URL}`)
+  if (
+    OPEN_FAUCET_ON_DUE &&
+    process.platform === 'darwin' &&
+    nowMs - Number(gasState.lastFaucetOpenAt ?? 0) >= GAS_REFILL_MAX_AGE_MS
+  ) {
+    gasState.lastFaucetOpenAt = nowMs
+    const child = spawn('open', [GAS_FAUCET_URL], { detached: true, stdio: 'ignore' })
+    child.unref()
+  }
+  writeGasState()
+}
 
 /**
  * Collect everything a market still owes an account.
@@ -254,8 +318,67 @@ async function gasGuardAddress(address, floor, target, label) {
   log(`LOW GAS: ${label} ${address} holds ${formatEther(gas)} BNB — transactions will start failing`)
 }
 
-async function gasGuard(who) {
-  return gasGuardAddress(who.address, MIN_GAS, GAS_TOPUP, 'bot')
+/** Refill the two betting accounts as one plan. A sequential "fill A, then B" loop stranded B
+ * when the source held less than both gaps; proportional allocation keeps both alive for roughly
+ * the same remaining time. An account is due either below the safety floor or 24 hours after its
+ * last successful refill. The latter turns gas replenishment into a routine rather than waiting
+ * until transactions already fail. */
+async function gasGuardBots() {
+  if (stopping) return
+  const checkedAt = Date.now()
+  const balances = await Promise.all([A, B].map((who) => pub.getBalance({ address: who.address })))
+  const selected = selectGasRefills({
+    accounts: [A, B].map((who, i) => ({
+      who,
+      address: who.address,
+      balance: balances[i],
+      lastRefillAt: lastRefillAt(who.address),
+    })),
+    floor: MIN_GAS,
+    target: GAS_TOPUP,
+    nowMs: checkedAt,
+    maxAgeMs: GAS_REFILL_MAX_AGE_MS,
+  })
+  for (const address of [...selected.clockStarts, ...selected.clockRefreshes]) markRefilled(address, checkedAt)
+  const due = selected.due
+  if (!due.length) return
+
+  const dueReason = due.map((item) => `${item.address.slice(0, 8)}:${item.low ? 'low' : '24h'}`).join(',')
+  if (!FUNDER) {
+    alertFaucetNeeded(`bot gas refill due (${dueReason}) and no FUNDER_KEY is configured`)
+    for (const item of due) log(`LOW GAS: bot ${item.address} holds ${formatEther(item.balance)} BNB`)
+    return
+  }
+
+  const funderBalance = await pub.getBalance({ address: FUNDER.address })
+  const gasPrice = await pub.getGasPrice()
+  const fees = gasPrice * 21_000n * BigInt(due.length)
+  const available = funderBalance - FUNDER_RESERVE - fees
+  if (available <= 0n) {
+    alertFaucetNeeded(`bot gas refill due (${dueReason}); funder holds ${formatEther(funderBalance)} BNB`)
+    for (const item of due) log(`LOW GAS: bot ${item.address} holds ${formatEther(item.balance)} BNB`)
+    return
+  }
+
+  const totalGap = due.reduce((sum, item) => sum + item.gap, 0n)
+  const scale = available < totalGap ? available : totalGap
+  const allocations = allocateGasRefills(due, available, GAS_TRANSFER_DUST)
+  for (const item of allocations) {
+    if (stopping) return
+    try {
+      const hash = await enqueue(FUNDER, async () => {
+        const sent = await wallet(FUNDER).sendTransaction({ to: item.address, value: item.value, gas: 21_000n, gasPrice })
+        const receipt = await pub.waitForTransactionReceipt({ hash: sent })
+        if (receipt.status !== 'success') throw new Error(`top-up reverted (${sent})`)
+        return sent
+      })
+      markRefilled(item.address)
+      log(`gas top-up ${formatEther(item.value)} BNB -> bot ${item.address.slice(0, 8)} (${hash.slice(0, 10)})`)
+    } catch (e) {
+      log(`bot gas top-up failed for ${item.address.slice(0, 8)}: ${short(e)}`)
+    }
+  }
+  if (scale < totalGap) alertFaucetNeeded(`funder could only cover part of the bot refill plan (${dueReason})`)
 }
 
 async function keeperGasGuard() {
@@ -395,9 +518,9 @@ log(`bet bot on chain 97 · ${markets.map((m) => m.key).join(', ')}`)
 log(`accounts ${A.address} / ${B.address}${FUNDER ? ` · gas funder ${FUNDER.address}` : ''}`)
 
 await keeperGasGuard()
+await gasGuardBots()
 for (const who of [A, B]) {
   if (stopping) break
-  await gasGuard(who)
   await faucetTopUp(who)
   for (const market of markets) {
     if (stopping) break
@@ -455,12 +578,15 @@ for (;;) {
           log(`${market.key}: collect failed: ${short(e)}`)
         }
       }
-      if (stopping) break
+    }
+    if (!stopping) {
       try {
-        await gasGuard(who)
+        await gasGuardBots()
       } catch (e) {
         log(`gas check failed: ${short(e)}`)
       }
+    }
+    for (const who of [A, B]) {
       if (stopping) break
       try {
         await faucetTopUp(who)
