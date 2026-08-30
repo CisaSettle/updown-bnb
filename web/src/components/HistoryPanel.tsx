@@ -227,7 +227,7 @@ export function HistoryPanel({
           button tucked under the sticky header — the header wraps to two rows on a phone, so the
           margin grows with it.
         */}
-        <div id={PROOF_PANEL_ID} ref={proofRef} className="scroll-mt-32 sm:scroll-mt-24">
+        <div id={PROOF_PANEL_ID} ref={proofRef} className="scroll-mt-44 sm:scroll-mt-24">
           {openRow ? (
             <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50/60 p-4 dark:border-sky-900 dark:bg-sky-950/30">
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">

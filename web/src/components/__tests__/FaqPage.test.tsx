@@ -123,6 +123,20 @@ describe('FaqView — every block type gets its own shape', () => {
     expect(html).toContain('<ul')
     expect(html).toContain('A tie — the settlement price lands exactly on the strike.')
   })
+
+  it('renders the contact profile as a safe external link', () => {
+    const zh = render('zh')
+    expect(zh).toContain('联系我们')
+    expect(zh).toContain('X / Twitter：@BluffKingAI')
+    expect(zh).toContain('href="https://x.com/BluffKingAI"')
+    expect(zh).toContain('target="_blank"')
+    expect(zh).toContain('rel="noopener noreferrer"')
+
+    const en = render('en')
+    expect(en).toContain('Contact us')
+    expect(en).toContain('@BluffKingAI on X / Twitter')
+    expect(en).not.toContain('联系我们')
+  })
 })
 
 describe('FaqView — the copy’s own emphasis is rendered, not printed', () => {

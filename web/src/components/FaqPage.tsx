@@ -174,6 +174,24 @@ function Block({ block, lang }: { block: FaqBlock; lang: Lang }) {
     )
   }
 
+  if (block.link) {
+    return (
+      <p className="mt-4">
+        <a
+          className="inline-flex max-w-full items-center rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-bold text-slate-900 transition-colors hover:border-brand hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand focus-visible:ring-offset-2 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:hover:border-brand dark:hover:text-brand"
+          href={block.link.href}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          <span className="min-w-0 break-words">{t(lang, block.link.label)}</span>
+          <span aria-hidden="true" className="ml-2 shrink-0">
+            ↗
+          </span>
+        </a>
+      </p>
+    )
+  }
+
   return null
 }
 

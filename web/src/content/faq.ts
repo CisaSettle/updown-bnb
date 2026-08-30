@@ -24,6 +24,8 @@ export interface FaqBlock {
   table?: { head: { en: string; zh: string }[]; rows: { en: string; zh: string }[][] }
   /** A callout that carries a warning or a promise. */
   note?: { en: string; zh: string }
+  /** A named external destination, kept explicit instead of hiding a URL in prose. */
+  link?: { label: { en: string; zh: string }; href: string }
 }
 
 export interface FaqEntry {
@@ -643,6 +645,32 @@ $ cast call $FEED "getRoundData(uint80)(uint80,int256,uint256,uint256,uint80)" \
                 zh: '当前是测试网。在主网部署存在之前，这里的一切使用的都是没有价值的测试代币。',
               },
             ],
+          },
+        ],
+      },
+    ],
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  {
+    id: 'contact',
+    title: { en: 'Contact us', zh: '联系我们' },
+    entries: [
+      {
+        id: 'contact-x',
+        q: { en: 'How can I contact the team?', zh: '如何联系我们？' },
+        blocks: [
+          {
+            p: {
+              en: 'Contact us on X / Twitter, or follow the account for public product updates and service notices.',
+              zh: '可通过 X / Twitter 联系我们，也可以关注公开产品更新与服务通知。',
+            },
+          },
+          {
+            link: {
+              label: { en: '@BluffKingAI on X / Twitter', zh: 'X / Twitter：@BluffKingAI' },
+              href: 'https://x.com/BluffKingAI',
+            },
           },
         ],
       },

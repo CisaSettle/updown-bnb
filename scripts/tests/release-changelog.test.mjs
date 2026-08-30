@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { CHANGELOG_PATH, enforceRangeContract, isReleaseChange, parseChangelogJson, validateChangelog } from '../lib/release-changelog.mjs'
 
 const current = JSON.parse(readFileSync(CHANGELOG_PATH, 'utf8'))
-const previous = { ...current, entries: [] }
+const previous = { ...current, entries: current.entries.slice(1) }
 
 test('the committed changelog is valid and bilingual', () => assert.doesNotThrow(() => validateChangelog(current)))
 
@@ -24,7 +24,7 @@ test('a release surface cannot change without the changelog file', () => {
 
 test('one new bilingual entry authorizes the release range', () => {
   const result = enforceRangeContract({ current, previous, changedFiles: ['web/src/App.tsx', CHANGELOG_PATH] })
-  assert.equal(result.releaseEntry.releaseId, 'web-2026.08.30.1')
+  assert.equal(result.releaseEntry.releaseId, current.entries[0].releaseId)
 })
 
 test('a release range cannot add zero or multiple entries', () => {
