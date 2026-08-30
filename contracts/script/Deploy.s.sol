@@ -199,6 +199,10 @@ contract Deploy is Script {
         vm.serializeAddress(k, "bnbFeed", specs[4].feed);
         vm.serializeAddress(k, "usdt", usdt);
         vm.serializeAddress(k, "owner", owner);
+        // Preserve the constructor argument even when `operator` is later updated to the live
+        // keeper after a RelayAggregator updater rotation. Source verification must reconstruct
+        // immutable deployment facts; gas guards need the current operational address.
+        vm.serializeAddress(k, "initialOperator", operator);
         vm.serializeAddress(k, "operator", operator);
         // the registry's constructor arg, and not the same account as `owner` once a Safe owns it
         vm.serializeAddress(k, "deployer", vm.addr(vm.envUint("PRIVATE_KEY")));

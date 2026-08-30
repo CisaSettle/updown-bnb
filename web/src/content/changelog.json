@@ -2,6 +2,30 @@
   "schemaVersion": 1,
   "entries": [
     {
+      "id": "2026-08-30-keeper-prod-cutover",
+      "releaseId": "web-2026.08.30.3",
+      "releasedAt": "2026-08-30",
+      "status": "released",
+      "title": {
+        "zh": "市场执行服务迁移至常在线环境",
+        "en": "Market execution moves to an always-on environment"
+      },
+      "summary": {
+        "zh": "1 分钟与 10 分钟市场的 keeper 已迁移至常在线生产环境，并由当前六个市场的健康检查持续监控。",
+        "en": "The keeper for the one- and ten-minute markets now runs in an always-on production environment with health checks bound to the current six markets."
+      },
+      "highlights": {
+        "zh": [
+          "执行服务不再依赖会休眠的本地电脑，降低错过定价与结算边界的风险。",
+          "因执行窗口超时而作废的轮次仍按合约规则全额退款，不收取手续费。"
+        ],
+        "en": [
+          "Market execution no longer depends on a local computer that can sleep, reducing the risk of missed pricing and settlement boundaries.",
+          "Rounds voided after an execution-window timeout remain fully refundable under the contract rules, with no fee."
+        ]
+      }
+    },
+    {
       "id": "2026-08-30-faq-contact-x",
       "releaseId": "web-2026.08.30.2",
       "releasedAt": "2026-08-30",

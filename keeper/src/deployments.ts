@@ -5,7 +5,7 @@
  *   "chainId": 97, "registry": "0x…",
  *   "btcUsd5m": "0x…", "btcUsd1h": "0x…", "bnbUsd5m": "0x…",
  *   "btcFeed": "0x…", "bnbFeed": "0x…", "usdt": "0x…",
- *   "owner": "0x…", "operator": "0x…",
+ *   "owner": "0x…", "initialOperator": "0x…", "operator": "0x…",
  *   "relayFeeds": true, "feeBps": 300
  * }
  *
@@ -27,6 +27,7 @@ export const RESERVED_KEYS: ReadonlySet<string> = new Set([
   'registry',
   'usdt',
   'owner',
+  'initialOperator',
   'operator',
   'relayFeeds',
   'feeBps',

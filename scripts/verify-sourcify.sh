@@ -22,6 +22,11 @@ FILE="deployments/${CHAIN}.json"
 
 j(){ node -e "console.log((JSON.parse(require('fs').readFileSync('$FILE'))['$1'] ?? ''))"; }
 REGISTRY=$(j registry); USDT=$(j usdt); OWNER=$(j owner); OPERATOR=$(j operator)
+INITIAL_OPERATOR=$(j initialOperator)
+[ -n "$INITIAL_OPERATOR" ] || {
+  INITIAL_OPERATOR=$OPERATOR
+  echo "note: no 'initialOperator' in $FILE (pre-dating updater rotation metadata); assuming it equals operator"
+}
 BTCF=$(j btcFeed); ETHF=$(j ethFeed); BNBF=$(j bnbFeed)
 # The registry is constructed with the DEPLOYER and handed to `owner` afterwards via Ownable2Step,
 # so its constructor arg is the deployer. On testnet the two are the same account, which is exactly
@@ -91,7 +96,7 @@ if [ "$RELAY" = "true" ]; then
     addr=$(j "$key")
     if [ -z "$addr" ]; then printf "%-26s %s\n" "$label" "MISSING from $FILE"; FAILED_KEYS=1; continue; fi
     v "$addr" src/testnet/RelayAggregator.sol:RelayAggregator \
-      "$(cast abi-encode 'c(address,address,uint8,string,int256)' "$OWNER" "$OPERATOR" 8 "$desc" "$seed")" "$label"
+      "$(cast abi-encode 'c(address,address,uint8,string,int256)' "$OWNER" "$INITIAL_OPERATOR" 8 "$desc" "$seed")" "$label"
   done
 fi
 

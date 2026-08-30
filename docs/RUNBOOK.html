@@ -191,9 +191,10 @@ forge script script/Deploy.s.sol \
   "ethUsd1m": "0x…", "ethUsd10m": "0x…",
   "bnbUsd1m": "0x…", "bnbUsd10m": "0x…",
   "btcFeed": "0x…", "ethFeed": "0x…", "bnbFeed": "0x…", "usdt": "0x…",
-  "owner": "0x…", "operator": "0x…",
+  "owner": "0x…", "initialOperator": "0x…", "operator": "0x…",
   "relayFeeds": true, "feeBps": 300
 }</code></pre>
+<p><code>initialOperator</code> is the RelayAggregator constructor argument and therefore an immutable deployment fact: never rewrite it after a key rotation. <code>operator</code> is the current operational keeper address used by gas-funding automation. After <code>setUpdater(newAddress)</code>, update only <code>operator</code> to the new address and leave <code>initialOperator</code> unchanged so source verification can still reconstruct the original bytecode.</p>
 <p>Commit this file. The keeper and the web app both read it, and both fail loudly if it is missing.</p>
 <p>Round parameters baked into the deploy (<code>Deploy.s.sol</code> constants):</p>
 <div class="scroll"><table><thead><tr><th>Market</th><th><code>interval</code></th><th><code>bufferSeconds</code></th><th><code>oracleMaxAge</code></th><th><code>feeBps</code></th><th>min / max / side cap</th></tr></thead><tbody><tr><td>BTC/USD 1m</td><td>60</td><td>50</td><td>50</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BTC/USD 10m</td><td>600</td><td>300</td><td>180</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>ETH/USD 1m</td><td>60</td><td>50</td><td>50</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>ETH/USD 10m</td><td>600</td><td>300</td><td>180</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BNB/USD 1m</td><td>60</td><td>50</td><td>50</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BNB/USD 10m</td><td>600</td><td>300</td><td>180</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr></tbody></table></div>
@@ -549,9 +550,10 @@ forge script script/Deploy.s.sol \
   "ethUsd1m": "0x…", "ethUsd10m": "0x…",
   "bnbUsd1m": "0x…", "bnbUsd10m": "0x…",
   "btcFeed": "0x…", "ethFeed": "0x…", "bnbFeed": "0x…", "usdt": "0x…",
-  "owner": "0x…", "operator": "0x…",
+  "owner": "0x…", "initialOperator": "0x…", "operator": "0x…",
   "relayFeeds": true, "feeBps": 300
 }</code></pre>
+<p><code>initialOperator</code> 是 RelayAggregator 的构造参数，属于不可变的部署事实；轮换私钥后绝不能重写它。<code>operator</code> 是当前 运行中的 keeper 地址，供 gas 补充自动化读取。调用 <code>setUpdater(newAddress)</code> 后，只把 <code>operator</code> 更新为新地址， <code>initialOperator</code> 必须保持不变，源码验证才能继续重建原始字节码。</p>
 <p>把这个文件提交进仓库。keeper 与前端都读它，缺失时两者都会大声失败。</p>
 <p>烘焙进部署的轮次参数（<code>Deploy.s.sol</code> 常量）：</p>
 <div class="scroll"><table><thead><tr><th>市场</th><th><code>interval</code></th><th><code>bufferSeconds</code></th><th><code>oracleMaxAge</code></th><th><code>feeBps</code></th><th>最小 / 最大 / 单边上限</th></tr></thead><tbody><tr><td>BTC/USD 1m</td><td>60</td><td>50</td><td>50</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BTC/USD 10m</td><td>600</td><td>300</td><td>180</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>ETH/USD 1m</td><td>60</td><td>50</td><td>50</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>ETH/USD 10m</td><td>600</td><td>300</td><td>180</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BNB/USD 1m</td><td>60</td><td>50</td><td>50</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr><tr><td>BNB/USD 10m</td><td>600</td><td>300</td><td>180</td><td>300</td><td>1 / 5,000 / 100,000 USDT</td></tr></tbody></table></div>

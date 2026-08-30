@@ -139,10 +139,14 @@ forge script script/Deploy.s.sol \
   "ethUsd1m": "0x…", "ethUsd10m": "0x…",
   "bnbUsd1m": "0x…", "bnbUsd10m": "0x…",
   "btcFeed": "0x…", "ethFeed": "0x…", "bnbFeed": "0x…", "usdt": "0x…",
-  "owner": "0x…", "operator": "0x…",
+  "owner": "0x…", "initialOperator": "0x…", "operator": "0x…",
   "relayFeeds": true, "feeBps": 300
 }
 ```
+
+`initialOperator` 是 RelayAggregator 的构造参数，属于不可变的部署事实；轮换私钥后绝不能重写它。`operator` 是当前
+运行中的 keeper 地址，供 gas 补充自动化读取。调用 `setUpdater(newAddress)` 后，只把 `operator` 更新为新地址，
+`initialOperator` 必须保持不变，源码验证才能继续重建原始字节码。
 
 把这个文件提交进仓库。keeper 与前端都读它，缺失时两者都会大声失败。
 

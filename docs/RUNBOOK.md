@@ -154,10 +154,16 @@ Output artifact — **`contracts/deployments/<chainId>.json`**:
   "ethUsd1m": "0x…", "ethUsd10m": "0x…",
   "bnbUsd1m": "0x…", "bnbUsd10m": "0x…",
   "btcFeed": "0x…", "ethFeed": "0x…", "bnbFeed": "0x…", "usdt": "0x…",
-  "owner": "0x…", "operator": "0x…",
+  "owner": "0x…", "initialOperator": "0x…", "operator": "0x…",
   "relayFeeds": true, "feeBps": 300
 }
 ```
+
+`initialOperator` is the RelayAggregator constructor argument and therefore an immutable deployment
+fact: never rewrite it after a key rotation. `operator` is the current operational keeper address
+used by gas-funding automation. After `setUpdater(newAddress)`, update only `operator` to the new
+address and leave `initialOperator` unchanged so source verification can still reconstruct the
+original bytecode.
 
 Commit this file. The keeper and the web app both read it, and both fail loudly if it is missing.
 
