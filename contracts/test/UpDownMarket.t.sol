@@ -465,6 +465,101 @@ contract UpDownMarketTest is UpDownBaseTest {
         assertTrue(market.refundable(1, alice));
     }
 
+    function test_emptyMarketStaysVirtuallyOpenWithoutKeeperTransactions() public {
+        uint256 anchor = market.anchorTs();
+        vm.warp(anchor + 10 * INTERVAL + 1);
+
+        assertEq(market.currentEpoch(), 1, "an empty market must not need a maintenance write");
+        assertFalse(market.maintenanceRequired());
+        assertEq(market.currentBettableEpoch(), 11, "the open epoch must follow the time grid as a view");
+
+        UpDownMarketBase.Round memory projected = _round(11);
+        assertEq(projected.startTs, anchor + 10 * INTERVAL);
+        assertEq(projected.lockTs, anchor + 11 * INTERVAL);
+        assertEq(projected.feeBps, FEE_BPS);
+        assertEq(projected.upAmount + projected.downAmount, 0);
+    }
+
+    function test_firstBetAfterEmptySpellMaterialisesTheVirtualRound() public {
+        uint256 anchor = market.anchorTs();
+        vm.warp(anchor + 10 * INTERVAL + 1);
+        uint256 epoch = market.currentBettableEpoch();
+
+        vm.prank(alice);
+        erc20.betUp(epoch, MIN_BET);
+
+        assertEq(market.currentEpoch(), epoch);
+        assertEq(_round(epoch).startTs, anchor + 10 * INTERVAL);
+        assertEq(_round(epoch).upAmount, MIN_BET);
+        assertTrue(_round(1).voided, "the skipped empty storage round should be finalised explicitly");
+        assertTrue(market.maintenanceRequired(), "funded risk, not opening, is what wakes the keeper");
+    }
+
+    function test_dormantFirstBetRequiresRelayRunway() public {
+        UpDownMarketBase.Round memory r = _round(1);
+        vm.warp(uint256(r.lockTs) - market.FIRST_BET_MIN_LEAD_SECONDS() + 1);
+
+        vm.prank(alice);
+        vm.expectRevert(UpDownMarketBase.NotBettable.selector);
+        erc20.betUp(1, MIN_BET);
+
+        assertFalse(market.maintenanceRequired());
+        assertEq(_round(1).upAmount + _round(1).downAmount, 0);
+    }
+
+    function test_fundedRoundKeepsAcceptingBetsAfterDormantCutoff() public {
+        UpDownMarketBase.Round memory r = _round(1);
+        vm.warp(uint256(r.lockTs) - market.FIRST_BET_MIN_LEAD_SECONDS());
+        _betUp(alice, MIN_BET);
+
+        vm.warp(uint256(r.lockTs) - 1);
+        _betDown(bob, MIN_BET);
+
+        assertEq(_round(1).upAmount, MIN_BET);
+        assertEq(_round(1).downAmount, MIN_BET);
+    }
+
+    function test_fundedRoundPinsTheGridUntilItSettlesOrExpires() public {
+        _betUp(alice, MIN_BET);
+        UpDownMarketBase.Round memory funded = _round(1);
+        vm.warp(uint256(funded.lockTs) + 1);
+
+        assertTrue(market.maintenanceRequired());
+        assertEq(market.currentBettableEpoch(), 1, "a settleable position may not be skipped");
+
+        vm.prank(bob);
+        vm.expectRevert(UpDownMarketBase.WrongEpoch.selector);
+        erc20.betDown(2, MIN_BET);
+    }
+
+    function test_expiredFundedRoundRefundsWhileANewRoundOpensLazily() public {
+        _betUp(alice, MIN_BET);
+        UpDownMarketBase.Round memory funded = _round(1);
+        vm.warp(uint256(funded.lockTs) + BUFFER + 1);
+        uint256 epoch = market.currentBettableEpoch();
+
+        assertEq(epoch, 2);
+        assertFalse(market.maintenanceRequired(), "expired risk needs a refund, not a keeper transaction");
+        vm.prank(bob);
+        erc20.betDown(epoch, MIN_BET);
+
+        assertTrue(_round(1).voided);
+        assertTrue(market.refundable(1, alice));
+        assertEq(market.pendingPayout(1, alice), MIN_BET);
+    }
+
+    function test_keeperSleepsAfterTheLastFundedRoundIsSettled() public {
+        _betUp(alice, MIN_BET);
+        _betDown(bob, MIN_BET);
+        assertTrue(market.maintenanceRequired());
+
+        _advance(P0);
+        assertTrue(market.maintenanceRequired(), "the locked funded round still needs its close price");
+
+        _advance(P0 + 1e8);
+        assertFalse(market.maintenanceRequired(), "empty successor rounds need no upkeep");
+    }
+
     function test_stuckRoundBecomesRefundableWithNoAdminAction() public {
         uint256 a0 = usdt.balanceOf(alice);
         _betUp(alice, 1_000e18);

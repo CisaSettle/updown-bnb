@@ -54,6 +54,7 @@ describe('loadConfig', () => {
     expect(config.schedule.executeLeadMs).toBe(2_000);
     // Per RELAY, not per boundary: the scheduler multiplies it by the relays sharing the queue.
     expect(config.schedule.relayLeadMs).toBe(12_000);
+    expect(config.schedule.idlePollMs).toBe(1_000);
     expect(config.health.intervalsAllowed).toBe(2);
     expect(config.health.minBalanceWei).toBe(50_000_000_000_000_000n);
     expect(config.tx.maxAttempts).toBe(4);
@@ -61,6 +62,23 @@ describe('loadConfig', () => {
     // A total bootstrap failure degrades by default; exiting for a supervisor is opt-in, so that
     // whether the process survives a transient RPC outage is a decision and not an accident.
     expect(config.exitOnTotalBootstrapFailure).toBe(false);
+  });
+
+  it('fits the full three-feed dormant wake path inside the contract cutoff and rejects slower config', () => {
+    const threeFeeds = parseDeployment(
+      {
+        ...deploymentJson,
+        ethFeed: '0x6666666666666666666666666666666666666666',
+        bnbFeed: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      },
+      97,
+      '/fake/three-feeds.json',
+    );
+    const options = { loadDeploymentImpl: () => threeFeeds };
+    expect(loadConfig({ env: baseEnv, ...options }).schedule.idlePollMs).toBe(1_000);
+    expect(() => loadConfig({ env: { ...baseEnv, IDLE_POLL_MS: '2000' }, ...options })).toThrow(
+      /dormant first-bet path needs 51000 ms/,
+    );
   });
 
   it('publishes no extra relay prints unless asked to', () => {

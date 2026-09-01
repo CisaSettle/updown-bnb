@@ -161,9 +161,10 @@
                     │  enumerates markets  │    └──────────────────────┘
                     └──────────────────────┘</code></pre>
 <p>One market contract = one <code>(asset, duration)</code> pair. Rounds are called <strong>epochs</strong> and sit on an immutable timestamp grid, so <code>lockTs(N) == closeTs(N-1)</code> and consecutive rounds always share one boundary price.</p>
-<p>Three properties are worth knowing before reading any code:</p>
+<p>Four properties are worth knowing before reading any code:</p>
 <ol>
 <li><strong>Settlement is deterministic.</strong> The price of a boundary is the last Chainlink print at or <em>before</em> that boundary timestamp — not <code>latestRoundData()</code> at call time. The caller passes the round id and the contract proves it is the last qualifying one. Calling one second late and calling three minutes late give byte-identical outcomes.</li>
+<li><strong>Empty rounds need no upkeep.</strong> The open epoch follows the immutable time grid as a view; if nobody has bet, no keeper transaction, oracle relay or liquidity balance is required. The first bet materialises that epoch. On testnet, a dormant round stops admitting its first stake 50 seconds before lock so every newly awakened relay can still land; the next grid epoch opens by itself. Only funded risk wakes the keeper for locking and settlement.</li>
 <li><strong><code>executeRound</code> is permissionless.</strong> There is no operator role and no privileged settler. The project runs a keeper because someone should turn the crank promptly, not because the keeper is trusted. Winners have the incentive to call it themselves.</li>
 <li><strong>A round that cannot settle honestly is voided, not forced.</strong> Tie, one-sided book, no usable oracle print, settlement window elapsed, or an admin pause → every stake is refundable in full with zero fee. An outage degrades the product into refunds; it never produces a loss.</li>
 </ol>
@@ -260,9 +261,10 @@ npm run build                     # tsc --noEmit &amp;&amp; vite build → stati
                     │  enumerates markets  │    └──────────────────────┘
                     └──────────────────────┘</code></pre>
 <p>一个市场合约 = 一个 <code>(资产, 时长)</code> 组合。轮次称为 <strong>epoch</strong>，坐落在一张不可变的时间戳网格上，因此 <code>lockTs(N) == closeTs(N-1)</code>，相邻两轮必定共用同一个边界价格。</p>
-<p>在读任何代码之前，有三条性质值得先知道：</p>
+<p>在读任何代码之前，有四条性质值得先知道：</p>
 <ol>
 <li><strong>结算是确定性的。</strong> 一个边界的价格，是在那个边界时间戳<strong>当刻或之前</strong>的最后一笔 Chainlink 报价——不是调用当刻的 <code>latestRoundData()</code>。调用者传入轮次编号，由合约证明它就是最后一笔合格报价。晚一秒调用和晚三分钟调用，得到的结果 逐字节相同。</li>
+<li><strong>空轮次不需要维护。</strong> 正在开盘的 epoch 会作为只读结果沿着固定时间网格前进；没人下注时，不需要 keeper 交易、 预言机中继或流动性余额。第一笔下注才把该轮写上链。测试网上，空盘会在锁盘前 50 秒停止接收首注，给所有刚被唤醒的 中继留下上链时间；下一个网格轮次仍会自行开盘。只有真实资金风险才会唤醒 keeper 去锁定和结算。</li>
 <li><strong><code>executeRound</code> 无需许可。</strong> 没有 operator 角色，也没有特权结算人。项目方跑一个 keeper，是因为总该有人及时转动 曲柄，而不是因为 keeper 被信任。赢家自己就有动力去调用它。</li>
 <li><strong>一个无法诚实结算的轮次会被作废，而不是被强行结算。</strong> 平局、单边盘口、没有可用的预言机报价、结算窗口已过，或者 管理员暂停 → 每一笔本金都可全额退回，零手续费。故障会把产品降级成退款，永远不会制造亏损。</li>
 </ol>

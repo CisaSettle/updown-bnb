@@ -18,6 +18,7 @@ const config: MarketConfig = {
   isNative: false,
   paused: false,
   genesisStarted: true,
+  materializedEpoch: 42n,
   currentEpoch: 42n,
   oracle: '0x0000000000000000000000000000000000000005',
 }

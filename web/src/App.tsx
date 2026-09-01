@@ -68,7 +68,7 @@ function MarketView({ market }: { market: Market }) {
 
   const { config, isLoading: configLoading, error: configError, refetch: refetchConfig } = useMarketConfig(market.address)
   const currentEpoch = config?.currentEpoch
-  const rounds = useLiveRounds(market.address, currentEpoch)
+  const rounds = useLiveRounds(market.address, currentEpoch, config?.materializedEpoch)
   const oracle = useOraclePrice(config?.oracle ?? market.oracle, now)
   // The chart plots this feed and only this feed: it is the series `executeRound` proves its
   // boundary prices against, and no exchange price is fetched anywhere in this app.
@@ -90,7 +90,7 @@ function MarketView({ market }: { market: Market }) {
   )
   const token = useSettlementToken(config?.settlementAsset ?? market.asset, market.address, address)
   const positions = usePositions(market.address, address, now)
-  const history = useHistory(market.address, currentEpoch, 20)
+  const history = useHistory(market.address, config?.materializedEpoch, 20)
 
   const refreshAll = useCallback(() => {
     void refetchConfig()

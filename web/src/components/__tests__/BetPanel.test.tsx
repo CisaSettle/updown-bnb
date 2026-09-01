@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { MarketConfig } from '../../hooks/useMarketConfig'
 import type { Lang } from '../../lib/i18n'
 import { ONE, START, renderIn, round, usdt } from './fixtures'
+import type { Round } from '../../lib/market'
 
 vi.mock('wagmi', () => ({ useAccount: () => ({ isConnected: true }) }))
 vi.mock('../../hooks/useActiveChain', () => ({
@@ -24,17 +25,18 @@ const config: MarketConfig = {
   isNative: false,
   paused: false,
   genesisStarted: true,
+  materializedEpoch: 42n,
   currentEpoch: 42n,
   oracle: '0x0000000000000000000000000000000000000005',
 }
 
-function render(now: number, lang: Lang = 'en') {
+function render(now: number, lang: Lang = 'en', roundOverrides: Partial<Round> = {}) {
   return renderIn(
     lang,
     <BetPanel
       market="0x0000000000000000000000000000000000000001"
       config={config}
-      round={round()}
+      round={round(roundOverrides)}
       token={usdt}
       now={now}
       onDone={() => {}}
@@ -59,6 +61,12 @@ describe('BetPanel', () => {
   it('closes the form before the lock boundary', () => {
     expect(render(START + 298)).toContain('locks in a moment')
     expect(render(START + 301)).toContain('Betting is closed')
+  })
+
+  it('reserves 50 seconds to wake every queued relay only for a dormant first bet', () => {
+    const nearLock = START + 251
+    expect(render(nearLock, 'en', { upAmount: 0n, downAmount: 0n })).toContain('locks in a moment')
+    expect(render(nearLock)).toContain('Enter an amount.')
   })
 })
 

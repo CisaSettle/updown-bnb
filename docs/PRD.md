@@ -66,8 +66,8 @@ epoch N:  startTs ──── betting open (interval) ──── lockTs ─�
 - `closeTs(N)   = lockTs(N)  + interval`
 - Therefore **`lockTs(N) == closeTs(N-1)`**.
 
-`executeRound()` is called once per `interval` and does three things atomically with **one**
-oracle read, so there is never a price gap between consecutive rounds:
+When a funded round needs locking or settlement, `executeRound()` does three things atomically with
+**one** oracle read, so there is never a price gap between consecutive funded rounds:
 
 1. `_endRound(N-1, price)` → `closePrice(N-1) = price`, compute reward
 2. `_lockRound(N,   price)` → `lockPrice(N)   = price`
@@ -77,8 +77,10 @@ oracle read, so there is never a price gap between consecutive rounds:
 that has already locked settles at its true price — and the call then returns without doing steps 2
 and 3. See §6.
 
-Betting on epoch N is open during `[startTs(N), lockTs(N))`. At any wall-clock moment exactly
-one epoch is bettable and one epoch is live.
+Empty time-grid slots are virtual: `currentBettableEpoch()` and `getRound()` expose the epoch open at
+the current wall-clock time without a transaction, and the first bet materialises it. Betting on
+epoch N is open during `[startTs(N), lockTs(N))`. A prior funded epoch is live only while it still
+needs locking or settlement; empty epochs require no keeper gas, oracle relay, or liquidity balance.
 
 ### Invalid proof ≠ dead feed
 
@@ -315,17 +317,22 @@ function pendingPayout(uint256 epoch, address user) external view returns (uint2
 function odds(uint256 epoch) external view returns (uint256 upMultipleBps, uint256 downMultipleBps);
 function getRound(uint256 epoch) external view returns (Round memory);
 function currentBettableEpoch() external view returns (uint256);
+function maintenanceRequired() external view returns (bool);
+function FIRST_BET_MIN_LEAD_SECONDS() external view returns (uint256);
 ```
 
 ---
 
 ## 8. Off-chain components
 
-- **Keeper** (TypeScript + viem): resolves the boundary round id and calls
-  `executeRound(boundaryRoundId)` every `interval`, with retry, gas bump, balance alerting and an
-  idempotent catch-up path. It holds no on-chain privilege — anyone can run one — so a keeper outage
-  degrades to refunds, never to loss. On testnet it also relays real spot prices into
-  `RelayAggregator`.
+- **Keeper** (TypeScript + viem): polls `maintenanceRequired()` and sleeps through empty virtual
+  rounds. Only while funded risk needs locking or settlement does it resolve the boundary round id,
+  relay a testnet price, and call `executeRound(boundaryRoundId)`, with retry, gas bump, balance
+  alerting and an idempotent catch-up path. It holds no on-chain privilege — anyone can run one — so
+  a keeper outage degrades funded positions to refunds, never to loss. Old contracts without the
+  selector remain on the legacy always-on loop during rollout. A dormant testnet round admits its
+  first stake only with at least 50 seconds of relay runway, derived from the full three-feed queue
+  and both configured price endpoints; keeper configuration refuses a larger worst-case path.
 - **Web** (Vite + React 18 + wagmi v2 + viem + Tailwind, static build): live round card with countdown,
   both odds vocabularies, bet UP/DOWN, position + claim list, round history read from logs.
 - **Deploy scripts** (Foundry): deterministic deploy, BscScan verify, JSON deployment artifacts.

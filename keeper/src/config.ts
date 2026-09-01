@@ -10,7 +10,12 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { ConfigError, defaultDeploymentsPath, loadDeployment, type DeploymentFile } from './deployments.js';
 import { isLogLevel, type LogLevel } from './logger.js';
 import { DEFAULT_BACKOFF, type BackoffOptions } from './backoff.js';
-import { DEFAULT_RELAY_LEAD_MS, RELAY_TICK_GUARD_MS } from './schedule.js';
+import {
+  DEFAULT_RELAY_LEAD_MS,
+  DORMANT_FIRST_BET_MIN_LEAD_MS,
+  dormantFirstBetRunwayMs,
+  RELAY_TICK_GUARD_MS,
+} from './schedule.js';
 import { normaliseKey } from './price.js';
 
 export { ConfigError };
@@ -444,6 +449,31 @@ export function loadConfig(options: LoadConfigOptions = {}): KeeperConfig {
     issues.add(error instanceof Error ? error.message : `MIN_BALANCE_BNB is invalid`);
   }
 
+  const priceTimeoutMs = readInt(env, 'PRICE_TIMEOUT_MS', 4_000, issues, 250, 60_000);
+  const relayLeadMs = readInt(env, 'RELAY_LEAD_MS', DEFAULT_RELAY_LEAD_MS, issues, 1_000, 600_000);
+  const idlePollMs = readInt(env, 'IDLE_POLL_MS', 1_000, issues, 1_000, 600_000);
+  if (deployment?.relayFeeds) {
+    const relaySlots = Math.max(
+      1,
+      new Set(Object.values(deployment.feeds).map((address) => address.toLowerCase())).size,
+    );
+    const runwayMs = dormantFirstBetRunwayMs({
+      idlePollMs,
+      priceTimeoutMs,
+      priceEndpointCount: 1 + fallbackEndpoints.length,
+      relayLeadMs,
+      relaySlots,
+    });
+    if (runwayMs > DORMANT_FIRST_BET_MIN_LEAD_MS) {
+      issues.add(
+        `dormant first-bet path needs ${runwayMs} ms but the contract admits at most ` +
+          `${DORMANT_FIRST_BET_MIN_LEAD_MS} ms of runway. Lower IDLE_POLL_MS, PRICE_TIMEOUT_MS, ` +
+          `PRICE_API_FALLBACKS or RELAY_LEAD_MS; the keeper refuses a configuration that can accept ` +
+          `a first stake it cannot relay safely.`,
+      );
+    }
+  }
+
   const config: KeeperConfig = {
     chainId,
     chainName: chainMeta?.name ?? 'unknown',
@@ -461,7 +491,7 @@ export function loadConfig(options: LoadConfigOptions = {}): KeeperConfig {
     price: {
       endpoint: priceEndpoint,
       fallbackEndpoints,
-      timeoutMs: readInt(env, 'PRICE_TIMEOUT_MS', 4_000, issues, 250, 60_000),
+      timeoutMs: priceTimeoutMs,
       cacheTtlMs: readInt(env, 'PRICE_CACHE_TTL_MS', 1_500, issues, 0, 60_000),
       maxDeviationBps: readInt(env, 'PRICE_MAX_DEVIATION_BPS', 2_000, issues, 0, 10_000),
       symbolOverrides: parseSymbolOverrides(readString(env, 'SYMBOL_MAP'), issues),
@@ -469,11 +499,13 @@ export function loadConfig(options: LoadConfigOptions = {}): KeeperConfig {
 
     schedule: {
       executeLeadMs: readInt(env, 'EXECUTE_LEAD_MS', 2_000, issues, 0, 120_000),
-      relayLeadMs: readInt(env, 'RELAY_LEAD_MS', DEFAULT_RELAY_LEAD_MS, issues, 1_000, 600_000),
+      relayLeadMs,
       relayTickMs,
       maxTimerMs: readInt(env, 'MAX_TIMER_MS', 15 * 60_000, issues, 1_000, 2_147_483_000),
       minTimerMs: readInt(env, 'MIN_TIMER_MS', 0, issues, 0, 60_000),
-      idlePollMs: readInt(env, 'IDLE_POLL_MS', 30_000, issues, 1_000, 600_000),
+      // A first bet wakes a dormant testnet market. Poll quickly enough to relay before a 1-minute
+      // boundary; the worker uses a single maintenanceRequired() read while dormant.
+      idlePollMs,
     },
 
     oracle: {

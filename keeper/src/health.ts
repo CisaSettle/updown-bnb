@@ -254,7 +254,7 @@ export function evaluateMarketHealth(
       ...base,
       state: 'inactive',
       healthy: true,
-      reason: 'genesisStart() has not been called; nothing for the keeper to do',
+      reason: 'no funded round currently needs a keeper transaction',
     };
   }
 

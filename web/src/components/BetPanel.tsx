@@ -24,6 +24,8 @@ const NATIVE_GAS_BUFFER = parseEther('0.002')
  * wasted gas. Closing the form early is strictly more conservative than the contract's own rule.
  */
 const LOCK_GRACE_SECONDS = 3
+/** The first stake has to leave time for the dormant testnet relay keeper to wake and land. */
+const DORMANT_FIRST_BET_GRACE_SECONDS = 50
 
 export function BetPanel({
   market,
@@ -73,7 +75,9 @@ export function BetPanel({
 
   const phase = roundPhase(round, now)
   const secondsToLock = round ? Number(round.lockTs) - now : 0
-  const inLockGrace = phase === 'betting' && secondsToLock <= LOCK_GRACE_SECONDS
+  const isDormant = (round?.upAmount ?? 0n) === 0n && (round?.downAmount ?? 0n) === 0n
+  const lockGraceSeconds = isDormant ? DORMANT_FIRST_BET_GRACE_SECONDS : LOCK_GRACE_SECONDS
+  const inLockGrace = phase === 'betting' && secondsToLock <= lockGraceSeconds
   const bettingOpen = phase === 'betting' && !inLockGrace && !config.paused && config.genesisStarted
 
   const upAmount = round?.upAmount ?? 0n

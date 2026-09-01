@@ -95,6 +95,8 @@ interface KeeperState {
   minBalanceWei: bigint;
   /** Seconds the fake chain's clock runs ahead of this host's. */
   chainSkewSec: number;
+  genesisStarted: boolean;
+  maintenanceRequired: boolean;
 }
 
 function makeKeeper(over: Partial<KeeperState> = {}) {
@@ -103,6 +105,8 @@ function makeKeeper(over: Partial<KeeperState> = {}) {
     balanceWei: ONE_BNB,
     minBalanceWei: 50_000_000_000_000_000n,
     chainSkewSec: 0,
+    genesisStarted: false,
+    maintenanceRequired: false,
     ...over,
   };
 
@@ -124,9 +128,11 @@ function makeKeeper(over: Partial<KeeperState> = {}) {
       // Both markets are closed, so nothing here ever tries to execute a round: the only thing
       // that can make this keeper unhealthy is the keeper itself.
       case 'genesisStarted':
-        return false;
+        return state.genesisStarted;
       case 'paused':
         return false;
+      case 'maintenanceRequired':
+        return state.maintenanceRequired;
       case 'currentEpoch':
         return 0n;
       case 'getRound':
@@ -295,25 +301,24 @@ describe('Keeper total bootstrap failure', () => {
 });
 
 describe('Keeper balance health', () => {
-  it('is unhealthy when the keeper cannot pay for a transaction at all', async () => {
+  it('keeps an empty virtual market healthy when no keeper transaction is needed', async () => {
     const h = makeKeeper({ balanceWei: 0n });
     await h.keeper.start();
     await settle(h.keeper);
 
     const report = h.keeper.health();
-    // Every market is inside its budget — the account is the only thing wrong, and it is fatal:
-    // it can neither relay a boundary price nor settle a round.
     expect(report.markets.every((m) => m.healthy)).toBe(true);
-    expect(report.healthy).toBe(false);
-    expect(report.blockers.join(' ')).toMatch(/cannot pay for a single transaction/);
+    expect(report.healthy).toBe(true);
+    expect(report.blockers).toEqual([]);
+    expect(report.warnings.join(' ')).toMatch(/no funded round currently needs maintenance/);
 
     await h.keeper.stop();
   });
 
-  it('makes /healthz answer 503, not just an unhealthy field nobody reads', async () => {
+  it('makes /healthz answer 503 once funded risk needs an unfunded keeper', async () => {
     // The health report only matters if it reaches the endpoint an operator or load balancer
     // actually polls, so assert the status code the socket sees rather than the struct behind it.
-    const h = makeKeeper({ balanceWei: 0n });
+    const h = makeKeeper({ balanceWei: 0n, genesisStarted: true, maintenanceRequired: true });
     await h.keeper.start();
     await settle(h.keeper);
 
@@ -328,14 +333,18 @@ describe('Keeper balance health', () => {
     await h.keeper.stop();
   });
 
-  it('is unhealthy just below one transaction, and healthy just above it', async () => {
-    const under = makeKeeper({ balanceWei: ONE_TX - 1n });
+  it('is unhealthy just below one transaction when funded work exists, and healthy just above it', async () => {
+    const under = makeKeeper({
+      balanceWei: ONE_TX - 1n,
+      genesisStarted: true,
+      maintenanceRequired: true,
+    });
     await under.keeper.start();
     await settle(under.keeper);
     expect(under.keeper.health().healthy).toBe(false);
     await under.keeper.stop();
 
-    const over = makeKeeper({ balanceWei: ONE_TX });
+    const over = makeKeeper({ balanceWei: ONE_TX, genesisStarted: true, maintenanceRequired: true });
     await over.keeper.start();
     await settle(over.keeper);
     expect(over.keeper.health().healthy).toBe(true);
@@ -360,7 +369,12 @@ describe('Keeper balance health', () => {
     // 0.02 tBNB with a 0.01 tBNB floor and a 0.03 tBNB worst-case transaction. The operator's floor
     // is happy; the chain is not. Letting the configured floor replace the transaction cost reported
     // 200 while the keeper could neither relay a boundary price nor settle a round.
-    const h = makeKeeper({ balanceWei: 20_000_000_000_000_000n, minBalanceWei: 10_000_000_000_000_000n });
+    const h = makeKeeper({
+      balanceWei: 20_000_000_000_000_000n,
+      minBalanceWei: 10_000_000_000_000_000n,
+      genesisStarted: true,
+      maintenanceRequired: true,
+    });
     await h.keeper.start();
     await settle(h.keeper);
 
@@ -472,6 +486,8 @@ function makeSettlingKeeper(receiptLogs: () => unknown[], opts: { chainSkewSec?:
         return true;
       case 'paused':
         return false;
+      case 'maintenanceRequired':
+        return true;
       case 'currentEpoch':
         return state.currentEpoch;
       case 'boundaryTimestamp':

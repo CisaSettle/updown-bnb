@@ -23,10 +23,10 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
-import { encodeAbiParameters, encodeEventTopics, type Address, type Hex } from 'viem';
+import { ContractFunctionRevertedError, encodeAbiParameters, encodeEventTopics, type Address, type Hex } from 'viem';
 import { marketAbi } from '../src/abi.js';
 import { ChainClock } from '../src/clock.js';
-import { MarketWorker, RelayCoordinator, type MarketDeps } from '../src/market.js';
+import { isMissingMaintenanceSelector, MarketWorker, RelayCoordinator, type MarketDeps } from '../src/market.js';
 import { MetricsRegistry } from '../src/metrics.js';
 import { TxQueue } from '../src/tx.js';
 import { PriceSource } from '../src/price.js';
@@ -67,6 +67,10 @@ interface RoundState {
 
 interface ChainState {
   currentEpoch: bigint;
+  /** `maintenanceRequired()`: whether funded risk still needs an on-chain boundary transaction. */
+  maintenanceRequired: boolean;
+  /** Old deployments do not expose the selector; the worker must retain its legacy schedule. */
+  maintenanceRequiredError: 'missing-selector' | 'rpc' | null;
   lockTs: number;
   chainNow: number;
   findRoundThrows: boolean;
@@ -217,6 +221,8 @@ function makeHarness(over: HarnessOptions = {}) {
   } = over;
   const state: ChainState = {
     currentEpoch: 42n,
+    maintenanceRequired: true,
+    maintenanceRequiredError: null,
     lockTs: LOCK_TS,
     chainNow: LOCK_TS + 2,
     findRoundThrows: false,
@@ -268,6 +274,16 @@ function makeHarness(over: HarnessOptions = {}) {
         return true;
       case 'paused':
         return state.paused;
+      case 'maintenanceRequired':
+        if (state.maintenanceRequiredError === 'missing-selector') {
+          throw new ContractFunctionRevertedError({
+            abi: marketAbi,
+            data: '0x',
+            functionName: 'maintenanceRequired',
+          });
+        }
+        if (state.maintenanceRequiredError === 'rpc') throw new Error('RPC 429 rate limited');
+        return state.maintenanceRequired;
       case 'oraclePhase':
         return state.oraclePhase;
       case 'currentEpoch':
@@ -429,6 +445,18 @@ function makeHarness(over: HarnessOptions = {}) {
 const failures = (h: { deps: MarketDeps }, kind: string): number | undefined =>
   h.deps.metrics.get('updown_keeper_failures_total', { market: 'btcUsd5m', kind });
 
+describe('maintenanceRequired rollout capability detection', () => {
+  it('distinguishes a no-data selector revert from a transient RPC error', () => {
+    const missing = new ContractFunctionRevertedError({
+      abi: marketAbi,
+      data: '0x',
+      functionName: 'maintenanceRequired',
+    });
+    expect(isMissingMaintenanceSelector(missing)).toBe(true);
+    expect(isMissingMaintenanceSelector(new Error('RPC 429 rate limited'))).toBe(false);
+  });
+});
+
 /** The `executeRound` simulations a worker attempted, in order. */
 const executeSimulations = (h: {
   publicClient: { simulateContract: { mock: { calls: unknown[][] } } };
@@ -438,6 +466,65 @@ const executeSimulations = (h: {
   );
 
 describe('MarketWorker execute path', () => {
+  it('sleeps through empty virtual rounds without relaying or executing', async () => {
+    const h = makeHarness({ maintenanceRequired: false });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(h.calls).toContain('maintenanceRequired'), { timeout: 2_000, interval: 5 });
+    h.worker.stop();
+
+    expect(h.worker.active).toBe(false);
+    expect(h.publicClient.simulateContract).not.toHaveBeenCalled();
+  });
+
+  it('keeps old contracts on the always-on loop when maintenanceRequired is unavailable', async () => {
+    const h = makeHarness({ maintenanceRequired: false, maintenanceRequiredError: 'missing-selector' });
+    await h.worker.bootstrap();
+
+    h.worker.start();
+    await vi.waitFor(() => expect(h.worker.active).toBe(true), { timeout: 2_000, interval: 5 });
+    await vi.waitFor(() => expect(h.publicClient.simulateContract).toHaveBeenCalled(), {
+      timeout: 2_000,
+      interval: 5,
+    });
+    h.worker.stop();
+  });
+
+  it('retries a transient maintenanceRequired RPC failure instead of caching legacy mode', async () => {
+    const h = makeHarness({ maintenanceRequired: false, maintenanceRequiredError: 'rpc' });
+    h.deps.config.schedule.idlePollMs = 25;
+    await h.worker.bootstrap();
+    h.worker.start();
+    await vi.waitFor(() => expect(failures(h, 'read')).toBe(1), { timeout: 2_000, interval: 5 });
+
+    h.state.maintenanceRequiredError = null;
+    await vi.waitFor(
+      () => expect(h.calls.filter((call) => call === 'maintenanceRequired').length).toBeGreaterThanOrEqual(2),
+      { timeout: 2_000, interval: 5 },
+    );
+    h.worker.stop();
+
+    expect(h.worker.active).toBe(false);
+    expect(h.publicClient.simulateContract).not.toHaveBeenCalled();
+  });
+
+  it('wakes promptly when the first bet makes dormant maintenance necessary', async () => {
+    const h = makeHarness({ maintenanceRequired: false });
+    h.deps.config.schedule.idlePollMs = 250;
+    await h.worker.bootstrap();
+    h.worker.start();
+    await vi.waitFor(() => expect(h.calls).toContain('maintenanceRequired'), { timeout: 2_000, interval: 5 });
+    expect(h.worker.active).toBe(false);
+
+    h.state.maintenanceRequired = true;
+    await vi.waitFor(() => expect(h.publicClient.simulateContract).toHaveBeenCalled(), {
+      timeout: 2_000,
+      interval: 5,
+    });
+    h.worker.stop();
+  });
+
   it('prices the boundary read at send time, not the one captured when the tick was planned', async () => {
     const h = makeHarness();
     await h.worker.bootstrap();

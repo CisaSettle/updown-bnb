@@ -32,6 +32,35 @@ export const MAX_TIMEOUT_MS = 2_147_483_647;
 // headroom while fitting all three writes plus the 10-second clock/block safety margin.
 export const DEFAULT_RELAY_LEAD_MS = 12_000;
 
+/** Mirrors the contract's 50-second cutoff for the first stake in a dormant relay-backed round. */
+export const DORMANT_FIRST_BET_MIN_LEAD_MS = 50_000;
+
+/**
+ * Non-price, non-queue budget for the dormant poll plus snapshot/simulation/RPC round trips.
+ * The price and relay budgets below are already worst-case and this is deliberately conservative.
+ */
+export const DORMANT_RPC_RESERVE_MS = 5_000;
+
+/**
+ * Worst official-keeper path from an accepted dormant first bet to the last distinct relay feed
+ * landing: one idle poll, every price endpoint timing out in sequence, then every feed sharing the
+ * key consuming its full per-relay queue budget, plus RPC/simulation reserve.
+ */
+export function dormantFirstBetRunwayMs(options: {
+  idlePollMs: number;
+  priceTimeoutMs: number;
+  priceEndpointCount: number;
+  relayLeadMs: number;
+  relaySlots: number;
+}): number {
+  return (
+    options.idlePollMs +
+    options.priceTimeoutMs * options.priceEndpointCount +
+    options.relayLeadMs * options.relaySlots +
+    DORMANT_RPC_RESERVE_MS
+  );
+}
+
 /**
  * Least time a relay needs between dequeuing and the boundary for its print to have any chance of
  * landing at or before it. A print's `updatedAt` is the timestamp of the block it lands in, so

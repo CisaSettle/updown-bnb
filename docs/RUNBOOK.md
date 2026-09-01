@@ -377,13 +377,22 @@ eliminated and the app ships injected-only.
 
 ### What the keeper actually does
 
-Per market, once per `interval`:
+Per market, the keeper first reads `maintenanceRequired()`. If no funded round still needs a lock
+or settlement, it sleeps on `IDLE_POLL_MS`: empty grid slots stay open virtually and burn no gas.
+An old deployment without that selector automatically stays on the legacy always-on schedule, so
+the keeper binary and replacement addresses can be rolled out in either order. A dormant testnet
+round admits its first stake only while at least 50 seconds remain before lock. The bound is the
+worst configured path: 1s idle poll + two 4s price endpoints + three 12s relay queue slots + 5s for
+snapshot/simulation RPCs = 50s. Configuration loading refuses any combination that exceeds this
+contract cutoff. The next grid round opens without a transaction.
 
-1. read `boundaryTimestamp()` — the boundary the next call must price;
-2. (testnet only) fetch a real spot price and `relay()` it into the market's `RelayAggregator`,
+When funded work exists, it:
+
+1. reads `boundaryTimestamp()` — the boundary the next call must price;
+2. (testnet only) fetches a real spot price and `relay()`s it into the market's `RelayAggregator`,
    `RELAY_LEAD_MS` before the boundary;
-3. resolve the boundary round id with `findRoundIdAt(...)` over `eth_call`;
-4. send `executeRound(roundId)`, `EXECUTE_LEAD_MS` after the boundary, with retry, gas bumping and
+3. resolves the boundary round id with `findRoundIdAt(...)` over `eth_call`;
+4. sends `executeRound(roundId)`, `EXECUTE_LEAD_MS` after the boundary, with retry, gas bumping and
    an idempotent catch-up path.
 
 It holds **no privilege on the markets**. The only privileged thing it does is write to the testnet
@@ -422,7 +431,7 @@ Boot fails loudly and lists **every** problem at once if any value is invalid.
 | `METRICS_PORT` / `METRICS_HOST` | `9464` / `0.0.0.0` | `/healthz` and `/metrics` listener |
 | `EXECUTE_LEAD_MS` | `2000` | Delay after the boundary before calling `executeRound` |
 | `RELAY_LEAD_MS` | `12000` | Budget for **one** relay before the boundary (testnet only). The actual lead is this multiplied by the number of relays sharing that boundary, then clamped to `oracleMaxAge` less a 10s margin — `relayCapacity()` reports how many a feed can genuinely carry. |
-| `IDLE_POLL_MS` | `30000` | Re-poll interval for a paused / not-yet-started market |
+| `IDLE_POLL_MS` | `1000` | One cheap `maintenanceRequired()` poll while empty, fast enough to catch the first bet before a 1-minute testnet boundary; also re-polls paused / not-yet-started markets |
 | `FIND_ROUND_MAX_STEPS` | `64` | Bound on the `findRoundIdAt` walk-back |
 | `PRICE_API` | Binance ticker | Spot price source for testnet relays |
 | `PRICE_API_FALLBACKS` | `data-api.binance.vision` | Comma-separated fallbacks |
@@ -451,13 +460,14 @@ curl -fsS localhost:9464/metrics            # Prometheus text format
 |---|---|---|---|
 | `ok` | yes | Executed within `HEALTH_INTERVALS × interval` | none |
 | `paused` | yes | Market is paused. Either nothing is owed, or a round locked *before* the pause is still inside its settlement window and the keeper is still calling `executeRound` for it — pause stops new risk, never risk already taken | none, unless you did not expect it to be paused |
-| `inactive` | yes | `genesisStart()` has not been called — nothing for the keeper to do. **Paused is a separate state**, not this one | none, unless you expected it to be live |
+| `inactive` | yes | No funded round currently needs a keeper transaction. This includes a market whose empty rounds remain virtually open, and one whose `genesisStart()` has not been called. **Paused is a separate state**, not this one | none |
 | `degraded` | **no** | The keeper is calling on time but what it settles is worthless. Three causes: a keeper-side fault (a relay feed this key may not write); too many fault-voids in the recent settlement window; or **a paused market whose already-locked round ran out its settlement window**, which has just turned a decided outcome into refunds | **Page.** For the third cause, unpausing is *not* the fix — settling is, and it works while paused. See §3.4 and residual risk 2 in §4 |
 | `stale` | **no** | No successful `executeRound` inside the budget | **Page.** Rounds are heading for void/refund — see §3.1 |
 | `unknown` | **no** | The keeper has never successfully read this market's state | **Page.** Almost always the RPC or a wrong address: re-run the §1.4 sanity-check calls against the addresses in `DEPLOYMENTS_PATH` |
 
-`warnings[]` carries non-fatal conditions, chiefly **low keeper balance**. Treat it as a same-day
-ticket: when the keeper runs out of gas it stops executing, and stale follows.
+`warnings[]` carries non-fatal conditions, chiefly **low keeper balance**. An unfunded keeper is a
+warning while every market is empty, because no transaction is required; it becomes a blocker and
+`/healthz` returns 503 as soon as funded risk needs locking or settlement.
 
 Suggested alerts: `/healthz` non-200 for > 1 interval; any market `stale`; low-balance warning
 present for > 10 minutes; keeper process not running.
@@ -490,14 +500,16 @@ human captcha, so any claim of fully unattended replenishment would be false.
 
 ### Keeping the testnet in gas
 
-At the current one-minute cadence, the full board burns roughly **0.25–0.30 tBNB/day**; the exact
-number moves with BSC testnet gas price and how many claims the bots sweep. Only the chain's own
-faucet mints tBNB, so this is a daily operating dependency rather than a one-time setup.
+With demo liquidity betting every round at the current one-minute cadence, the full board burns
+roughly **0.25–0.30 tBNB/day**; the exact number moves with BSC testnet gas price and how many claims
+the bots sweep. With no bets, empty rounds are virtual and the recurring keeper/relay gas cost is
+zero. Only the chain's own faucet mints tBNB, so gas remains an operating dependency whenever demo
+liquidity or real funded positions exist.
 
-Watch the keeper first. A dry bot only means a still book; a dry keeper means markets go stale and
-already-locked rounds run out their settlement windows and refund — the one failure mode users
-see. The keeper's own `MIN_BALANCE_BNB` warning (default 0.05) is the early signal, and it fires in
-`/healthz` `warnings[]` well before anything stops.
+Watch funded risk first. A dry bot means a still but normally open empty book. A dry keeper matters
+only after somebody bets: that funded round can then run out its lock/settlement window and refund.
+The keeper's `MIN_BALANCE_BNB` warning (default 0.05) stays visible before that happens, but it does
+not turn an empty virtual market into an outage.
 
 **`RELAY_TICK_MS` is the lever, and `0` is the setting that costs nothing.** Two different things
 publish prices, and only one of them matters for money. Every boundary gets its own required relay

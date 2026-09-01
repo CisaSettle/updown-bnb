@@ -19,9 +19,16 @@ export interface LiveRoundData {
  * Reads the two rounds that make up the live card in a single multicall, on a 3s cadence.
  * Odds come from the contract so the displayed number is the number the contract would use.
  */
-export function useLiveRounds(market: Address | undefined, currentEpoch: bigint | undefined) {
-  const hasPrev = currentEpoch !== undefined && currentEpoch > 1n
-  const prevEpoch = hasPrev ? currentEpoch - 1n : 0n
+export function useLiveRounds(
+  market: Address | undefined,
+  currentEpoch: bigint | undefined,
+  materializedEpoch: bigint | undefined = currentEpoch,
+) {
+  // Across an empty spell `currentEpoch` is a projected time-grid slot while the stored epoch stays
+  // behind. There is no adjacent live round to invent; funded history remains keyed to storage.
+  const hasPrev =
+    currentEpoch !== undefined && materializedEpoch !== undefined && currentEpoch === materializedEpoch && currentEpoch > 1n
+  const prevEpoch = hasPrev ? (materializedEpoch as bigint) - 1n : 0n
 
   const query = useReadContracts({
     contracts: [

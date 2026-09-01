@@ -58,6 +58,19 @@ export const upDownMarketERC20Abi = [
   },
   {
     "type": "function",
+    "name": "FIRST_BET_MIN_LEAD_SECONDS",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MAX_FEE_BPS",
     "inputs": [],
     "outputs": [
@@ -641,6 +654,19 @@ export const upDownMarketERC20Abi = [
       },
       {
         "name": "claimed",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "maintenanceRequired",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
         "type": "bool",
         "internalType": "bool"
       }

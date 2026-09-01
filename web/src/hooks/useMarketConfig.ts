@@ -17,6 +17,9 @@ export interface MarketConfig {
   isNative: boolean
   paused: boolean
   genesisStarted: boolean
+  /** Last round written to storage; history and the live settlement lane key off this. */
+  materializedEpoch: bigint
+  /** Round accepting bets now, including a virtual empty-grid round not written yet. */
   currentEpoch: bigint
   oracle: Address
 }
@@ -39,6 +42,7 @@ export function useMarketConfig(market: Address | undefined) {
       { chainId: CHAIN_ID, address: market, abi: marketViewAbi, functionName: 'paused' },
       { chainId: CHAIN_ID, address: market, abi: marketViewAbi, functionName: 'genesisStarted' },
       { chainId: CHAIN_ID, address: market, abi: marketViewAbi, functionName: 'currentEpoch' },
+      { chainId: CHAIN_ID, address: market, abi: marketViewAbi, functionName: 'currentBettableEpoch' },
       { chainId: CHAIN_ID, address: market, abi: marketViewAbi, functionName: 'oracle' },
     ],
     query: {
@@ -51,8 +55,9 @@ export function useMarketConfig(market: Address | undefined) {
   const config = useMemo<MarketConfig | undefined>(() => {
     const data = query.data as readonly unknown[] | undefined
     const interval = asBigInt(pick(data, 0))
-    const currentEpoch = asBigInt(pick(data, 9))
-    if (interval === undefined || currentEpoch === undefined) return undefined
+    const materializedEpoch = asBigInt(pick(data, 9))
+    const currentEpoch = asBigInt(pick(data, 10))
+    if (interval === undefined || materializedEpoch === undefined || currentEpoch === undefined) return undefined
     const settlementAsset = asAddress(pick(data, 6)) ?? zeroAddress
     return {
       interval: Number(interval),
@@ -65,8 +70,9 @@ export function useMarketConfig(market: Address | undefined) {
       isNative: settlementAsset.toLowerCase() === zeroAddress,
       paused: asBool(pick(data, 7)) ?? false,
       genesisStarted: asBool(pick(data, 8)) ?? false,
+      materializedEpoch,
       currentEpoch,
-      oracle: asAddress(pick(data, 10)) ?? zeroAddress,
+      oracle: asAddress(pick(data, 11)) ?? zeroAddress,
     }
   }, [query.data])
 

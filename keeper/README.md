@@ -218,7 +218,7 @@ Only the first three are required.
 | `RELAY_LEAD_MS` | `12000` | Budget for **one** relay before `lockTs` (testnet only). The actual lead is this × the relay feeds sharing the boundary, capped at the round's `oracleMaxAge` less a 10 s block-time/clock-skew margin. Twelve seconds fits all three 1-minute feeds inside their 50-second age budget while retaining headroom over observed confirmation latency. |
 | `RELAY_TICK_MS` | `0` (off) | **Testnet only.** Publish an extra relay print roughly this often *between* boundaries, so the feed has a mainnet-like density to chart. Minimum `30000`; refused on `CHAIN_ID=56`. Ticks are skipped rather than queued whenever a boundary relay on that feed is due, never take the boundary's queue slot or claim, and get two attempts at an 8 s receipt wait so a tick clears its own nonce rather than leaving one in front of a relay. See [Testnet feed density](#testnet-feed-density--relay_tick_ms-optional-off-by-default). |
 | `MAX_TIMER_MS` | `900000` | Cap on a single timer; state is re-read at least this often. |
-| `IDLE_POLL_MS` | `30000` | Poll interval for a market with nothing to do: `genesisStart()` not called, or paused with no locked round left to settle. A paused market whose previous epoch is still **locked** is not idle — it is driven on the normal round schedule (relay lead, then `executeRound`) until that round settles. |
+| `IDLE_POLL_MS` | `1000` | While an open market is empty this is one cheap `maintenanceRequired()` read. The contract accepts a dormant round's first stake only with at least 50 seconds left: 1s poll + two 4s price endpoints + three 12s relay queue slots + 5s RPC reserve. Config loading refuses a larger worst-case path. Before genesis or while paused it is the ordinary re-poll interval. |
 | `TX_MAX_ATTEMPTS` | `4` | Attempts per logical transaction, including the first. |
 | `TX_RECEIPT_TIMEOUT_MS` | `30000` | How long to wait for a receipt before bumping and replacing. |
 | `TX_CONFIRMATIONS` | `1` | Confirmations required. |
@@ -285,7 +285,7 @@ journalctl -u updown-keeper -f -o cat | jq 'select(.market=="btcUsd1m")'
 | State | Healthy | Meaning |
 | --- | --- | --- |
 | `ok` | yes | Executed within `HEALTH_INTERVALS × interval`. |
-| `inactive` | yes | `genesisStart()` has not been called. The keeper is working; the market is closed. |
+| `inactive` | yes | No funded round needs a keeper transaction. Empty rounds remain virtually open without gas; a market before `genesisStart()` is also inactive. |
 | `paused` | yes | The market is paused. The per-market field `pausedSettlement` says what that means: `none` — nothing outstanding; `pending` — a round that locked **before** the pause is inside its settlement window and the keeper is still calling `executeRound` for it. Pause stops new risk, never risk already taken. |
 | `stale` | no | Active, but no execution inside the budget. |
 | `degraded` | no | Executing on time and *not actually settling anything*, **or** paused with `pausedSettlement: "missed"` — a round that locked before the pause ran out its settlement window, so every stake in it, the losing side included, is refundable now. `executeRound` is not pausable precisely so that cannot happen, and this is the alarm for when it does anyway. The other two cases: the keeper key is not the relay feed's `updater`, so every `relay()` reverts; or more than half of the rounds it has completed recently (minimum sample 4, window 12 rounds) voided for a reason it is answerable for — no usable boundary print, never locked, settlement window elapsed. The execution budget alone reports both green, which is exactly why they are called out. A `tie` or a `one-sided-book` void is the market working as designed and never counts. |
@@ -299,12 +299,11 @@ reason it could not be read, and the keeper keeps retrying it (5s, backing off t
 comes up, at which point it is supervised normally. A market that disappeared from both supervision
 and the report is a market whose rounds void behind a green `/healthz`.
 
-The body also carries `warnings` (non-fatal) and `blockers`. A blocker fails the report on its own,
-however healthy the markets look: a keeper account that cannot pay for a single transaction (600k gas
-at `MAX_GAS_PRICE_GWEI`), because it can neither relay a boundary price nor settle a round; and a
-boot at which no market came up at all. A balance under `MIN_BALANCE_BNB` that can still transact
-stays a warning — but `MIN_BALANCE_BNB` never moves the hard line *down*: below the cost of one
-transaction the account is unfunded whatever it is set to.
+The body also carries `warnings` (non-fatal) and `blockers`. A blocker fails the report on its own.
+An account below the cost of one transaction (600k gas at `MAX_GAS_PRICE_GWEI`) is a warning while
+all rounds are empty, because empty grid slots need no write; it becomes a blocker immediately when
+funded risk needs a lock or settlement. A boot at which no market came up at all is always a blocker.
+A balance under `MIN_BALANCE_BNB` that can still transact stays a warning.
 
 **`GET /metrics`** → Prometheus text format:
 
@@ -393,7 +392,8 @@ host's clock has moved away from the chain's, which is the usual cause of that.
 | Market predates the phase pinning | It has no `oraclePhase()`, so it fails to bootstrap on purpose, stays in `/healthz` as `unknown`, and is retried. Guessing the phase would mean sending boundary ids the contract reverts on. Redeploy from the current source. |
 | `findRoundIdAt` itself fails (RPC error) | The tick aborts and retries. "We could not look" is **not** treated as "the feed has no print": sending anyway would void a round that is still perfectly settleable. Past the settlement window the round can only void regardless, so the call is then still made. |
 | Someone else calls `executeRound` first | `executeRound` is permissionless, so the epoch can move while a tick is queued. The boundary and epoch are re-read from chain immediately before sending; if they moved, the keeper re-plans instead of pricing a stale boundary. A stale boundary's round id will not prove the live boundary, so the call reverts, burns gas and leaves the round to run down its buffer. |
-| Keeper was down for hours | One `executeRound` fast-forwards `currentEpoch` on chain. The keeper re-reads `currentEpoch` afterwards and logs how many rounds were skipped. |
+| Keeper was down for hours | Empty rounds need no recovery transaction: `currentBettableEpoch()` follows the time grid as a view and the first bet materialises it. If funded risk expired during the outage, it is refundable and the first later bet can materialise the current epoch. |
+| No funded positions | `maintenanceRequired()` is false. The keeper polls on `IDLE_POLL_MS` and sends no relay or `executeRound` transaction; `/healthz` stays healthy even if its gas balance is empty. A dormant first bet closes 50 seconds before lock so the full three-feed relay queue has its derived worst-case runway. If the selector is positively absent on an old deployment, the keeper safely retains the legacy always-on schedule until that worker is replaced; ordinary RPC failures are retried and never cached as legacy. |
 | No genesis | Polled every `IDLE_POLL_MS`, reported `inactive`, not counted as unhealthy. |
 | Market paused | Reported `paused`, healthy. If a round was **locked** before the pause, the keeper keeps relaying (testnet) and calling `executeRound` for it on the normal schedule until it settles, then goes quiet on `IDLE_POLL_MS`; density ticks are suppressed entirely for the duration, because they share the one key with the settlement that matters. `executeRound` is not pausable, so a pause cannot be used as a cancel button by an owner who is also a bettor and has just watched the settlement print go against them. If that round's window elapses first, the market is `degraded`, `/healthz` answers `503`, and `failures_total{kind="paused-settlement-missed"}` increments once for that epoch. A round that had *not* locked when the pause landed has no strike and refunds on its own timer, with no transaction from anybody. |
 | One market misbehaving | Contained to that market. A tick that achieves nothing backs off exponentially (2 s → 60 s) instead of spinning. The backoff is clamped for a **relay** wake so it can never grow past the boundary the print must beat — otherwise the backoff would void the very round it exists to protect. |

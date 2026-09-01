@@ -85,6 +85,8 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     // ─────────────────────────────────────────────────────────────────────────
 
     uint256 public constant MAX_FEE_BPS = 1000; // 10% hard cap
+    /// @notice Minimum runway required when the very first stake wakes a dormant testnet relay.
+    uint256 public constant FIRST_BET_MIN_LEAD_SECONDS = 50;
     uint256 private constant BPS = 10_000;
     /// @dev Chainlink proxy round ids are `phaseId << 64 | aggregatorRoundId`.
     uint256 private constant PHASE_SHIFT = 64;
@@ -175,6 +177,7 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     uint8 internal constant VOID_ONE_SIDED = 3; // no counterparty on the other side
     uint8 internal constant VOID_NOT_LOCKED = 4; // round never received a strike
     uint8 internal constant VOID_WINDOW = 5; // settlement window elapsed
+    uint8 internal constant VOID_EMPTY = 6; // no stake existed, so the round was skipped without upkeep
 
     // ─────────────────────────────────────────────────────────────────────────
     // Errors
@@ -264,10 +267,18 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
 
     function _bet(uint256 epoch, bool isUp, uint256 amount) internal whenNotPaused nonReentrant {
         if (!genesisStarted) revert NotStarted();
+        _activateBettableRound(epoch);
         if (epoch != currentEpoch) revert WrongEpoch();
 
         Round storage r = _rounds[epoch];
         if (r.startTs == 0 || block.timestamp < r.startTs || block.timestamp >= r.lockTs || r.voided) {
+            revert NotBettable();
+        }
+        // An empty market has deliberately not been paying for relay prints. Its first stake is
+        // what wakes the keeper, so do not accept that stake too close to the strike boundary for
+        // the 1s dormant poll + price fetch + transaction landing budget. Once a round is funded,
+        // the keeper is already active and ordinary bets remain open until `lockTs`.
+        if (r.upAmount == 0 && r.downAmount == 0 && block.timestamp + FIRST_BET_MIN_LEAD_SECONDS > r.lockTs) {
             revert NotBettable();
         }
         if (amount < minBetAmount) revert BelowMinBet();
@@ -477,7 +488,36 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     }
 
     function _startRound(uint256 epoch) internal {
-        Round storage r = _rounds[epoch];
+        Round memory next = _projectedRound(epoch);
+        _rounds[epoch] = next;
+        emit RoundStarted(epoch, next.startTs, next.lockTs, next.closeTs, next.feeBps);
+    }
+
+    /**
+     * @dev Materialise the time-grid round named by the first bet after an empty spell.
+     *      Empty rounds carry no user funds and therefore need no oracle proof or maintenance
+     *      transaction. A funded round may only be skipped after its own refund deadline, when
+     *      `_isExpired` has already made every stake collectable in full.
+     */
+    function _activateBettableRound(uint256 epoch) internal {
+        if (epoch == currentEpoch) return;
+        if (epoch != currentBettableEpoch()) revert WrongEpoch();
+
+        Round storage old = _rounds[currentEpoch];
+        if (old.startTs != 0 && !old.settled && !old.voided) {
+            bool funded = old.upAmount != 0 || old.downAmount != 0;
+            old.voided = true;
+            emit RoundVoided(currentEpoch, funded ? VOID_WINDOW : VOID_EMPTY);
+        }
+
+        currentEpoch = epoch;
+        _startRound(epoch);
+    }
+
+    /**
+     * Build the round that occupies `epoch` on the immutable time grid, without writing storage.
+     */
+    function _projectedRound(uint256 epoch) internal view returns (Round memory r) {
         uint256 start = anchorTs + (epoch - epochAnchor) * interval;
         uint256 close = start + interval * 2;
         if (close > type(uint64).max) revert TimestampOverflow();
@@ -491,7 +531,6 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
         r.feeBps = feeBps;
         r.bufferSeconds = bufferSeconds;
         r.oracleMaxAge = oracleMaxAge;
-        emit RoundStarted(epoch, r.startTs, r.lockTs, r.closeTs, r.feeBps);
     }
 
     /// @return needsProof True when the round is still inside its window and therefore may only be
@@ -684,13 +723,28 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
     // ─────────────────────────────────────────────────────────────────────────
 
     function getRound(uint256 epoch) external view returns (Round memory) {
-        return _rounds[epoch];
+        return _roundView(epoch);
     }
 
     function getRounds(uint256[] calldata epochs) external view returns (Round[] memory out) {
         out = new Round[](epochs.length);
         for (uint256 i; i < epochs.length; ++i) {
-            out[i] = _rounds[epochs[i]];
+            out[i] = _roundView(epochs[i]);
+        }
+    }
+
+    /**
+     * @dev Return a storage-backed round, or the currently open virtual round after an empty spell.
+     *      The projection is exactly what `_activateBettableRound` writes when the first bet lands,
+     *      so the UI never advertises a round the contract would reject or price differently.
+     */
+    function _roundView(uint256 epoch) internal view returns (Round memory r) {
+        r = _rounds[epoch];
+        if (
+            r.startTs == 0 && genesisStarted && !paused() && epoch > currentEpoch
+                && epoch == currentBettableEpoch()
+        ) {
+            r = _projectedRound(epoch);
         }
     }
 
@@ -749,8 +803,34 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
         downMultipleBps = ((down + (up * (BPS - fee)) / BPS) * BPS) / down;
     }
 
-    function currentBettableEpoch() external view returns (uint256) {
-        return currentEpoch;
+    /**
+     * @notice The epoch accepting bets now. It advances as a view across empty time-grid slots;
+     *         the first bet materialises it. If funded risk still needs a boundary transaction,
+     *         it stays pinned until that risk settles or becomes refundable.
+     */
+    function currentBettableEpoch() public view returns (uint256) {
+        if (!genesisStarted || paused()) return currentEpoch;
+        uint256 gridEpoch = _bettableEpochAt(block.timestamp);
+        if (gridEpoch <= currentEpoch || maintenanceRequired()) return currentEpoch;
+        return gridEpoch;
+    }
+
+    /**
+     * @notice Whether a funded round still needs an oracle/settlement transaction.
+     * @dev Lets keepers sleep through empty rounds. At most `currentEpoch` and its predecessor can
+     *      still be inside their windows because `bufferSeconds < interval` is enforced.
+     */
+    function maintenanceRequired() public view returns (bool) {
+        if (!genesisStarted) return false;
+        if (!paused() && _roundNeedsMaintenance(_rounds[currentEpoch])) return true;
+        if (currentEpoch > epochAnchor && _roundNeedsMaintenance(_rounds[currentEpoch - 1])) return true;
+        return false;
+    }
+
+    function _roundNeedsMaintenance(Round storage r) internal view returns (bool) {
+        if (r.startTs == 0 || r.settled || r.voided || (r.upAmount == 0 && r.downAmount == 0)) return false;
+        uint256 deadline = (r.locked ? uint256(r.closeTs) : uint256(r.lockTs)) + r.bufferSeconds;
+        return block.timestamp <= deadline;
     }
 
     // ─────────────────────────────────────────────────────────────────────────

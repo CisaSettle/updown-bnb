@@ -83,6 +83,14 @@ export const marketAbi = [
     outputs: [{ name: '', type: 'uint256', internalType: 'uint256' }],
     stateMutability: 'view',
   },
+  /** True only while user funds still need a lock or settlement transaction. */
+  {
+    type: 'function',
+    name: 'maintenanceRequired',
+    inputs: [],
+    outputs: [{ name: '', type: 'bool', internalType: 'bool' }],
+    stateMutability: 'view',
+  },
   {
     type: 'function',
     name: 'interval',

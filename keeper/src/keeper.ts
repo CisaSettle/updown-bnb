@@ -399,7 +399,7 @@ export class Keeper {
           symbol: this.config.nativeSymbol,
         });
       } else if (state === 'low') {
-        this.#logger.warn('keeper balance is below the configured floor; top it up or rounds will stop', {
+        this.#logger.warn('keeper balance is below the configured floor; top it up before funded risk needs maintenance', {
           balance: formatNative(balance),
           floor: formatNative(this.config.health.minBalanceWei),
           symbol: this.config.nativeSymbol,
@@ -474,6 +474,7 @@ export class Keeper {
   health(nowMs = this.#now()): HealthReport {
     const warnings: string[] = [];
     const blockers: string[] = [];
+    const markets = this.healthInputs(nowMs);
     if (this.#totalBootstrapFailure !== null) {
       // Every pending market is already reported unhealthy on its own; this says the one thing the
       // per-market rows cannot, which is that NOTHING is being supervised.
@@ -484,13 +485,16 @@ export class Keeper {
     if (state === 'unknown') {
       warnings.push('keeper balance is unknown: no balance poll has succeeded yet');
     } else if (state === 'unfunded') {
-      // Not a warning. An account that cannot pay for a transaction cannot relay and cannot settle,
-      // so every round it is responsible for voids — long before the staleness budget notices.
-      blockers.push(
+      const message =
         `keeper balance ${formatNative(balance as bigint)} ${this.config.nativeSymbol} cannot pay for a ` +
-          `single transaction (needs ~${formatNative(this.#txCostWei())} ${this.config.nativeSymbol}); ` +
-          `it can neither relay nor settle`,
+        `single transaction (needs ~${formatNative(this.#txCostWei())} ${this.config.nativeSymbol})`;
+      // Empty virtual rounds need no transaction. Being unfunded becomes a blocker only once real
+      // user funds need a lock/settlement; before that it is advance warning, not a market outage.
+      const fundedWorkPending = markets.some(
+        (market) => market.active || (market.paused && market.pausedSettlement === 'pending'),
       );
+      if (fundedWorkPending) blockers.push(`${message}; funded risk is waiting for keeper maintenance`);
+      else warnings.push(`${message}; no funded round currently needs maintenance`);
     } else if (state === 'low') {
       warnings.push(
         `keeper balance ${formatNative(balance as bigint)} ${this.config.nativeSymbol} is below the ` +
@@ -498,7 +502,7 @@ export class Keeper {
       );
     }
     return evaluateHealth(
-      this.healthInputs(nowMs),
+      markets,
       nowMs,
       this.#startedAtMs,
       warnings,

@@ -263,6 +263,103 @@ prd = prd
   .replaceAll('97 链已于 2026-08-26 重新部署', '97 链已于 2026-08-30 重新部署')
   .replaceAll('chain 97, redeployed 2026-08-26 on the code in this tree', 'chain 97, redeployed 2026-08-30 on the code in this tree')
   .replaceAll('链 97，已于 2026-08-26 在本代码树上重新部署', '链 97，已于 2026-08-30 在本代码树上重新部署')
+  .replaceAll(
+    `<code>executeRound(boundaryRoundId)</code> is called once per <code>interval</code> and does
+        three things atomically, all from the <strong>one</strong> price that belongs to the shared
+        boundary, so two adjacent rounds always agree on it:`,
+    `When funded risk needs a boundary transaction, <code>executeRound(boundaryRoundId)</code> does
+        three things atomically from the <strong>one</strong> shared-boundary price. Empty grid slots
+        stay virtually open without a keeper transaction; the first bet materialises the current epoch:`,
+  )
+  .replaceAll(
+    `<code>executeRound(boundaryRoundId)</code> 每个 <code>interval</code> 调用一次，全部使用属于该共享
+        边界的<strong>同一个</strong>价格，原子地完成三件事，从而保证相邻两轮在边界价格上永远一致：`,
+    `只有真实资金需要边界交易时，<code>executeRound(boundaryRoundId)</code> 才使用共享边界的
+        <strong>同一个</strong>价格原子完成三件事。空的时间网格轮次无需 keeper 交易也会保持虚拟开盘，
+        第一笔下注才把当前轮次写上链：`,
+  )
+  .replaceAll(
+    `function currentEpoch() external view returns (uint256);            <span class="c">// the epoch accepting bets</span>`,
+    `function currentEpoch() external view returns (uint256);            <span class="c">// last materialised epoch</span>
+function currentBettableEpoch() external view returns (uint256);    <span class="c">// open now, including virtual</span>
+function maintenanceRequired() external view returns (bool);        <span class="c">// funded risk needs upkeep</span>
+function FIRST_BET_MIN_LEAD_SECONDS() external view returns (uint256); <span class="c">// dormant relay runway</span>`,
+  )
+  .replaceAll(
+    `<code>currentEpoch()</code> is the epoch currently accepting bets; <code>currentEpoch() - 1</code>
+        is the one that is locked and live.`,
+    `<code>currentBettableEpoch()</code> is the epoch accepting bets, including a virtual empty slot;
+        <code>currentEpoch()</code> is the last epoch written to storage.`,
+  )
+  .replaceAll(
+    `function currentEpoch() external view returns (uint256);            <span class="c">// 当前接受下注的轮次</span>`,
+    `function currentEpoch() external view returns (uint256);            <span class="c">// 最后写入存储的轮次</span>
+function currentBettableEpoch() external view returns (uint256);    <span class="c">// 当前开盘，含虚拟轮次</span>
+function maintenanceRequired() external view returns (bool);        <span class="c">// 真实资金需要维护</span>
+function FIRST_BET_MIN_LEAD_SECONDS() external view returns (uint256); <span class="c">// 空盘首注中继余量</span>`,
+  )
+  .replaceAll(
+    `<code>currentEpoch()</code> 是当前正在接受下注的轮次；<code>currentEpoch() - 1</code> 则是已锁定、
+        正在进行中的那一轮。`,
+    `<code>currentBettableEpoch()</code> 是当前接受下注的轮次，包含虚拟空轮次；
+        <code>currentEpoch()</code> 是最后写入存储的轮次。`,
+  )
+  .replaceAll(
+    `TypeScript + viem. Once per <code>interval</code> it reads <code>boundaryTimestamp()</code>,
+          resolves the boundary round id with <code>findRoundIdAt</code> over <code>eth_call</code>,
+          and sends <code>executeRound(roundId)</code> — with retry, gas bumping, balance alerting and
+          an idempotent catch-up path. On testnet it also relays a real spot price into`,
+    `TypeScript + viem. It polls <code>maintenanceRequired()</code> and sleeps through empty virtual
+          rounds; old contracts without the selector stay on the legacy always-on loop. A dormant
+          testnet round reserves 50 seconds for the full three-feed relay queue; keeper config rejects a larger worst-case path. Only funded risk makes it resolve a boundary id, relay a testnet price and send
+          <code>executeRound(roundId)</code> — with retry, gas bumping, balance alerting and an
+          idempotent catch-up path. On testnet it relays into`,
+  )
+  .replaceAll(
+    `TypeScript + viem。每个 <code>interval</code> 读取一次 <code>boundaryTimestamp()</code>，
+          通过 <code>eth_call</code> 调用 <code>findRoundIdAt</code> 解析出边界轮次 ID，然后发送
+          <code>executeRound(roundId)</code>——具备重试、Gas 提价、余额告警与幂等追平逻辑。在测试网上还负责把
+          真实现货价格中继进`,
+    `TypeScript + viem。它轮询 <code>maintenanceRequired()</code>，空的虚拟轮次直接休眠；没有该 selector 的旧合约保留旧版常开
+          调度。测试网空盘为三路中继队列预留 50 秒，keeper 会拒绝更慢的最坏路径配置。只有真实资金风险才会让它
+          解析边界 ID、中继测试网价格并发送 <code>executeRound(roundId)</code>——具备重试、Gas 提价、余额告警与
+          幂等追平逻辑。在测试网上会把真实现货价格中继进`,
+  )
+  .replaceAll(
+    `function maintenanceRequired() external view returns (bool);        <span class="c">// funded risk needs upkeep</span>
+function getRound`,
+    `function maintenanceRequired() external view returns (bool);        <span class="c">// funded risk needs upkeep</span>
+function FIRST_BET_MIN_LEAD_SECONDS() external view returns (uint256); <span class="c">// dormant relay runway</span>
+function getRound`,
+  )
+  .replaceAll(
+    `function maintenanceRequired() external view returns (bool);        <span class="c">// 真实资金需要维护</span>
+function getRound`,
+    `function maintenanceRequired() external view returns (bool);        <span class="c">// 真实资金需要维护</span>
+function FIRST_BET_MIN_LEAD_SECONDS() external view returns (uint256); <span class="c">// 空盘首注中继余量</span>
+function getRound`,
+  )
+  .replaceAll(
+    `TypeScript + viem. It polls <code>maintenanceRequired()</code> and sleeps through empty virtual
+          rounds. Only funded risk makes it resolve a boundary id, relay a testnet price and send`,
+    `TypeScript + viem. It polls <code>maintenanceRequired()</code> and sleeps through empty virtual
+          rounds; old contracts without the selector stay on the legacy always-on loop. A dormant
+          testnet round reserves 50 seconds for the full three-feed relay queue; keeper config rejects a larger worst-case path. Only funded risk makes it resolve a boundary id, relay a testnet price and send`,
+  )
+  .replaceAll(
+    `TypeScript + viem。它轮询 <code>maintenanceRequired()</code>，空的虚拟轮次直接休眠。只有真实资金风险才会让它
+          解析边界 ID、中继测试网价格并发送`,
+    `TypeScript + viem。它轮询 <code>maintenanceRequired()</code>，空的虚拟轮次直接休眠；没有该 selector 的旧合约保留旧版常开
+          调度。测试网空盘为三路中继队列预留 50 秒，keeper 会拒绝更慢的最坏路径配置。只有真实资金风险才会让它解析边界 ID、中继测试网价格并发送`,
+  )
+  .replaceAll(
+    `testnet round reserves 15 seconds for its first stake's relay. Only funded risk makes it resolve a boundary id, relay a testnet price and send`,
+    `testnet round reserves 50 seconds for the full three-feed relay queue; keeper config rejects a larger worst-case path. Only funded risk makes it resolve a boundary id, relay a testnet price and send`,
+  )
+  .replaceAll(
+    `调度。测试网空盘为首注中继预留 15 秒。只有真实资金风险才会让它解析边界 ID、中继测试网价格并发送`,
+    `调度。测试网空盘为三路中继队列预留 50 秒，keeper 会拒绝更慢的最坏路径配置。只有真实资金风险才会让它解析边界 ID、中继测试网价格并发送`,
+  )
 
 const staleCurrentFacts = [
   'Durations:</strong> 5&nbsp;min / 1&nbsp;hour',

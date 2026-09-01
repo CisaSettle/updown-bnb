@@ -70,16 +70,21 @@ One market contract = one `(asset, duration)` pair. Rounds are called **epochs**
 immutable timestamp grid, so `lockTs(N) == closeTs(N-1)` and consecutive rounds always share one
 boundary price.
 
-Three properties are worth knowing before reading any code:
+Four properties are worth knowing before reading any code:
 
 1. **Settlement is deterministic.** The price of a boundary is the last Chainlink print at or
    *before* that boundary timestamp — not `latestRoundData()` at call time. The caller passes the
    round id and the contract proves it is the last qualifying one. Calling one second late and
    calling three minutes late give byte-identical outcomes.
-2. **`executeRound` is permissionless.** There is no operator role and no privileged settler. The
+2. **Empty rounds need no upkeep.** The open epoch follows the immutable time grid as a view; if
+   nobody has bet, no keeper transaction, oracle relay or liquidity balance is required. The first
+   bet materialises that epoch. On testnet, a dormant round stops admitting its first stake 50
+   seconds before lock so every newly awakened relay can still land; the next grid epoch opens by
+   itself. Only funded risk wakes the keeper for locking and settlement.
+3. **`executeRound` is permissionless.** There is no operator role and no privileged settler. The
    project runs a keeper because someone should turn the crank promptly, not because the keeper is
    trusted. Winners have the incentive to call it themselves.
-3. **A round that cannot settle honestly is voided, not forced.** Tie, one-sided book, no usable
+4. **A round that cannot settle honestly is voided, not forced.** Tie, one-sided book, no usable
    oracle print, settlement window elapsed, or an admin pause → every stake is refundable in full
    with zero fee. An outage degrades the product into refunds; it never produces a loss.
 

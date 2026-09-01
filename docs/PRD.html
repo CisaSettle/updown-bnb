@@ -787,9 +787,9 @@ closeTs(N) = lockTs(N)  + interval
 
 <span class="c">therefore  lockTs(N) == closeTs(N-1)</span></code></pre>
       <p>
-        <code>executeRound(boundaryRoundId)</code> is called once per <code>interval</code> and does
-        three things atomically, all from the <strong>one</strong> price that belongs to the shared
-        boundary, so two adjacent rounds always agree on it:
+        When funded risk needs a boundary transaction, <code>executeRound(boundaryRoundId)</code> does
+        three things atomically from the <strong>one</strong> shared-boundary price. Empty grid slots
+        stay virtually open without a keeper transaction; the first bet materialises the current epoch:
       </p>
       <ol>
         <li>close epoch <code>N−1</code> — <code>closePrice(N−1) = price</code>, compute the reward pool</li>
@@ -849,8 +849,9 @@ closeTs(N) = lockTs(N)  + interval
 
 <span class="c">由此可得  lockTs(N) == closeTs(N-1)</span></code></pre>
       <p>
-        <code>executeRound(boundaryRoundId)</code> 每个 <code>interval</code> 调用一次，全部使用属于该共享
-        边界的<strong>同一个</strong>价格，原子地完成三件事，从而保证相邻两轮在边界价格上永远一致：
+        只有真实资金需要边界交易时，<code>executeRound(boundaryRoundId)</code> 才使用共享边界的
+        <strong>同一个</strong>价格原子完成三件事。空的时间网格轮次无需 keeper 交易也会保持虚拟开盘，
+        第一笔下注才把当前轮次写上链：
       </p>
       <ol>
         <li>结束轮次 <code>N−1</code>——写入 <code>closePrice(N−1) = price</code>，计算奖池</li>
@@ -1407,7 +1408,10 @@ function findRoundIdAt(uint256 targetTs, uint80 startFrom, uint256 maxSteps)
 function genesisStart() external;                <span class="c">// owner, opens the first round</span>
 
 <span class="c">// views</span>
-function currentEpoch() external view returns (uint256);            <span class="c">// the epoch accepting bets</span>
+function currentEpoch() external view returns (uint256);            <span class="c">// last materialised epoch</span>
+function currentBettableEpoch() external view returns (uint256);    <span class="c">// open now, including virtual</span>
+function maintenanceRequired() external view returns (bool);        <span class="c">// funded risk needs upkeep</span>
+function FIRST_BET_MIN_LEAD_SECONDS() external view returns (uint256); <span class="c">// dormant relay runway</span>
 function getRound(uint256 epoch) external view returns (Round memory);
 function odds(uint256 epoch) external view returns (uint256 upMultipleBps, uint256 downMultipleBps);
 function claimable(uint256 epoch, address user) external view returns (bool);
@@ -1415,8 +1419,8 @@ function refundable(uint256 epoch, address user) external view returns (bool);
 function pendingPayout(uint256 epoch, address user) external view returns (uint256);
 function settlementAsset() external view returns (address);         <span class="c">// address(0) = native BNB</span></code></pre>
       <p class="small">
-        <code>currentEpoch()</code> is the epoch currently accepting bets; <code>currentEpoch() - 1</code>
-        is the one that is locked and live. Prices in <code>Round</code> are <code>int256</code> with
+        <code>currentBettableEpoch()</code> is the epoch accepting bets, including a virtual empty slot;
+        <code>currentEpoch()</code> is the last epoch written to storage. Prices in <code>Round</code> are <code>int256</code> with
         8 decimals, matching Chainlink. <code>claim</code> reverts if <em>any</em> epoch in the array
         is not collectable, so callers should pass only epochs where <code>claimable</code> or
         <code>refundable</code> is true.
@@ -1466,7 +1470,10 @@ function findRoundIdAt(uint256 targetTs, uint80 startFrom, uint256 maxSteps)
 function genesisStart() external;                <span class="c">// 仅限 owner，开启第一轮</span>
 
 <span class="c">// 只读接口</span>
-function currentEpoch() external view returns (uint256);            <span class="c">// 当前接受下注的轮次</span>
+function currentEpoch() external view returns (uint256);            <span class="c">// 最后写入存储的轮次</span>
+function currentBettableEpoch() external view returns (uint256);    <span class="c">// 当前开盘，含虚拟轮次</span>
+function maintenanceRequired() external view returns (bool);        <span class="c">// 真实资金需要维护</span>
+function FIRST_BET_MIN_LEAD_SECONDS() external view returns (uint256); <span class="c">// 空盘首注中继余量</span>
 function getRound(uint256 epoch) external view returns (Round memory);
 function odds(uint256 epoch) external view returns (uint256 upMultipleBps, uint256 downMultipleBps);
 function claimable(uint256 epoch, address user) external view returns (bool);
@@ -1474,8 +1481,8 @@ function refundable(uint256 epoch, address user) external view returns (bool);
 function pendingPayout(uint256 epoch, address user) external view returns (uint256);
 function settlementAsset() external view returns (address);         <span class="c">// address(0) 表示原生 BNB</span></code></pre>
       <p class="small">
-        <code>currentEpoch()</code> 是当前正在接受下注的轮次；<code>currentEpoch() - 1</code> 则是已锁定、
-        正在进行中的那一轮。<code>Round</code> 中的价格为 <code>int256</code>、8 位小数，与 Chainlink 一致。
+        <code>currentBettableEpoch()</code> 是当前接受下注的轮次，包含虚拟空轮次；
+        <code>currentEpoch()</code> 是最后写入存储的轮次。<code>Round</code> 中的价格为 <code>int256</code>、8 位小数，与 Chainlink 一致。
         只要数组中<em>任意</em>一轮不可领取，<code>claim</code> 就会整笔回滚，因此调用方应只传入
         <code>claimable</code> 或 <code>refundable</code> 为 true 的轮次。
       </p>
@@ -1489,10 +1496,11 @@ function settlementAsset() external view returns (address);         <span class=
     <div class="l-en">
       <div class="cards">
         <div class="card"><div class="k">Keeper</div><div class="v">
-          TypeScript + viem. Once per <code>interval</code> it reads <code>boundaryTimestamp()</code>,
-          resolves the boundary round id with <code>findRoundIdAt</code> over <code>eth_call</code>,
-          and sends <code>executeRound(roundId)</code> — with retry, gas bumping, balance alerting and
-          an idempotent catch-up path. On testnet it also relays a real spot price into
+          TypeScript + viem. It polls <code>maintenanceRequired()</code> and sleeps through empty virtual
+          rounds; old contracts without the selector stay on the legacy always-on loop. A dormant
+          testnet round reserves 50 seconds for the full three-feed relay queue; keeper config rejects a larger worst-case path. Only funded risk makes it resolve a boundary id, relay a testnet price and send
+          <code>executeRound(roundId)</code> — with retry, gas bumping, balance alerting and an
+          idempotent catch-up path. On testnet it relays into
           <code>RelayAggregator</code>. It holds <b>no privilege</b>: anyone can do exactly what it
           does, and the outcome does not depend on who calls or when.</div></div>
         <div class="card"><div class="k">Web</div><div class="v">
@@ -1508,10 +1516,9 @@ function settlementAsset() external view returns (address);         <span class=
     <div class="l-zh">
       <div class="cards">
         <div class="card"><div class="k">Keeper（轮次执行机器人）</div><div class="v">
-          TypeScript + viem。每个 <code>interval</code> 读取一次 <code>boundaryTimestamp()</code>，
-          通过 <code>eth_call</code> 调用 <code>findRoundIdAt</code> 解析出边界轮次 ID，然后发送
-          <code>executeRound(roundId)</code>——具备重试、Gas 提价、余额告警与幂等追平逻辑。在测试网上还负责把
-          真实现货价格中继进 <code>RelayAggregator</code>。它<b>不持有任何特权</b>：任何人都能做完全相同的事，
+          TypeScript + viem。它轮询 <code>maintenanceRequired()</code>，空的虚拟轮次直接休眠；没有该 selector 的旧合约保留旧版常开
+          调度。测试网空盘为三路中继队列预留 50 秒，keeper 会拒绝更慢的最坏路径配置。只有真实资金风险才会让它解析边界 ID、中继测试网价格并发送 <code>executeRound(roundId)</code>——具备重试、Gas 提价、余额告警与
+          幂等追平逻辑。在测试网上会把真实现货价格中继进 <code>RelayAggregator</code>。它<b>不持有任何特权</b>：任何人都能做完全相同的事，
           而结果不取决于由谁调用、何时调用。</div></div>
         <div class="card"><div class="k">Web（前端）</div><div class="v">
           React + Vite + wagmi + viem + Tailwind，构建为纯静态资源。含倒计时的实时轮次卡片、
@@ -2084,17 +2091,17 @@ function settlementAsset() external view returns (address);         <span class=
           <th><span class="l-en">Address</span><span class="l-zh">地址</span></th>
         </tr></thead>
         <tbody>
-          <tr><th>UpDownRegistry</th><td><code>0x115dAb3400CF8EE8949F71ADB7696b54dD2E45bd</code></td></tr>
-          <tr><th>BTC/USD 1m</th><td><code>0x05ee686BeB6aeefEF07BBAcc8C2F4748B23fBC9C</code></td></tr>
-          <tr><th>BTC/USD 10m</th><td><code>0x167217BA44E780B084E1F585208AfBBFD0aA5bE4</code></td></tr>
-          <tr><th>ETH/USD 1m</th><td><code>0x1b6d890659A73950b88ce8EF980021F6DE9A7409</code></td></tr>
-          <tr><th>ETH/USD 10m</th><td><code>0xeedE6730a89f119Bf40c1b6439FCBA85ea770241</code></td></tr>
-          <tr><th>BNB/USD 1m</th><td><code>0x9818De06A32a9E50125A00916b4Be707E320D4ae</code></td></tr>
-          <tr><th>BNB/USD 10m</th><td><code>0xbDa9785c1F26fe3a8e66738252418Ca9C75EDAE0</code></td></tr>
-          <tr><th>TestUSDT</th><td><code>0x52CdFacA6E7639e60EEdd88CE4BD24f8877b83e5</code></td></tr>
-          <tr><th>RelayAggregator BTC/USD</th><td><code>0x81f6A0c6215bc0d8B3b64Ea946F58Bd159a7ed4A</code></td></tr>
-          <tr><th>RelayAggregator ETH/USD</th><td><code>0x0643De0C0bf26f081e4C28d11DB90f562174bF6C</code></td></tr>
-          <tr><th>RelayAggregator BNB/USD</th><td><code>0x99B5a4202B3247Bc326003a68dE5B301b1D4D541</code></td></tr>
+          <tr><th>UpDownRegistry</th><td><code>0x382789ECE97161713B49684bcaF7E5ff5a89AE77</code></td></tr>
+          <tr><th>BTC/USD 1m</th><td><code>0xAFc1DfE668797c5f3d5003311AD9315E44bB9f72</code></td></tr>
+          <tr><th>BTC/USD 10m</th><td><code>0x8f9d01fE059663F1f30783D3a09db6054Bd91402</code></td></tr>
+          <tr><th>ETH/USD 1m</th><td><code>0xA1712874372770439c0D24e3Cb950113369F3DF1</code></td></tr>
+          <tr><th>ETH/USD 10m</th><td><code>0xAcA99C75b0fe8a935D17B052B6B7C4bf4D5C9f62</code></td></tr>
+          <tr><th>BNB/USD 1m</th><td><code>0x0B1EF73563557E6dbac971517ba3b23d111484D2</code></td></tr>
+          <tr><th>BNB/USD 10m</th><td><code>0xB42c6773025B0b525be24933ae6590Ae12B94cCa</code></td></tr>
+          <tr><th>TestUSDT</th><td><code>0x2d279465d5755E972D3EC897A75Ab12983B7117F</code></td></tr>
+          <tr><th>RelayAggregator BTC/USD</th><td><code>0x2201C089a11fb573cF1c7CFE6a177FE0E5D03eea</code></td></tr>
+          <tr><th>RelayAggregator ETH/USD</th><td><code>0x5fC6307De0088093B0AcCc906054c62cbbaC7313</code></td></tr>
+          <tr><th>RelayAggregator BNB/USD</th><td><code>0x4Aa11965dF670360036e4e7395446C029374AC10</code></td></tr>
         </tbody>
       </table></div>
       <p class="small">

@@ -6,7 +6,15 @@
  * has two transactions in flight and nonces cannot collide.
  */
 
-import { parseEventLogs, type Address, type Hex, type TransactionReceipt } from 'viem';
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  ContractFunctionZeroDataError,
+  parseEventLogs,
+  type Address,
+  type Hex,
+  type TransactionReceipt,
+} from 'viem';
 import { isKeeperFaultVoid, marketAbi, relayAggregatorAbi, VOID_REASONS, voidReasonName } from './abi.js';
 import { chainTimestamp, type Clients } from './chain.js';
 import { ChainClock } from './clock.js';
@@ -106,6 +114,14 @@ export const FAILURE_KINDS = [
 ] as const;
 
 export type FailureKind = (typeof FAILURE_KINDS)[number];
+
+/** A positive old-contract signal, never a transport/rate-limit/string heuristic. */
+export function isMissingMaintenanceSelector(error: unknown): boolean {
+  const missing = (candidate: unknown): boolean =>
+    candidate instanceof ContractFunctionZeroDataError ||
+    (candidate instanceof ContractFunctionRevertedError && candidate.raw === '0x');
+  return error instanceof BaseError ? error.walk(missing) !== null : missing(error);
+}
 
 /** Never re-arm a timer tighter than this straight after a tick. */
 const MIN_REARM_MS = 250;
@@ -207,6 +223,8 @@ export interface PendingSettlement {
 export interface MarketSnapshot {
   genesisStarted: boolean;
   paused: boolean;
+  /** False across empty grid slots: no user funds need an on-chain boundary transaction. */
+  maintenanceRequired: boolean;
   currentEpoch: bigint;
   round: RoundTiming;
   /**
@@ -488,6 +506,8 @@ export class MarketWorker {
   #inFlight = false;
   #observed = false;
   #active = false;
+  /** null until probed; false means a pre-lazy-round deployment that must stay on the legacy loop. */
+  #maintenanceRequiredSupported: boolean | null = null;
   #paused = false;
   #pausedSettlement: PausedSettlementState = 'none';
   /** Epoch already reported as having missed its settlement, so it is shouted about once. */
@@ -805,7 +825,7 @@ export class MarketWorker {
 
     this.#observed = true;
     this.#currentEpoch = snapshot.currentEpoch;
-    this.#active = snapshot.genesisStarted && !snapshot.paused && snapshot.round.startTs > 0;
+    this.#active = snapshot.genesisStarted && !snapshot.paused && snapshot.maintenanceRequired;
     this.#paused = snapshot.paused;
     this.#pausedSettlement = this.#classifyPausedSettlement(snapshot);
     const labels = { market: this.name };
@@ -828,7 +848,12 @@ export class MarketWorker {
     // paused market keeps being driven until its locked round is settled, and only then goes quiet.
     if (!this.#active && this.#pausedSettlement !== 'pending') {
       this.#reportIdle(snapshot);
-      this.#arm(this.#deps.config.schedule.idlePollMs, () => this.#plan());
+      this.#arm(
+        this.#deps.config.schedule.idlePollMs,
+        snapshot.genesisStarted && !snapshot.paused
+          ? () => this.#probeDormantMarket()
+          : () => this.#plan(),
+      );
       return;
     }
     if (this.#pausedSettlement === 'pending') {
@@ -874,6 +899,26 @@ export class MarketWorker {
   }
 
   /**
+   * One cheap read while empty. A first bet flips `maintenanceRequired()` in that same transaction,
+   * so the next poll immediately returns to the full boundary plan. This avoids 24 RPC reads a
+   * second across six markets while still leaving enough runway for a one-minute testnet relay.
+   */
+  async #probeDormantMarket(): Promise<void> {
+    if (this.#stopped) return;
+    try {
+      const required = await this.#readMaintenanceRequired();
+      if (required) {
+        await this.#plan();
+        return;
+      }
+    } catch (error) {
+      this.#log.error('dormant market probe failed', { error });
+      this.#countFailure('read');
+    }
+    this.#arm(this.#deps.config.schedule.idlePollMs, () => this.#probeDormantMarket());
+  }
+
+  /**
    * Where this market's paused settlement stands, judged against the CHAIN clock — the same clock
    * `_endRound` compares `block.timestamp` with.
    */
@@ -914,7 +959,9 @@ export class MarketWorker {
       ? 'genesisStart() has not been called'
       : snapshot.paused
         ? 'market is paused and no locked round is waiting to settle'
-        : 'current round has not been started';
+        : snapshot.genesisStarted
+          ? 'no funded round needs a lock or settlement transaction; empty grid slots are virtual'
+          : 'current round has not been started';
     if (this.#now() - this.#lastInactiveLogMs > 60_000) {
       this.#lastInactiveLogMs = this.#now();
       this.#log.warn('market inactive; nothing to execute', { reason, epoch: snapshot.currentEpoch });
@@ -1045,18 +1092,46 @@ export class MarketWorker {
   // chain reads
   // ───────────────────────────────────────────────────────────────────────────
 
+  /**
+   * Rollout compatibility for the old chain-97 addresses. They predate
+   * `maintenanceRequired()`, so a missing selector means "keep doing the legacy full loop", never
+   * "go dormant". This lets the keeper binary land before or after the six replacement contracts
+   * without a window in which funded legacy positions are abandoned.
+   */
+  async #readMaintenanceRequired(): Promise<boolean> {
+    if (this.#maintenanceRequiredSupported === false) return true;
+    try {
+      const required = await this.#deps.clients.publicClient.readContract({
+        address: this.address,
+        abi: marketAbi,
+        functionName: 'maintenanceRequired',
+      });
+      this.#maintenanceRequiredSupported = true;
+      return required;
+    } catch (error) {
+      if (!isMissingMaintenanceSelector(error)) throw error;
+      this.#log.warn('maintenanceRequired unavailable; using legacy always-on schedule until this worker is replaced', {
+        error,
+      });
+      this.#maintenanceRequiredSupported = false;
+      return true;
+    }
+  }
+
   async #readSnapshot(): Promise<MarketSnapshot> {
     const { publicClient } = this.#deps.clients;
     const read = { address: this.address, abi: marketAbi } as const;
-    const [genesisStarted, paused, currentEpoch] = await Promise.all([
+    const [genesisStarted, paused, maintenanceRequired, currentEpoch] = await Promise.all([
       publicClient.readContract({ ...read, functionName: 'genesisStarted' }),
       publicClient.readContract({ ...read, functionName: 'paused' }),
+      this.#readMaintenanceRequired(),
       publicClient.readContract({ ...read, functionName: 'currentEpoch' }),
     ]);
     const round = await publicClient.readContract({ ...read, functionName: 'getRound', args: [currentEpoch] });
     return {
       genesisStarted,
       paused,
+      maintenanceRequired,
       currentEpoch,
       round: {
         startTs: Number(round.startTs),
