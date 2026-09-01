@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "evidence_type": "owner_supplied_production_screenshot",
+  "source_application": "Binance mobile app",
+  "source_surface": "Events",
+  "source_url": null,
+  "source_url_reason": "Native mobile-app screen; no URL is displayed.",
+  "instrument": "BTCUSDT",
+  "time_increment": "10 min",
+  "displayed_payouts": {
+    "header_higher": "80%",
+    "header_lower": "80%",
+    "order_panel_higher": "80%",
+    "order_panel_lower": "80%"
+  },
+  "owner_attestation_original": "prod 10分钟就是0.8",
+  "owner_attestation_language": "zh-CN",
+  "received_in_active_review_thread_at": "2026-09-01T00:04:50+08:00",
+  "local_file_birth_time": "2026-09-01T00:04:50+08:00",
+  "screenshot_status_bar_time": "12:04",
+  "visible_chart_date": "2026-08-31",
+  "image_file": "binance-event-btcusdt-10m-payout-2026-09-01.jpg",
+  "image_sha256": "d173fb5bf7838b9b209dad580c1650e6e8c061bf212e77235516aad4702b4863",
+  "image_dimensions_px": {
+    "width": 1280,
+    "height": 2781
+  },
+  "image_encoding": "JPEG published copy",
+  "scope_limit": "Proves the displayed 80% Higher and Lower payout for the supplied BTCUSDT 10-minute production screen only; it is not evidence of a permanent platform-wide payout across every asset, horizon, or date."
+}
