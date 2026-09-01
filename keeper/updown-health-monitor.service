@@ -1,0 +1,52 @@
+[Unit]
+# Install beside updown-keeper.service:
+#   sudo install -m 0600 -o updown -g updown monitor.env.example /etc/updown/monitor.env
+#   sudo install -m 0644 updown-health-monitor.service updown-health-monitor.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now updown-health-monitor.timer
+#
+# `/etc/updown/monitor.env` carries only monitoring credentials/public addresses — never the
+# keeper signing key. ALERT_TELEGRAM_BOT_TOKEN is the dedicated @bluff_alert_bot token.
+Description=UpDown production health and testnet-gas watchdog
+Documentation=https://github.com/updown-protocol/updown
+After=network-online.target updown-keeper.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=updown
+Group=updown
+WorkingDirectory=/opt/updown-keeper
+EnvironmentFile=/etc/updown/monitor.env
+Environment=NODE_ENV=production
+Environment=UPDOWN_MONITOR_STATE_PATH=/var/lib/updown-health-monitor/state.json
+ExecStart=/usr/bin/node /opt/updown-keeper/dist/monitor.js
+StateDirectory=updown-health-monitor
+StateDirectoryMode=0700
+TimeoutStartSec=45s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=updown-health-monitor
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=false
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+UMask=0077

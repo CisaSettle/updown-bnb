@@ -161,7 +161,14 @@ describe('secret scrubbing', () => {
     }
     // And every variable the keeper reads that can hold a credential is in the set.
     expect([...SECRET_ENV_VARS].sort()).toEqual(
-      ['KEEPER_PRIVATE_KEY', 'PRICE_API', 'PRICE_API_FALLBACKS', 'RPC_URL'].sort(),
+      [
+        'ALERT_TELEGRAM_BOT_TOKEN',
+        'KEEPER_PRIVATE_KEY',
+        'PRICE_API',
+        'PRICE_API_FALLBACKS',
+        'RPC_URL',
+        'TELEGRAM_BOT_TOKEN',
+      ].sort(),
     );
   });
 

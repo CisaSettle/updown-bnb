@@ -46,6 +46,7 @@ import {
 } from '../keeper/node_modules/viem/_esm/index.js'
 import { privateKeyToAccount } from '../keeper/node_modules/viem/_esm/accounts/index.js'
 import { allocateGasRefills, selectGasRefills } from './lib/gas-refill.mjs'
+import { hasPlanningRunway, readBettableRound } from './lib/bet-window.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const dep = JSON.parse(readFileSync(join(ROOT, 'contracts/deployments', '97.json'), 'utf8'))
@@ -98,7 +99,8 @@ const ONE_SIDED_PROB = 0.05
 
 const MARKET = parseAbi([
   'struct Round { uint64 startTs; uint64 lockTs; uint64 closeTs; uint16 feeBps; uint16 bufferSeconds; bool locked; bool settled; bool voided; int256 lockPrice; int256 closePrice; uint80 lockOracleId; uint80 closeOracleId; uint32 oracleMaxAge; uint256 upAmount; uint256 downAmount; uint256 rewardBaseAmount; uint256 rewardPoolAmount; }',
-  'function currentEpoch() view returns (uint256)',
+  'function currentBettableEpoch() view returns (uint256)',
+  'function FIRST_BET_MIN_LEAD_SECONDS() view returns (uint256)',
   'function getRound(uint256) view returns (Round)',
   'function minBetAmount() view returns (uint256)',
   'function maxBetAmount() view returns (uint256)',
@@ -396,13 +398,12 @@ async function keeperGasGuard() {
 const plans = new Map()
 async function tick(market) {
   const read = (fn, args = []) => pub.readContract({ address: market.address, abi: MARKET, functionName: fn, args })
-  const epoch = await read('currentEpoch')
+  const { epoch, round: bettableRound, firstBetMinLeadSeconds } = await readBettableRound(read)
   let plan = plans.get(market.key)
 
   if (!plan || plan.epoch !== epoch) {
-    const r = await read('getRound', [epoch])
     const t = await now()
-    if (t < Number(r.startTs) || Number(r.lockTs) - t <= 20) return
+    if (!hasPlanningRunway(bettableRound, t, firstBetMinLeadSeconds)) return
     // A restart loses this Map, but the chain remembers: if either account already holds stake in
     // this epoch, a previous run bet it — rolling a fresh plan would grow the pool again.
     if (!plan) {

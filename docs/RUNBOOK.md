@@ -472,6 +472,25 @@ warning while every market is empty, because no transaction is required; it beco
 Suggested alerts: `/healthz` non-200 for > 1 interval; any market `stale`; low-balance warning
 present for > 10 minutes; keeper process not running.
 
+### Independent Telegram watchdog
+
+The keeper cannot report its own death, and an empty virtual market legitimately leaves
+`/healthz` green while no transaction is due. The separate `updown-health-monitor.timer` therefore
+runs once a minute outside the keeper process. It fails on an unreachable/unhealthy endpoint, a
+market set other than the six current 1m/10m markets, chain id other than 97, or keeper/bot/funder
+gas crossing its configured floor. This last check catches the otherwise silent state where the
+board remains open but both demo-liquidity accounts can no longer place the first stake.
+
+On the first failure it writes a structured `ERROR` to `journalctl -u updown-health-monitor` and
+sends one incident through the dedicated `@bluff_alert_bot`; an undelivered alert is retried, a
+continuing incident is reminded at most hourly, and recovery sends one green notice. Monitoring is
+fail-closed: missing Telegram credentials are a configuration error, never “alerts disabled.”
+
+Install `keeper/updown-health-monitor.service` and `.timer` beside the keeper unit. Create
+`/etc/updown/monitor.env` from `keeper/monitor.env.example`, mode `0600`, owned by `updown`. It
+contains only the RPC URL, public operational addresses, thresholds, and the dedicated
+`ALERT_TELEGRAM_BOT_TOKEN` / `ALERT_TELEGRAM_CHAT_ID`; never copy the keeper signing key into it.
+
 ### The betting bot (testnet demo liquidity)
 
 `scripts/bet-bot.mjs` keeps every market showing a real, moving book: each round it stakes varying

@@ -60,7 +60,14 @@ export function registerSecret(value: string | undefined | null): void {
  * this set for exactly that reason, while `price.ts` embeds the failing endpoint verbatim into the
  * error text the keeper then logs at error level.
  */
-export const SECRET_ENV_VARS = ['RPC_URL', 'KEEPER_PRIVATE_KEY', 'PRICE_API', 'PRICE_API_FALLBACKS'] as const;
+export const SECRET_ENV_VARS = [
+  'RPC_URL',
+  'KEEPER_PRIVATE_KEY',
+  'PRICE_API',
+  'PRICE_API_FALLBACKS',
+  'ALERT_TELEGRAM_BOT_TOKEN',
+  'TELEGRAM_BOT_TOKEN',
+] as const;
 
 /** Register every credential-bearing setting with the scrubber. Must run before anything can log. */
 export function registerEnvSecrets(env: NodeJS.ProcessEnv = process.env): void {

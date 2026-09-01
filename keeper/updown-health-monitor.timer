@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the UpDown watchdog every minute
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+RandomizedDelaySec=5s
+AccuracySec=1s
+Unit=updown-health-monitor.service
+
+[Install]
+WantedBy=timers.target
+

@@ -431,6 +431,22 @@ curl -fsS localhost:9464/metrics            # Prometheus text format
 建议的告警：`/healthz` 非 200 超过 1 个 interval；任一市场进入 `stale`；余额告警持续超过 10 分钟；keeper 进程
 未运行。
 
+### 独立 Telegram 看门狗
+
+keeper 无法在自己死亡时报警；而空盘口采用虚拟轮次后，没有交易待办时 `/healthz` 合法地保持绿色。因此独立的
+`updown-health-monitor.timer` 在 keeper 进程之外每分钟运行一次。以下任一情况都会失败：健康端点不可达或不健康；
+市场集合不是当前六个 1 分钟/10 分钟市场；RPC 不是链 97；keeper、bot 或 funder 的 gas 穿过配置阈值。最后一项专门
+捕获本次静默状态：市场仍然开放，但两个演示流动性账户都已无法落下唤醒轮次的第一注。
+
+首次失败会向 `journalctl -u updown-health-monitor` 写一条结构化 `ERROR`，并通过专用的
+`@bluff_alert_bot` 发送一次事故通知；未送达的通知会重试，持续故障至多每小时提醒一次，恢复后再发送一条绿色恢复
+通知。监控采用失败关闭：Telegram 凭据缺失属于配置错误，绝不会静默变成“告警已关闭”。
+
+把 `keeper/updown-health-monitor.service` 与 `.timer` 安装在 keeper unit 旁边；以
+`keeper/monitor.env.example` 为模板创建 `/etc/updown/monitor.env`，权限 `0600`、所有者 `updown`。其中只放 RPC
+URL、公开运营地址、阈值和专用的 `ALERT_TELEGRAM_BOT_TOKEN` / `ALERT_TELEGRAM_CHAT_ID`；绝不要把 keeper 签名私钥
+复制进去。
+
 ### 下注机器人（测试网演示流动性）
 
 `scripts/bet-bot.mjs` 让每个市场都展示一个真实、会动的盘口：每一轮它用两个专用账户押入不等的金额——通常两边都押，偶尔故意只押一边，偶尔整轮不押——并领取此前轮次欠它的钱，所以每个市场的持续成本大致就是输的那一边池子上的协议手续费。它自己从水龙头补给 TestUSDT（每地址每小时 1,000），并且在链 id
