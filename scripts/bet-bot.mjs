@@ -101,6 +101,7 @@ const MARKET = parseAbi([
   'struct Round { uint64 startTs; uint64 lockTs; uint64 closeTs; uint16 feeBps; uint16 bufferSeconds; bool locked; bool settled; bool voided; int256 lockPrice; int256 closePrice; uint80 lockOracleId; uint80 closeOracleId; uint32 oracleMaxAge; uint256 upAmount; uint256 downAmount; uint256 rewardBaseAmount; uint256 rewardPoolAmount; }',
   'function currentBettableEpoch() view returns (uint256)',
   'function FIRST_BET_MIN_LEAD_SECONDS() view returns (uint256)',
+  'function maintenanceRequired() view returns (bool)',
   'function getRound(uint256) view returns (Round)',
   'function minBetAmount() view returns (uint256)',
   'function maxBetAmount() view returns (uint256)',
@@ -398,12 +399,12 @@ async function keeperGasGuard() {
 const plans = new Map()
 async function tick(market) {
   const read = (fn, args = []) => pub.readContract({ address: market.address, abi: MARKET, functionName: fn, args })
-  const { epoch, round: bettableRound, firstBetMinLeadSeconds } = await readBettableRound(read)
+  const { epoch, round: bettableRound, firstBetMinLeadSeconds, maintenanceRequired } = await readBettableRound(read)
   let plan = plans.get(market.key)
 
   if (!plan || plan.epoch !== epoch) {
     const t = await now()
-    if (!hasPlanningRunway(bettableRound, t, firstBetMinLeadSeconds)) return
+    if (!hasPlanningRunway(bettableRound, t, firstBetMinLeadSeconds, maintenanceRequired)) return
     // A restart loses this Map, but the chain remembers: if either account already holds stake in
     // this epoch, a previous run bet it — rolling a fresh plan would grow the pool again.
     if (!plan) {

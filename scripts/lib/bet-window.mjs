@@ -5,11 +5,12 @@
  */
 export async function readBettableRound(read) {
   const epoch = await read('currentBettableEpoch')
-  const [round, firstBetMinLeadSeconds] = await Promise.all([
+  const [round, firstBetMinLeadSeconds, maintenanceRequired] = await Promise.all([
     read('getRound', [epoch]),
     read('FIRST_BET_MIN_LEAD_SECONDS'),
+    read('maintenanceRequired'),
   ])
-  return { epoch, round, firstBetMinLeadSeconds }
+  return { epoch, round, firstBetMinLeadSeconds, maintenanceRequired }
 }
 
 /**
@@ -17,10 +18,16 @@ export async function readBettableRound(read) {
  * publish the strike. A funded round already has an active keeper and keeps the bot's smaller
  * planning cushion.
  */
-export function hasPlanningRunway(round, now, firstBetMinLeadSeconds, fundedLeadSeconds = 20) {
+export function hasPlanningRunway(
+  round,
+  now,
+  firstBetMinLeadSeconds,
+  maintenanceRequired,
+  activeLeadSeconds = 20,
+) {
   const startTs = Number(round.startTs)
   const secondsToLock = Number(round.lockTs) - now
-  const empty = round.upAmount === 0n && round.downAmount === 0n
-  const requiredLead = empty ? Number(firstBetMinLeadSeconds) : fundedLeadSeconds
+  const dormant = round.upAmount === 0n && round.downAmount === 0n && !maintenanceRequired
+  const requiredLead = dormant ? Number(firstBetMinLeadSeconds) : activeLeadSeconds
   return now >= startTs && secondsToLock > requiredLead
 }

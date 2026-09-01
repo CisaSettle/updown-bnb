@@ -31,6 +31,7 @@ import { MetricsRegistry } from '../src/metrics.js';
 import { TxQueue } from '../src/tx.js';
 import { PriceSource } from '../src/price.js';
 import { createLogger } from '../src/logger.js';
+import { evaluateMarketHealth } from '../src/health.js';
 import type { KeeperConfig } from '../src/config.js';
 import type { Clients } from '../src/chain.js';
 
@@ -400,12 +401,13 @@ function makeHarness(over: HarnessOptions = {}) {
   config.deployment.relayFeeds = state.relayFeeds;
   config.schedule.relayTickMs = relayTickMs;
   const realStart = Date.now();
+  let manualAdvanceMs = 0;
   const relays = new RelayCoordinator();
   for (const feed of otherRelayFeeds) relays.register(feed);
   const walletClient = { writeContract: vi.fn(async () => TX_HASH) };
   // A wall clock parked near the boundary, advancing with real time. Without it every wake would
   // be years away and `computeNextWake` would only ever return `refresh`.
-  const now = (): number => LOCK_TS * 1000 + nowOffsetMs + (Date.now() - realStart);
+  const now = (): number => LOCK_TS * 1000 + nowOffsetMs + manualAdvanceMs + (Date.now() - realStart);
   const clock = new ChainClock({ readChainSeconds: async () => state.chainNow, now });
   const deps: MarketDeps = {
     config,
@@ -434,7 +436,19 @@ function makeHarness(over: HarnessOptions = {}) {
   };
 
   const worker = new MarketWorker('btcUsd5m', MARKET, deps);
-  return { worker, state, calls, publicClient, walletClient, queue, deps, relays, clock, now };
+  return {
+    worker,
+    state,
+    calls,
+    publicClient,
+    walletClient,
+    queue,
+    deps,
+    relays,
+    clock,
+    now,
+    advanceMs: (ms: number) => { manualAdvanceMs += ms; },
+  };
 }
 
 /**
@@ -516,6 +530,7 @@ describe('MarketWorker execute path', () => {
     h.worker.start();
     await vi.waitFor(() => expect(h.calls).toContain('maintenanceRequired'), { timeout: 2_000, interval: 5 });
     expect(h.worker.active).toBe(false);
+    const dormantSince = h.worker.supervisedSinceMs;
 
     h.state.maintenanceRequired = true;
     await vi.waitFor(() => expect(h.publicClient.simulateContract).toHaveBeenCalled(), {
@@ -523,6 +538,41 @@ describe('MarketWorker execute path', () => {
       interval: 5,
     });
     h.worker.stop();
+    expect(h.worker.supervisedSinceMs).toBeGreaterThan(dormantSince);
+  });
+
+  it('forgets an old execution when a dormant market wakes, so health gets a fresh budget', async () => {
+    const h = makeHarness({ maintenanceRequired: true });
+    h.deps.config.schedule.idlePollMs = 25;
+    await h.worker.bootstrap();
+    h.worker.start();
+    await vi.waitFor(() => expect(h.worker.lastExecutionMs).not.toBeNull(), { timeout: 2_000, interval: 5 });
+    const oldExecution = h.worker.lastExecutionMs as number;
+
+    h.worker.stop();
+    h.state.maintenanceRequired = false;
+    h.worker.start();
+    await vi.waitFor(() => expect(h.worker.active).toBe(false), { timeout: 2_000, interval: 5 });
+    const dormantSince = h.worker.supervisedSinceMs;
+
+    h.advanceMs(11 * 60_000);
+    h.state.lockTs = Math.floor(h.now() / 1_000) + INTERVAL;
+    h.state.maintenanceRequired = true;
+    await vi.waitFor(() => expect(h.worker.active).toBe(true), { timeout: 2_000, interval: 5 });
+    h.worker.stop();
+
+    expect(oldExecution).toBeLessThan(h.worker.supervisedSinceMs);
+    expect(h.worker.supervisedSinceMs).toBeGreaterThan(dormantSince);
+    expect(h.worker.lastExecutionMs).toBeNull();
+    const health = evaluateMarketHealth({
+      name: 'btcUsd5m',
+      intervalSec: INTERVAL,
+      lastExecutionMs: h.worker.lastExecutionMs,
+      supervisedSinceMs: h.worker.supervisedSinceMs,
+      active: h.worker.active,
+      observed: h.worker.observed,
+    }, h.now());
+    expect(health.state).toBe('ok');
   });
 
   it('prices the boundary read at send time, not the one captured when the tick was planned', async () => {

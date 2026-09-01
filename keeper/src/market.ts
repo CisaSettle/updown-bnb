@@ -825,7 +825,14 @@ export class MarketWorker {
 
     this.#observed = true;
     this.#currentEpoch = snapshot.currentEpoch;
+    const wasActive = this.#active;
     this.#active = snapshot.genesisStarted && !snapshot.paused && snapshot.maintenanceRequired;
+    if (!wasActive && this.#active) {
+      this.#supervisedSinceMs = this.#now();
+      // An execution from an older active spell is not the baseline for a market that deliberately
+      // slept through empty rounds. This wake gets a fresh budget to reach its first boundary.
+      this.#lastExecutionMs = null;
+    }
     this.#paused = snapshot.paused;
     this.#pausedSettlement = this.#classifyPausedSettlement(snapshot);
     const labels = { market: this.name };

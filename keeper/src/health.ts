@@ -85,7 +85,7 @@ export interface MarketHealthInput {
   intervalSec: number;
   /** Wall-clock ms of the last successful `executeRound()`, or null if none yet. */
   lastExecutionMs: number | null;
-  /** Wall-clock ms this market started being supervised (boot, or hot-add). */
+  /** Wall-clock ms this market most recently entered active supervision (boot, hot-add, or wake). */
   supervisedSinceMs: number;
   /** False when the market is paused or has not had `genesisStart()` called. */
   active: boolean;
@@ -258,8 +258,8 @@ export function evaluateMarketHealth(
     };
   }
 
-  // Before the first execution the budget runs from when supervision began, so a fresh boot on a
-  // 1h market is not reported unhealthy for its first hour.
+  // Before the first execution the budget runs from when supervision began, so a fresh boot or a
+  // deliberately dormant market that just woke gets its interval budget before it can page.
   const since = input.lastExecutionMs ?? input.supervisedSinceMs;
   // One-second granularity, deliberately: the same figure drives the verdict and the reason text,
   // so a report can never say "600s ago, budget is 600s" while calling the market stale.

@@ -274,11 +274,14 @@ abstract contract UpDownMarketBase is Ownable2Step, Pausable, ReentrancyGuard {
         if (r.startTs == 0 || block.timestamp < r.startTs || block.timestamp >= r.lockTs || r.voided) {
             revert NotBettable();
         }
-        // An empty market has deliberately not been paying for relay prints. Its first stake is
-        // what wakes the keeper, so do not accept that stake too close to the strike boundary for
-        // the 1s dormant poll + price fetch + transaction landing budget. Once a round is funded,
-        // the keeper is already active and ordinary bets remain open until `lockTs`.
-        if (r.upAmount == 0 && r.downAmount == 0 && block.timestamp + FIRST_BET_MIN_LEAD_SECONDS > r.lockTs) {
+        // A dormant empty market has deliberately not been paying for relay prints. Its first
+        // stake wakes the keeper, so leave enough runway for the dormant poll + relay transaction.
+        // When the preceding funded round still needs settlement, the keeper is already active;
+        // the empty successor is then an ordinary live round and remains open until `lockTs`.
+        if (
+            r.upAmount == 0 && r.downAmount == 0 && !maintenanceRequired()
+                && block.timestamp + FIRST_BET_MIN_LEAD_SECONDS > r.lockTs
+        ) {
             revert NotBettable();
         }
         if (amount < minBetAmount) revert BelowMinBet();

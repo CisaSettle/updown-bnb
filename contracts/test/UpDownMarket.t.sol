@@ -519,6 +519,21 @@ contract UpDownMarketTest is UpDownBaseTest {
         assertEq(_round(1).downAmount, MIN_BET);
     }
 
+    function test_activeKeeperSuccessorAcceptsItsFirstBetAfterDormantCutoff() public {
+        _betUp(alice, MIN_BET);
+        _betDown(bob, MIN_BET);
+        _advance(P0);
+
+        UpDownMarketBase.Round memory successor = _round(2);
+        assertEq(successor.upAmount + successor.downAmount, 0);
+        assertTrue(market.maintenanceRequired(), "locked predecessor keeps the keeper awake");
+
+        vm.warp(uint256(successor.lockTs) - 1);
+        _betUp(alice, MIN_BET);
+
+        assertEq(_round(2).upAmount, MIN_BET);
+    }
+
     function test_fundedRoundPinsTheGridUntilItSettlesOrExpires() public {
         _betUp(alice, MIN_BET);
         UpDownMarketBase.Round memory funded = _round(1);
