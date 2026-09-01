@@ -1,0 +1,807 @@
+<!doctype html>
+<html lang="zh-Hans" data-lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>给 Binary Option 玩家的事件合约排名：Polymarket 综合第一；Kalshi 买入再卖出损耗最低</title>
+<script>
+  (function () {
+    try {
+      var v = localStorage.getItem('updown-doc-lang');
+      if (v === 'en' || v === 'zh') {
+        document.documentElement.setAttribute('data-lang', v);
+        document.documentElement.setAttribute('lang', v === 'en' ? 'en' : 'zh-Hans');
+        document.title = v === 'en'
+          ? 'Event-contract ranking for binary-options traders: Polymarket ranks first overall; Kalshi has the lowest buy-then-sell loss'
+          : '给 Binary Option 玩家的事件合约排名：Polymarket 综合第一；Kalshi 买入再卖出损耗最低';
+      }
+    } catch (e) {}
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&amp;family=IBM+Plex+Mono:wght@400;600&amp;family=IBM+Plex+Sans:wght@400;600&amp;family=Noto+Sans+SC:wght@400;500;700&amp;display=swap">
+<style>
+  :root{
+    --paper:#fbfaf7; --panel:#ffffff; --ink:#16181d; --muted:#6b6a66;
+    --rule:#e0dbd1; --rule-strong:#c9c3b6;
+    --accent:#b8780c; --accent-soft:#fdf3e0;
+    --code-bg:#f3f0e9;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#14151a; --panel:#1b1d23; --ink:#e9e7e1; --muted:#9b978e;
+      --rule:#2c2f37; --rule-strong:#3d414b;
+      --accent:#e0a63f; --accent-soft:#2a2114;
+      --code-bg:#1f222a;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#14151a; --panel:#1b1d23; --ink:#e9e7e1; --muted:#9b978e;
+    --rule:#2c2f37; --rule-strong:#3d414b;
+    --accent:#e0a63f; --accent-soft:#2a2114;
+    --code-bg:#1f222a;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth; max-width:100%; overflow-x:hidden}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:'IBM Plex Sans','Noto Sans SC',system-ui,sans-serif;
+    font-size:16px; line-height:1.75; -webkit-font-smoothing:antialiased;
+    max-width:100%; overflow-x:hidden;
+  }
+  [data-lang="zh"] .en{display:none}
+  [data-lang="en"] .zh{display:none}
+  header.top{
+    position:sticky; top:0; z-index:10;
+    background:color-mix(in srgb, var(--paper) 90%, transparent);
+    backdrop-filter:blur(10px); border-bottom:1px solid var(--rule);
+  }
+  .bar{max-width:64rem; margin:0 auto; padding:.65rem 1.5rem; display:flex; align-items:center; gap:1rem; flex-wrap:wrap}
+  .mark{
+    font-family:'Bricolage Grotesque','Noto Sans SC',sans-serif; font-weight:800; font-size:.95rem;
+    margin-right:auto; min-width:0; letter-spacing:-.01em;
+  }
+  .mark em{color:var(--accent); font-style:normal}
+  .toggle{display:flex; border:1px solid var(--rule-strong); border-radius:999px; overflow:hidden; flex:none}
+  .toggle button{
+    font:inherit; font-size:.78rem; font-weight:600; padding:.28rem .8rem;
+    background:transparent; color:var(--muted); border:0; cursor:pointer;
+  }
+  .toggle button[aria-pressed="true"]{background:var(--ink); color:var(--paper)}
+  .toggle button:focus-visible{outline:2px solid var(--accent); outline-offset:-2px}
+  main{width:100%; max-width:64rem; margin:0 auto; padding:2.5rem 1.5rem 6rem}
+  h1,h2,h3{font-family:'Bricolage Grotesque','Noto Sans SC',sans-serif; letter-spacing:-.015em; text-wrap:balance}
+  h1{font-weight:800; font-size:clamp(1.7rem,4vw,2.4rem); line-height:1.15; margin:0 0 1.5rem}
+  h2{font-weight:800; font-size:1.45rem; margin:3rem 0 .9rem; padding-top:1.2rem; border-top:1px solid var(--rule)}
+  h3{font-weight:600; font-size:1.1rem; margin:2rem 0 .6rem}
+  p{margin:1rem 0; max-width:72ch}
+  ul,ol{max-width:72ch; padding-left:1.35rem}
+  li{margin:.4rem 0}
+  a{color:var(--accent)}
+  code{
+    background:var(--code-bg); padding:.12rem .34rem; border-radius:4px;
+    font-family:'IBM Plex Mono',ui-monospace,monospace; font-size:.86em; word-break:break-word;
+  }
+  blockquote{
+    margin:1.5rem 0; padding:.1rem 1.2rem; border-left:4px solid var(--accent);
+    background:var(--accent-soft); border-radius:0 8px 8px 0;
+  }
+  blockquote p{margin:.9rem 0}
+  .family-grid{
+    display:grid; grid-template-columns:minmax(0,1.35fr) minmax(16rem,.8fr);
+    gap:1rem; margin:1.3rem 0;
+  }
+  .family-card{
+    border:1px solid var(--rule); border-radius:12px; padding:1.1rem 1.2rem;
+    background:var(--panel);
+  }
+  .family-card.shared{
+    border-color:color-mix(in srgb, #0e7a4a 38%, var(--rule));
+    background:color-mix(in srgb, #0e7a4a 6%, var(--panel));
+  }
+  .family-card.outlier{
+    border-color:color-mix(in srgb, var(--accent) 48%, var(--rule));
+    background:color-mix(in srgb, var(--accent) 7%, var(--panel));
+  }
+  .family-label{
+    color:var(--muted); font-size:.7rem; font-weight:600; letter-spacing:.09em;
+    line-height:1.35; text-transform:uppercase;
+  }
+  .family-card h3{font-size:1.2rem; margin:.35rem 0 .7rem}
+  .family-card p{max-width:none; margin:.7rem 0 0}
+  .brand-list{display:flex; flex-wrap:wrap; gap:.4rem; margin:.25rem 0 .8rem}
+  .brand-pill{
+    border:1px solid var(--rule-strong); border-radius:999px; padding:.15rem .58rem;
+    background:var(--panel); font-size:.78rem; font-weight:600; line-height:1.5;
+  }
+  .family-verdict{font-weight:700; font-size:1.02rem; line-height:1.55}
+  .common-flow{
+    display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:.65rem;
+    margin:1rem 0 1.2rem;
+  }
+  .flow-step{
+    position:relative; min-width:0; border:1px solid var(--rule); border-radius:10px;
+    padding:.8rem .75rem; background:var(--panel);
+  }
+  .flow-step:not(:last-child)::after{
+    content:'→'; position:absolute; z-index:1; right:-.56rem; top:50%;
+    width:1rem; height:1rem; transform:translateY(-50%); text-align:center;
+    color:var(--accent); background:var(--paper); font-weight:800; line-height:1rem;
+  }
+  .flow-num{color:var(--accent); font:600 .68rem/1 'IBM Plex Mono',ui-monospace,monospace}
+  .flow-step strong{display:block; margin:.42rem 0 .2rem; line-height:1.35}
+  .flow-step p{max-width:none; margin:0; color:var(--muted); font-size:.78rem; line-height:1.5}
+  .flow-lane{
+    margin:1rem 0; padding:1rem; border:1px solid var(--rule); border-radius:12px;
+    background:var(--panel);
+  }
+  .flow-lane.orderbook{border-left:4px solid #0e7a4a}
+  .flow-lane.fixed{border-left:4px solid var(--accent)}
+  .flow-lane-head{display:flex; align-items:baseline; gap:.75rem; flex-wrap:wrap; margin-bottom:.45rem}
+  .flow-lane-head strong{font-family:'Bricolage Grotesque','Noto Sans SC',sans-serif; font-size:1.05rem}
+  .flow-lane-head span{color:var(--muted); font-size:.78rem}
+  .common-flow.four{grid-template-columns:repeat(4,minmax(0,1fr)); margin-bottom:0}
+  figure{margin:1.4rem 0}
+  .viz-card{
+    border:1px solid var(--rule); border-radius:12px; padding:1.15rem 1.2rem;
+    background:var(--panel);
+  }
+  .viz-title{display:block; font-family:'Bricolage Grotesque','Noto Sans SC',sans-serif; font-weight:800; font-size:1.05rem}
+  .viz-subtitle{display:block; color:var(--muted); font-size:.8rem; margin-top:.15rem}
+  .metric-axis{display:grid; grid-template-columns:repeat(5,1fr); margin:.9rem 0 .25rem 12rem; color:var(--muted); font:400 .66rem/1 'IBM Plex Mono',ui-monospace,monospace}
+  .metric-axis span:last-child{text-align:right}
+  .metric-axis span:not(:first-child):not(:last-child){text-align:center}
+  .metric-row{display:grid; grid-template-columns:11rem minmax(0,1fr); gap:1rem; align-items:center; margin:.62rem 0}
+  .metric-head{display:flex; justify-content:space-between; gap:.6rem; font-size:.82rem; line-height:1.35}
+  .metric-head strong{font-weight:600}
+  .metric-head code{white-space:nowrap}
+  .metric-track{height:1rem; border-radius:999px; overflow:hidden; background:color-mix(in srgb, var(--ink) 7%, var(--panel)); position:relative}
+  .metric-track::before,.metric-track::after{content:''; position:absolute; inset-block:0; width:1px; background:var(--rule-strong); z-index:1}
+  .metric-track::before{left:25%}
+  .metric-track::after{left:75%}
+  .metric-fill{display:block; width:var(--bar); height:100%; border-radius:999px; background:#4a8f8b}
+  .metric-row.winner .metric-fill{background:#0e7a4a}
+  .metric-row.runner .metric-fill{background:#3768a5}
+  .viz-note{max-width:none; margin:.9rem 0 0; color:var(--muted); font-size:.76rem; line-height:1.55}
+  .compact-list{margin:0; padding-left:1.15rem}
+  .compact-list li{margin:.3rem 0}
+  .score-legend{display:flex; flex-wrap:wrap; gap:.45rem 1rem; margin:.9rem 0; font-size:.72rem; color:var(--muted)}
+  .legend-item{display:inline-flex; align-items:center; gap:.35rem}
+  .legend-dot{width:.65rem; height:.65rem; border-radius:3px; flex:none}
+  .s1{background:#b8780c}.s2{background:#3768a5}.s3{background:#4a8f8b}.s4{background:#7c5ca1}.s5{background:#0e7a4a}
+  .score-row{display:grid; grid-template-columns:12rem minmax(0,1fr); gap:1rem; align-items:center; margin:.75rem 0}
+  .score-head{display:flex; justify-content:space-between; gap:.6rem; align-items:baseline; line-height:1.3}
+  .score-head strong{font-size:.84rem}
+  .score-total{font:600 .78rem/1 'IBM Plex Mono',ui-monospace,monospace; color:var(--muted)}
+  .score-track{display:flex; height:1.45rem; overflow:hidden; border-radius:7px; background:color-mix(in srgb, var(--ink) 7%, var(--panel))}
+  .score-seg{display:flex; align-items:center; justify-content:center; flex:none; color:white; font:600 .64rem/1 'IBM Plex Mono',ui-monospace,monospace; border-right:1px solid color-mix(in srgb, white 45%, transparent)}
+  .score-seg.zero{display:none}
+  .criteria-grid{display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:.65rem; margin:1.2rem 0}
+  .criteria-card{border:1px solid var(--rule); border-radius:10px; padding:.8rem; background:var(--panel); min-width:0}
+  .criteria-card b{display:block; color:var(--accent); font:600 .7rem/1.2 'IBM Plex Mono',ui-monospace,monospace; margin-bottom:.45rem}
+  .criteria-card strong{display:block; font-size:.88rem; line-height:1.35; margin-bottom:.35rem}
+  .criteria-card p{max-width:none; margin:0; color:var(--muted); font-size:.72rem; line-height:1.45}
+  .detail-block{margin:1.5rem 0; border:1px solid var(--rule); border-radius:10px; background:var(--panel); padding:.85rem 1rem}
+  .detail-block summary{cursor:pointer; font-family:'Bricolage Grotesque','Noto Sans SC',sans-serif; font-weight:700; list-style-position:outside; margin-left:1rem}
+  .detail-block[open] summary{margin-bottom:.8rem}
+  .detail-block ol{margin-bottom:.35rem}
+  .snapshot-grid{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.7rem; margin:1.2rem 0}
+  .snapshot-card{border:1px solid var(--rule); border-radius:10px; padding:.85rem; background:var(--panel); min-width:0}
+  .snapshot-card h3{font-size:.88rem; margin:0 0 .55rem; line-height:1.35}
+  .snapshot-values{display:grid; grid-template-columns:1fr 1fr; gap:.45rem}
+  .snapshot-value{padding:.5rem; border-radius:8px; background:var(--code-bg)}
+  .snapshot-value span{display:block; color:var(--muted); font-size:.68rem; line-height:1.25}
+  .snapshot-value strong{display:block; margin-top:.15rem; font:600 .92rem/1.2 'IBM Plex Mono',ui-monospace,monospace}
+  .snapshot-card.alert{border-color:color-mix(in srgb, #b4232c 45%, var(--rule))}
+  .diff-lead{max-width:78ch}
+  .diff-table td:first-child{font-weight:700; background:color-mix(in srgb, var(--ink) 2.5%, var(--panel))}
+  .scroll{overflow-x:auto; border:1px solid var(--rule); border-radius:10px; margin:1.3rem 0; background:var(--panel)}
+  table{border-collapse:collapse; width:100%; font-size:.86rem}
+  th,td{padding:.55rem .8rem; text-align:left; border-bottom:1px solid var(--rule); vertical-align:top; min-width:9rem}
+  th:first-child,td:first-child{min-width:7rem}
+  th{
+    font-size:.68rem; letter-spacing:.08em; text-transform:uppercase; color:var(--muted);
+    font-weight:600; background:color-mix(in srgb, var(--ink) 4%, var(--panel));
+  }
+  tr:last-child td{border-bottom:0}
+  .good{color:#0e7a4a; font-weight:600}
+  .bad{color:#b4232c; font-weight:600}
+  .mid{color:var(--accent); font-weight:600}
+  @media (max-width:760px){
+    .family-grid{grid-template-columns:1fr}
+    .common-flow,.common-flow.four{grid-template-columns:1fr}
+    .flow-step:not(:last-child)::after{
+      content:'↓'; right:auto; left:50%; top:auto; bottom:-.56rem;
+      transform:translateX(-50%);
+    }
+    .metric-axis{margin-left:0}
+    .metric-row,.score-row{grid-template-columns:1fr; gap:.35rem}
+    .criteria-grid{grid-template-columns:1fr 1fr}
+    .snapshot-grid{grid-template-columns:1fr 1fr}
+  }
+  @media (max-width:520px){
+    .bar{display:block; width:100%; padding:.65rem 1.5rem}
+    .mark,h1,h2,h3,p,li{overflow-wrap:anywhere}
+    .toggle{width:max-content; margin-top:.55rem}
+    main{padding-top:2rem}
+    .flow-lane,.viz-card{padding:.9rem}
+    .criteria-grid{grid-template-columns:1fr}
+    .snapshot-grid{grid-template-columns:1fr}
+    .score-track{height:1.3rem}
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="bar">
+    <div class="mark"><span class="zh">事件合约产品对比 <em>·</em> OKX / Binance Event &amp; Wallet / Polymarket / Kalshi</span><span class="en">Event-contract products compared <em>·</em> OKX / Binance Event &amp; Wallet / Polymarket / Kalshi</span></div>
+    <div class="toggle" role="group" aria-label="Language">
+      <button type="button" data-set="zh" aria-pressed="true">中文</button>
+      <button type="button" data-set="en" aria-pressed="false">EN</button>
+    </div>
+  </div>
+</header>
+<main>
+
+<h1><span class="zh">给 Binary Option 玩家的事件合约排名：Polymarket 综合第一；Kalshi 买入再卖出损耗最低</span><span class="en">Event-contract ranking for binary-options traders: Polymarket ranks first overall; Kalshi has the lowest buy-then-sell loss</span></h1>
+<blockquote>
+  <p><span class="zh"><strong>综合排名：① Polymarket（96.8），② Kalshi（94.9），③ Binance Wallet / Predict.fun（88.7），④ OKX（80），⑤ Binance Event（70）。这不是胜率排名；如果只看买入后立即卖出的损耗，Kalshi 最低。</strong></span><span class="en"><strong>Overall ranking: ① Polymarket (96.8), ② Kalshi (94.9), ③ Binance Wallet / Predict.fun (88.7), ④ OKX (80), ⑤ Binance Event (70). This is not a win-probability ranking; Kalshi has the lowest loss when considering only an immediate sale after entry.</strong></span></p>
+</blockquote>
+
+<p><span class="zh">五款产品的分水岭是退出方式。OKX、Polymarket、Kalshi 与 Wallet / Predict.fun 买入后既可卖出，也可持有到期；Binance Event 确认后只能等待结算。这个差别决定了价格怎么看、利润从哪里来，以及哪些成本能够直接比较。</span><span class="en">The dividing line is how a position can be exited. After entry, OKX, Polymarket, Kalshi, and Wallet / Predict.fun positions can be sold or held to expiry; Binance Event must await settlement once confirmed. That difference determines how prices should be read, where profit can come from, and which costs are directly comparable.</span></p>
+
+<section id="mechanics">
+<h2><span class="zh">一、先看怎么赚钱：两类产品、两种路径</span><span class="en">1 · Start with profit and loss: two product families, two paths</span></h2>
+<div class="family-grid">
+  <article class="family-card shared">
+    <div class="family-label"><span class="zh">同一核心交易家族 × 4</span><span class="en">Same core trading family × 4</span></div>
+    <h3><span class="zh">订单簿二元份额</span><span class="en">Order-book binary shares</span></h3>
+    <div class="brand-list"><span class="brand-pill">OKX</span><span class="brand-pill">Polymarket</span><span class="brand-pill">Kalshi</span><span class="brand-pill">Binance Wallet · Predict.fun</span></div>
+    <p class="family-verdict"><span class="zh">像可提前平仓的交易所 Binary Option：买到份额后，可以卖出赚价格变动，也可以持有到期等 1 / 0 结算</span><span class="en">Like an exchange-traded binary option with early close: after buying shares, either sell to realize a price move or hold for the 1 / 0 settlement</span></p>
+    <p><span class="zh">共同交易骨架之外，四款在产品边界、资金载体、订单簿实现、结算锚点、争议治理与费用上各不相同。</span><span class="en">Beyond the shared trading skeleton, the four products differ in scope, collateral, book implementation, settlement anchor, dispute governance, and fees.</span></p>
+  </article>
+  <article class="family-card outlier">
+    <div class="family-label"><span class="zh">另一产品家族 × 1</span><span class="en">Different product family × 1</span></div>
+    <h3><span class="zh">平台固定赔付</span><span class="en">Platform fixed payout</span></h3>
+    <div class="brand-list"><span class="brand-pill">Binance Event</span></div>
+    <p class="family-verdict"><span class="zh">像常见的固定赔付 Binary Option：输入权利金 + 接受平台赔付比 → 只能持有到期</span><span class="en">Like a familiar fixed-payout binary option: enter a Premium + accept the platform's payout ratio → hold to expiry</span></p>
+    <p><span class="zh">没有玩家和做市者互相报价的订单簿，也不能提前卖出；提交后等到期按两次 <code>Price Index</code> 判定。</span><span class="en">There is no maker/taker book and no early sale; after submission, the contract waits for a result based on two <code>Price Index</code> observations.</span></p>
+  </article>
+</div>
+
+<h3><span class="zh">两类产品：从下单到结算</span><span class="en">Two product families: order to settlement</span></h3>
+<div class="flow-lane orderbook">
+  <div class="flow-lane-head"><strong><span class="zh">订单簿二元份额 × 4</span><span class="en">Order-book binary shares × 4</span></strong><span>OKX · Polymarket · Kalshi · Binance Wallet / Predict.fun</span></div>
+  <div class="common-flow">
+    <div class="flow-step"><span class="flow-num">01</span><strong><span class="zh">选方向</span><span class="en">Choose a side</span></strong><p><span class="zh">Up / Down 或 Yes / No</span><span class="en">Up / Down or Yes / No</span></p></div>
+    <div class="flow-step"><span class="flow-num">02</span><strong><span class="zh">报价格与数量</span><span class="en">Set price and size</span></strong><p><span class="zh">份价近似表达市场隐含概率</span><span class="en">Share price approximates implied probability</span></p></div>
+    <div class="flow-step"><span class="flow-num">03</span><strong><span class="zh">订单簿成交</span><span class="en">Match on the book</span></strong><p><span class="zh">吃现有流动性，或挂单等待</span><span class="en">Take liquidity or rest an order</span></p></div>
+    <div class="flow-step"><span class="flow-num">04</span><strong><span class="zh">卖出或持有</span><span class="en">Sell or hold</span></strong><p><span class="zh">可提前退出，但成交取决于流动性</span><span class="en">Early exit is possible, subject to liquidity</span></p></div>
+    <div class="flow-step"><span class="flow-num">05</span><strong><span class="zh">到期兑付 1 / 0</span><span class="en">Resolve to 1 / 0</span></strong><p><span class="zh">共同的是结果形态，不是裁定来源</span><span class="en">The payout shape—not the authority—is shared</span></p></div>
+  </div>
+</div>
+<div class="flow-lane fixed">
+  <div class="flow-lane-head"><strong><span class="zh">平台固定赔付 × 1</span><span class="en">Platform fixed payout × 1</span></strong><span>Binance Event</span></div>
+  <div class="common-flow four">
+    <div class="flow-step"><span class="flow-num">01</span><strong><span class="zh">选 Higher / Lower</span><span class="en">Choose Higher / Lower</span></strong><p><span class="zh">选择方向与期限</span><span class="en">Select direction and duration</span></p></div>
+    <div class="flow-step"><span class="flow-num">02</span><strong><span class="zh">接受赔付比</span><span class="en">Accept payout ratio</span></strong><p><span class="zh">本次 <code>r=0.80</code>，确认后锁定</span><span class="en">This comparison uses <code>r=0.80</code>, locked at confirmation</span></p></div>
+    <div class="flow-step"><span class="flow-num">03</span><strong><span class="zh">锁定并持有</span><span class="en">Lock and hold</span></strong><p><span class="zh">不能改价，也不能提前退出</span><span class="en">No repricing or early exit</span></p></div>
+    <div class="flow-step"><span class="flow-num">04</span><strong><span class="zh">指数比较结算</span><span class="en">Index-based settlement</span></strong><p><span class="zh">猜对按 <code>1+r</code> 回款</span><span class="en">Correct call returns <code>1+r</code></span></p></div>
+  </div>
+</div>
+
+<h3><span class="zh">订单簿产品有两种盈利路径；Binance Event 只有第二种</span><span class="en">Order-book products have two profit paths; Binance Event has only the second</span></h3>
+<div class="family-grid">
+  <article class="family-card shared">
+    <div class="family-label"><span class="zh">路径 1 · 到期前卖出</span><span class="en">Path 1 · Sell before expiry</span></div>
+    <h3><span class="zh">赚份额价格上涨的差额</span><span class="en">Realize a rise in the share price</span></h3>
+    <p><span class="zh">在 <code>P买</code> 买入 <code>C</code> 份，后来在 <code>P卖</code> 卖出：<code>净盈亏=C×(P卖−P买)−买卖两次费用</code>。例如 100 份从 0.40 涨到 0.72，未计费盈利 32；若跌到 0.30 卖出，则亏 10。你不需要猜中最终结果，但必须有人愿意接盘，价格还要覆盖点差、滑点和两次费用。</span><span class="en">Buy <code>C</code> shares at <code>Pbuy</code>, then sell at <code>Psell</code>: <code>net P&amp;L=C×(Psell−Pbuy)−fees on both trades</code>. For 100 shares moving from 0.40 to 0.72, profit before fees is 32; selling after a fall to 0.30 loses 10. The final outcome need not be correct, but a buyer must exist and the price move must cover spread, slippage, and both fees.</span></p>
+    <p><span class="zh"><strong>不要把两种“差价”混在一起：</strong>玩家赚的是买入价与后来卖出价之间的价格变动；同一时点的买卖盘口差（bid-ask spread）通常是普通玩家的成本，只有持续双边挂单的做市者才可能以收取点差为策略。</span><span class="en"><strong>Do not confuse two kinds of “spread”:</strong> a directional trader profits from the change between entry and a later exit; the same-time bid-ask spread is usually a cost. Capturing that spread is primarily a market-making strategy that requires continuously quoting both sides.</span></p>
+  </article>
+  <article class="family-card outlier">
+    <div class="family-label"><span class="zh">路径 2 · 持有到期</span><span class="en">Path 2 · Hold to expiry</span></div>
+    <h3><span class="zh">猜对拿固定结果，猜错归零</span><span class="en">Correct receives the fixed outcome; wrong goes to zero</span></h3>
+    <p><span class="zh"><strong>订单簿份额：</strong>100 份在 0.40 买入，成本 40。猜对回款 100、未计费净赚 60；猜错回款 0、净亏 40。<strong>Binance Event：</strong>投入权利金 100、本次参评合约 <code>r=0.80</code>，猜对回款 180、净赚 80；猜错回款 0、净亏 100；指数完全相等时退回 100。</span><span class="en"><strong>Order-book shares:</strong> 100 shares bought at 0.40 cost 40. Correct pays 100 for a 60 profit before fees; wrong pays zero for a 40 loss. <strong>Binance Event:</strong> with Premium 100 and <code>r=0.80</code> for the compared contract, correct returns 180 for an 80 profit, wrong returns zero for a 100 loss, and exact index equality refunds 100.</span></p>
+    <p><span class="zh">四个订单簿产品也能走这条路径；只有 Binance Event 没有路径 1。<strong>“Event Contract”是大类名称，不代表所有 Event Contract 都不能提前卖出。</strong></span><span class="en">The four order-book products also support this path; only Binance Event lacks Path 1. <strong>“Event contract” is an umbrella label and does not mean every event contract forbids early sale.</strong></span></p>
+  </article>
+</div>
+
+<h3><span class="zh">它们和 Binary Option 到底是什么关系？</span><span class="en">How do these products relate to binary options?</span></h3>
+<blockquote><p><span class="zh"><strong>直接结论：</strong>如果你说的 Binary Option 是“猜涨跌，到期只有猜对或猜错”，五款产品都是同一种二元结果交易；如果你说的是“平台先给固定赔付，确认后不能退出”，只有 Binance Event 是同一种交易体验。OKX、Polymarket、Kalshi 和 Wallet / Predict.fun 是把 Binary Option 的到期二元赔付做成了可买卖的份额。</span><span class="en"><strong>Direct conclusion:</strong> if “binary option” means predicting direction and ending with only a correct or wrong result, all five products share the same binary-outcome economics. If it means accepting a platform's fixed payout and being unable to exit after confirmation, only Binance Event offers the same trading experience. OKX, Polymarket, Kalshi, and Wallet / Predict.fun turn the binary payoff at expiry into tradable shares.</span></p></blockquote>
+<div class="family-grid">
+  <article class="family-card shared"><div class="family-label"><span class="zh">订单簿 × 4</span><span class="en">Four order-book products</span></div><h3><span class="zh">Binary Option 赔付 + 可交易份额</span><span class="en">Binary payoff + tradable shares</span></h3><p><span class="zh"><strong>相同：</strong>到期猜对兑付 1、猜错归零，最大亏损已知。<br><strong>不同：</strong>赔率变成份额价格 <code>P</code>，玩家和做市者共同定价，结算前还能卖出。<br><strong>对玩家：</strong>既能赚最终结果，也能赚中途价格变化，但要承担点差、滑点和卖不完的风险。</span><span class="en"><strong>Same:</strong> correct settles at 1, wrong at zero, with known maximum loss.<br><strong>Different:</strong> odds become share price <code>P</code>, traders and market makers set the price, and shares can be sold before settlement.<br><strong>For the trader:</strong> profit can come from the final result or an interim price move, but spread, slippage, and incomplete exit become risks.</span></p></article>
+  <article class="family-card outlier"><div class="family-label">Binance Event</div><h3><span class="zh">最像固定赔付 Binary Option</span><span class="en">Closest to a fixed-payout binary option</span></h3><p><span class="zh"><strong>相同：</strong>选择 Higher / Lower、平台给 <code>r</code>、猜错亏权利金、最大盈亏预先知道。<br><strong>不同：</strong>指数相等时退回权利金。<br><strong>对玩家：</strong>没有份额价格，也没有提前卖出；确认后只能等到期。</span><span class="en"><strong>Same:</strong> choose Higher / Lower, accept platform-quoted <code>r</code>, lose the Premium when wrong, and know maximum profit and loss upfront.<br><strong>Different:</strong> exact index equality refunds the Premium.<br><strong>For the trader:</strong> there is no share price or early sale; confirmation means waiting for expiry.</span></p></article>
+</div>
+<div class="scroll"><table class="diff-table">
+<thead><tr>
+  <th><span class="zh">玩家动作</span><span class="en">Trader action</span></th>
+  <th><span class="zh">订单簿 Event Contract × 4</span><span class="en">Order-book event contracts × 4</span></th>
+  <th>Binance Event</th>
+  <th><span class="zh">给 Binary Option 玩家的结论</span><span class="en">Conclusion for a binary-options trader</span></th>
+</tr></thead>
+<tbody>
+<tr data-binary-relation="entry"><td><span class="zh">下单时看什么</span><span class="en">What do I see at entry?</span></td><td><span class="zh">看份额价格 <code>P</code>；它既是每份成本，也近似市场隐含概率</span><span class="en">A share price <code>P</code>, which is both cost per share and approximate market-implied probability</span></td><td><span class="zh">看投入权利金和平台给出的净赔付比 <code>r</code></span><span class="en">The Premium staked and platform-quoted net payout ratio <code>r</code></span></td><td><strong><span class="zh">Binance Event 的下单方式最熟悉；订单簿产品要把“赔率”改读成“可交易价格”。</span><span class="en">Binance Event has the familiar entry flow; on order-book products, read “odds” as a tradable price.</span></strong></td></tr>
+<tr data-binary-relation="profit"><td><span class="zh">利润从哪里来</span><span class="en">Where can profit come from?</span></td><td><span class="zh">两条路：价格上涨后提前卖出，或持有到期猜对兑付 1</span><span class="en">Two paths: sell after the price rises, or hold to expiry and receive 1 when correct</span></td><td><span class="zh">只有一条路：持有到期，猜对赚 <code>A×r</code></span><span class="en">One path only: hold to expiry and earn <code>A×r</code> when correct</span></td><td><strong><span class="zh">订单簿产品比固定赔付 Binary Option 多了“交易价格变化”这条盈利路径。</span><span class="en">Order-book products add a price-movement profit path that a fixed-payout binary option lacks.</span></strong></td></tr>
+<tr data-binary-relation="exit"><td><span class="zh">判断错了能否先走</span><span class="en">Can I leave when my view changes?</span></td><td><span class="zh">可以卖出，但退出价格和能否卖完取决于实时买盘</span><span class="en">Yes, but exit price and full fill depend on live bids</span></td><td><span class="zh"><strong>不可以</strong>；确认后只能等到期</span><span class="en"><strong>No</strong>; confirmation means waiting for expiry</span></td><td><strong><span class="zh">订单簿给你退出权，但不保证好价格；Binance Event 连退出权都没有。</span><span class="en">The book gives an exit right but not a good-price guarantee; Binance Event provides no exit right.</span></strong></td></tr>
+<tr data-binary-relation="edge"><td><span class="zh">保本时真正要赢过什么</span><span class="en">What hurdle must my edge beat?</span></td><td><span class="zh">份额买价 + 手续费；提前卖出还要覆盖点差、滑点和卖出费</span><span class="en">Entry share price plus fees; an early sale must also cover spread, slippage, and exit fee</span></td><td><span class="zh">平台赔付比对应的门槛；<code>r=0.80</code> 时非平局保本胜率为 55.56%</span><span class="en">The hurdle implied by the platform payout ratio; at <code>r=0.80</code>, non-tie break-even is 55.56%</span></td><td><strong><span class="zh">两类产品都不是“猜对超过 50% 就赚钱”；必须先超过各自扣费后的保本门槛。</span><span class="en">Neither product pays simply because accuracy exceeds 50%; the forecast must first clear its after-cost break-even hurdle.</span></strong></td></tr>
+</tbody>
+</table></div>
+<p class="viz-note"><span class="zh">以上是交易机制关系，不是法律分类：不同司法辖区可能使用 Binary Option、Digital Option、Event Contract 或 Prediction Market 等不同名称。CFTC 的基础描述强调到期二元现金结算；Nadex 等交易所型 Binary Option 也允许用反向订单提前退出。</span><span class="en">This maps trading mechanics, not legal classifications: jurisdictions may use labels such as binary option, digital option, event contract, or prediction market differently. The CFTC baseline emphasizes binary cash settlement at expiry, while exchange binary options such as Nadex also allow early exit through an offsetting order.</span></p>
+
+<h3><span class="zh">五款短周期 Up/Down 产品差异矩阵</span><span class="en">Five short-horizon Up/Down products compared</span></h3>
+<p class="diff-lead"><span class="zh">这里只比较 BTC 等价格在短时间后是 Up 还是 Down 的产品，不讨论平台上的政治、体育、Above、Hit、Between、scalar 或 combo 等其他市场。前四款可以买卖二元份额并在结算前卖出；Binance Event 是平台给定赔付比、确认后只能持有到结算的方向合约。订单簿专属指标对 Binance Event 标为 N/A，让五款产品都明确参与比较。</span><span class="en">This table compares only short-horizon products that ask whether BTC or another asset finishes Up or Down. It excludes politics, sports, Above, Hit, Between, scalar, combo, and other markets on these platforms. The first four trade binary shares and permit sale before settlement; Binance Event is a directional contract with a platform-quoted payout ratio that must be held to settlement after confirmation. Order-book-only metrics are marked N/A for Binance Event so all five products remain visible in the comparison.</span></p>
+<div class="scroll"><table class="diff-table">
+<thead><tr>
+  <th><span class="zh">差异维度</span><span class="en">Difference</span></th>
+  <th>OKX</th>
+  <th>Polymarket</th>
+  <th>Kalshi</th>
+  <th>Binance Wallet · Predict.fun</th>
+  <th>Binance Event</th>
+  <th><span class="zh">玩家结论</span><span class="en">Player conclusion</span></th>
+</tr></thead>
+<tbody>
+<tr data-player-question="summary">
+  <td><span class="zh">一句话差别</span><span class="en">Difference in one line</span></td>
+  <td><span class="zh">有 5 分钟盘且可自主挂价，但本次 100 份实测流动性严重不足</span><span class="en">Offers five-minute markets and user-set prices, but the sampled book lacked enough liquidity for a 100-share round trip</span></td>
+  <td><span class="zh">有 5 分钟盘和链上份额，综合分最高；本次实测进出成本不是最低</span><span class="en">Offers five-minute markets and onchain shares, ranking first overall; sampled round-trip cost was not the lowest</span></td>
+  <td><span class="zh">本次 100 份实测成本最低且采用受监管美元交易所结构；可确认的最短加密盘为 15 分钟</span><span class="en">Had the lowest sampled 100-share cost and uses a regulated USD exchange structure; the shortest verified crypto market was 15 minutes</span></td>
+  <td><span class="zh">可通过 Binance Wallet 进入 5 分钟链上盘；六次均能成交，但本次可成交产品中进出成本最高</span><span class="en">Provides Binance Wallet access to five-minute onchain markets; all six tests filled, but it had the highest round-trip cost among fillable products</span></td>
+  <td><span class="zh">本次参评合约的净赔付比为 <code>r=0.80</code>，确认后锁定；没有份额订单簿，不能提前退出</span><span class="en">The compared contract uses <code>r=0.80</code>, locked at confirmation; there is no share order book or early exit</span></td>
+  <td><strong><span class="zh">综合选择看 Polymarket；只看本次进出成本选 Kalshi；最像固定赔付 Binary Option 的是 Binance Event。</span><span class="en">Polymarket leads overall; Kalshi wins on sampled round-trip cost alone; Binance Event most closely matches a fixed-payout binary option.</span></strong></td>
+</tr>
+<tr data-player-question="account">
+  <td><span class="zh">需要什么账户和资金</span><span class="en">Account and funds required</span></td>
+  <td><span class="zh">使用中心化 OKX 账户和 USDT；资金留在 OKX 体系内，赢家每份兑付 1 USDT</span><span class="en">Uses a centralized OKX account and USDT; funds remain inside OKX and each winning share pays 1 USDT</span></td>
+  <td><span class="zh">使用 Polygon 自托管钱包和 pUSD；pUSD 由 USDC 支持，赢家每份兑付 $1</span><span class="en">Uses a self-custodied Polygon wallet and pUSD, which is supported by USDC; each winning share pays $1</span></td>
+  <td><span class="zh">使用 Kalshi 账户和美元；合约由受监管交易所挂牌并清算，赢家每份兑付 $1</span><span class="en">Uses a Kalshi account and USD; contracts are listed and cleared through a regulated exchange structure, and each winner pays $1</span></td>
+  <td><span class="zh">使用 Binance Wallet / Predict 的 Prediction Account 和 BSC 上的 USDT 支持资金；Predict.fun 负责市场，Binance 只提供入口</span><span class="en">Uses a Binance Wallet/Predict Prediction Account with USDT-backed funds on BSC; Predict.fun operates the market and Binance provides the gateway</span></td>
+  <td><span class="zh">在 Binance Event 页面输入权利金 <code>A</code>；拿到不可转让的平台合约，猜对按 <code>A×(1+r)</code> 回款</span><span class="en">Enter Premium <code>A</code> on the Binance Event page; the resulting platform contract is non-transferable and a correct call returns <code>A×(1+r)</code></span></td>
+  <td><strong><span class="zh">想留在中心化账户，选 OKX、Kalshi 或 Binance Event；能处理自托管钱包、链上网络和稳定币，再考虑 Polymarket 或 Wallet / Predict.fun。</span><span class="en">Stay with OKX, Kalshi, or Binance Event for a centralized account; consider Polymarket or Wallet / Predict.fun only if you can manage self-custody, networks, and stablecoins.</span></strong></td>
+</tr>
+<tr data-player-question="exit">
+  <td><span class="zh">下单与提前退出</span><span class="en">Orders and early exit</span></td>
+  <td><span class="zh">可按当前盘口买入，也可自己设限价；未成交可撤，成交后可卖回订单簿</span><span class="en">Buy against the live book or set a limit price; cancel unfilled quantity and sell filled shares back into the book</span></td>
+  <td><span class="zh">可按当前盘口买入或自己设价；未成交可撤，成交后可在结算前卖出，最终执行链上确认</span><span class="en">Buy against the live book or set a price; cancel unfilled quantity and sell before settlement, with final execution confirmed onchain</span></td>
+  <td><span class="zh">可市价或限价交易；未成交可撤，成交后可反向卖出，但实际退出价格取决于当时盘口</span><span class="en">Use market or limit orders; cancel unfilled quantity and sell after entry, with the actual exit price determined by the live book</span></td>
+  <td><span class="zh">通过 Predict.fun 盘口市价或限价交易；未成交可撤，成交后可卖出，Binance Wallet 提供入口</span><span class="en">Trade through Predict.fun with market or limit orders; cancel unfilled quantity and sell after entry, with Binance Wallet providing the gateway</span></td>
+  <td><span class="zh">不能自主报价；只能接受平台显示的 <code>r</code>；确认后不能撤单或卖出，只能等待到期</span><span class="en">Users cannot quote a price and must accept the displayed <code>r</code>; after confirmation the contract cannot be cancelled or sold and must await expiry</span></td>
+  <td><strong><span class="zh">前四款都给你定价和退出控制，Binance Event 没有；但“允许卖出”不等于“能以好价格全部卖完”。</span><span class="en">The first four give you pricing and exit control; Binance Event does not. But permission to sell does not guarantee a full exit at a good price.</span></strong></td>
+</tr>
+<tr data-player-question="horizon">
+  <td><span class="zh">可比短周期覆盖</span><span class="en">Comparable short horizons</span></td>
+  <td><span class="zh">5 分钟 / 15 分钟 / 当日；BTC、ETH、SOL</span><span class="en">5-min / 15-min / daily across BTC, ETH, and SOL</span></td>
+  <td><span class="zh">5 分钟 / 15 分钟 / 小时 / 日；BTC 等</span><span class="en">5-min / 15-min / hourly / daily; BTC and others</span></td>
+  <td><span class="zh">期限逐市场确定；官方产品文档举例包括 15 分钟 BTC 市场</span><span class="en">Market-specific durations; official product documentation includes a 15-minute BTC market</span></td>
+  <td><span class="zh">当前 Predict.fun Crypto 目录可见 5 分钟 / 15 分钟 / 1 小时 / 1 日；BTC、ETH、BNB；覆盖会动态变化</span><span class="en">The current Predict.fun Crypto directory shows 5-min / 15-min / 1-hour / 1-day markets across BTC, ETH, and BNB; coverage is dynamic</span></td>
+  <td><span class="zh">官方公开四种期限；本次可确认的最短期限长于 5 分钟</span><span class="en">Four durations are publicly documented; the shortest duration verified in this review was longer than five minutes</span></td>
+  <td><strong><span class="zh">要玩 5 分钟盘，明确可选 OKX、Polymarket 和 Wallet / Predict.fun；本次 Kalshi 最短为 15 分钟，Binance Event 未确认有 5 分钟盘。</span><span class="en">For five-minute play, the verified choices are OKX, Polymarket, and Wallet / Predict.fun; Kalshi's shortest verified market was 15 minutes, and no five-minute Binance Event was confirmed.</span></strong></td>
+</tr>
+<tr data-player-question="settlement">
+  <td><span class="zh">短周期 Up/Down 如何判胜</span><span class="en">How short-horizon Up/Down is decided</span></td>
+  <td><span class="zh">用 OKX 自家指数计算到期均价：5 分钟盘取最后 30 秒，15 分钟盘取最后 60 秒；到期均价不低于目标价则 Up 赢</span><span class="en">Uses OKX's own index: the final 30-second average for five-minute markets and 60-second average for 15-minute markets; Up wins when the expiry average is at least the target</span></td>
+  <td><span class="zh">使用 Chainlink 计算的 30 秒或 60 秒时间加权均价；具体比较符号和平局处理以该市场规则为准</span><span class="en">Uses a Chainlink-computed 30- or 60-second time-weighted average; the exact comparison and equality treatment come from that market's rules</span></td>
+  <td><span class="zh">本次 BTC 15 分钟盘比较前后各 60 个 CF Benchmarks BRTI 秒级读数的平均值；到期平均值不低于开盘平均值则 Up / Yes 赢</span><span class="en">The sampled BTC 15-minute market compares 60 one-second CF Benchmarks BRTI observations before open and expiry; Up/Yes wins when the expiry average is at least the opening average</span></td>
+  <td><span class="zh">循环短周期盘用 Chainlink Data Streams 比较期初和期末；当前 5 分钟规则在完全相等时两边每份各兑付 0.50</span><span class="en">Recurring short-horizon markets use Chainlink Data Streams to compare opening and closing values; the current five-minute rule pays 0.50 per share to both sides on exact equality</span></td>
+  <td><span class="zh">下一秒确定开仓 <code>Price Index</code>；到期指数高于开仓则 Higher 赢，低于则 Lower 赢，相等退回权利金</span><span class="en">The next second fixes the opening <code>Price Index</code>; Higher wins above it at expiry, Lower wins below it, and equality refunds the Premium</span></td>
+  <td><strong><span class="zh">五款都不能只看交易软件里的最后一笔价格判输赢；必须按该市场指定的指数、取样窗口、比较符号和平局规则判断。</span><span class="en">None can be settled from the last chart trade alone; use that market's named index, sampling window, comparison rule, and tie treatment.</span></strong></td>
+</tr>
+<tr data-player-question="verification">
+  <td><span class="zh">普通用户能否独立检查结算</span><span class="en">Can an ordinary user verify settlement?</span></td>
+  <td><span class="zh">规则、OKX 指数、开收盘窗口、最终结果和复议规则均可查看</span><span class="en">Rules, the OKX index, opening and closing windows, final result, and review rules are visible</span></td>
+  <td><span class="zh">Chainlink TWAP 数值、时间戳、原始签名报告读取方式、市场规则和最终结果均公开</span><span class="en">Chainlink TWAP values, timestamps, access to original signed reports, market rules, and final results are public</span></td>
+  <td><span class="zh">逐市场规则、CF Benchmarks BRTI 来源和最终结果公开，并由受监管交易所记录</span><span class="en">Market-specific rules, the CF Benchmarks BRTI source, and final results are public and recorded by the regulated exchange</span></td>
+  <td><span class="zh">正常路径的签名 Chainlink 报告、期初/期末值和结果上链；暂停状态下的应急路径也在规则中公开</span><span class="en">The normal path puts signed Chainlink reports, opening and closing values, and results onchain; the paused-state emergency path is also disclosed in the rules</span></td>
+  <td><span class="zh"><code>Price Index</code>、确认时锁定的赔付金额、订单和结算结果保存在账户记录中</span><span class="en">The <code>Price Index</code>, payout amount locked at confirmation, order, and settlement result are retained in account records</span></td>
+  <td><strong><span class="zh">五款的规则和结算记录都能核对，这一项不是主要差异；真正影响玩家体验的是能否退出以及退出时有没有流动性。</span><span class="en">Rules and settlement records are checkable across all five, so this is not a major differentiator; exit rights and executable liquidity matter more to the player.</span></strong></td>
+</tr>
+<tr data-player-question="roundtrip">
+  <td><span class="zh">交易成本：100 份立即买入再卖出，谁更便宜</span><span class="en">Trading cost: cheapest 100-share immediate round trip</span></td>
+  <td><span class="zh"><strong>无法比较</strong>：0 / 6 次完成；受限一侧最多 80.5 份</span><span class="en"><strong>Not comparable</strong>: 0 / 6 completed; the constrained side had at most 80.5 shares</span></td>
+  <td><span class="zh"><strong>第二便宜</strong>：6 / 6 次完成，损耗中位数 1.6013 USDT</span><span class="en"><strong>Second cheapest</strong>: 6 / 6 completed, median loss 1.6013 USDT</span></td>
+  <td><span class="zh"><strong>最便宜</strong>：6 / 6 次完成，损耗中位数 0.5665 USDT</span><span class="en"><strong>Cheapest</strong>: 6 / 6 completed, median loss 0.5665 USDT</span></td>
+  <td><span class="zh"><strong>第三</strong>：6 / 6 次完成，损耗中位数 5.6620 USDT</span><span class="en"><strong>Third</strong>: 6 / 6 completed, median loss 5.6620 USDT</span></td>
+  <td><span class="zh"><strong>N/A</strong>：没有订单簿且不能提前卖出，无法做 100 份立即往返测试；本次经济折价按 <code>r=0.80</code> 计算</span><span class="en"><strong>N/A</strong>: there is no order book or early sale, so a 100-share immediate round trip cannot be tested; this comparison calculates the payout discount at <code>r=0.80</code></span></td>
+  <td><strong><span class="zh">本次 Kalshi 最便宜，Polymarket 第二，Wallet / Predict.fun 第三；OKX 连 100 份都无法完整退出，Binance Event 不适用。</span><span class="en">Kalshi was cheapest in this sample, Polymarket second, and Wallet / Predict.fun third; OKX could not fully exit 100 shares, while Binance Event is not applicable.</span></strong></td>
+</tr>
+<tr data-player-question="hold">
+  <td><span class="zh">只买入并持有到期：哪个更容易覆盖成本</span><span class="en">Buy and hold to settlement: lowest break-even hurdle</span></td>
+  <td><span class="zh">Up 保本门槛 <strong>94.7797%–94.9026%</strong>；Down 无法买满 100 份，本次最不利</span><span class="en">Up break-even hurdle <strong>94.7797%–94.9026%</strong>; Down could not fill 100 shares, making this the least favorable sample</span></td>
+  <td><span class="zh">Up <strong>3.2037%–15.4199%</strong>；Down <strong>88.7392%–98.1372%</strong></span><span class="en">Up <strong>3.2037%–15.4199%</strong>; Down <strong>88.7392%–98.1372%</strong></span></td>
+  <td><span class="zh">Up <strong>1.6035%–9.9074%</strong>，三次都是 Up 最低门槛；Down <strong>91.3848%–98.6967%</strong></span><span class="en">Up <strong>1.6035%–9.9074%</strong>, the lowest Up hurdle in all three snapshots; Down <strong>91.3848%–98.6967%</strong></span></td>
+  <td><span class="zh">Up <strong>10.4269%–19.6723%</strong>；Down <strong>85.3925%–95.2351%</strong>，三次都是 Down 最低门槛；严格口径为选中概率加一半平局概率</span><span class="en">Up <strong>10.4269%–19.6723%</strong>; Down <strong>85.3925%–95.2351%</strong>, the lowest Down hurdle in all three snapshots; the strict measure adds half the tie probability to the selected outcome probability</span></td>
+  <td><span class="zh">本次参评合约 <code>r=0.80</code>：非平局门槛 <strong>55.56%</strong>；若平局概率为 <code>t</code>，无条件门槛为 <code>q*=(1−t)/1.8</code></span><span class="en">Compared contract at <code>r=0.80</code>: the non-tie hurdle is <strong>55.56%</strong>; with tie probability <code>t</code>, the unconditional hurdle is <code>q*=(1−t)/1.8</code></span></td>
+  <td><strong><span class="zh">持有到期没有固定赢家：门槛随方向和买价变化；低门槛只代表买得便宜，不代表更容易猜中。</span><span class="en">There is no fixed winner for holding to expiry: the hurdle changes with side and entry price. A lower hurdle means a cheaper entry, not an easier prediction.</span></strong></td>
+</tr>
+</tbody>
+</table></div>
+
+<h3><span class="zh">四款订单簿产品的基础费用（截至 2026-08-30）</span><span class="en">Base fees across the four order-book products (as of August 30, 2026)</span></h3>
+<p class="diff-lead"><span class="zh">基础费率只决定成本的一部分；最终成本分使用第三节的真实双边盘口，同时计入点差和深度冲击。费率可能按品类或系列变化，下单前应复核具体市场。</span><span class="en">Base fees are only one part of trading cost. Final cost scores use the live two-sided books in section 3, including spread and depth impact. Rates can vary by category or series, so verify the specific market before trading.</span></p>
+<div class="scroll"><table class="diff-table">
+<thead><tr>
+  <th><span class="zh">费用项</span><span class="en">Fee item</span></th>
+  <th>OKX</th>
+  <th>Polymarket</th>
+  <th>Kalshi</th>
+  <th>Binance Wallet · Predict.fun</th>
+</tr></thead>
+<tbody>
+<tr>
+  <td><span class="zh">基础吃单费用公式</span><span class="en">Base taker-fee formula</span></td>
+  <td><span class="zh"><code>0.045 × C × P × (1−P)</code>；P=0.5 时每 100 份 1.125 USDT；无结算费</span><span class="en"><code>0.045 × C × P × (1−P)</code>; 1.125 USDT per 100 shares at P=0.5; no settlement fee</span></td>
+  <td><span class="zh">短周期加密 Up/Down：<code>0.07 × C × P × (1−P)</code>；P=0.5 时每 100 份 $1.75</span><span class="en">Short-horizon crypto Up/Down: <code>0.07 × C × P × (1−P)</code>; $1.75 per 100 shares at P=0.5</span></td>
+  <td><span class="zh">通用公式 <code>向上取整(M × 0.07 × C × P × (1−P))</code>；不同系列可有不同 multiplier；无结算费</span><span class="en">General formula <code>ceil(M × 0.07 × C × P × (1−P))</code>; series may use different multipliers; no settlement fee</span></td>
+  <td><span class="zh">当前 Crypto Up/Down 基础费率 200 bps：<code>0.02 × min(P,1−P) × C</code>；P=0.5 时每 100 份 1 USDT。最终以 Wallet 确认页的 <code>feeAmount / feeRateBps</code> 为准</span><span class="en">Current Crypto Up/Down base rate is 200 bps: <code>0.02 × min(P,1−P) × C</code>; 1 USDT per 100 shares at P=0.5. The Wallet confirmation screen's <code>feeAmount / feeRateBps</code> controls</span></td>
+</tr>
+<tr>
+  <td><span class="zh">结算费</span><span class="en">Settlement fee</span></td>
+  <td><span class="zh">0（2026-05-06 起）</span><span class="en">0 since May 6, 2026</span></td>
+  <td><span class="zh">0；交易费在成交时计算</span><span class="en">0; trading fees are calculated at match time</span></td>
+  <td><span class="zh">0；现行费率表另列特定舍入口径</span><span class="en">0; the current schedule separately specifies rounding treatment</span></td>
+  <td><span class="zh">Binance Wallet 赞助交易与结算 gas；Predict 公开费率仅列成交费，实际收费仍以每笔确认页为准</span><span class="en">Binance Wallet sponsors trading and settlement gas; Predict's public schedule lists trading fees, while each confirmation screen remains authoritative</span></td>
+</tr>
+</tbody>
+</table></div>
+
+</section>
+<h2><span class="zh">二、用玩家熟悉的投入、回款和保本胜率算一遍</span><span class="en">2 · Worked examples using stake, payout, and break-even rate</span></h2>
+
+<div class="scroll"><table>
+<thead><tr>
+  <th><span class="zh">产品</span><span class="en">Product</span></th>
+  <th><span class="zh">投入与总成本</span><span class="en">Stake and total cost</span></th>
+  <th><span class="zh">猜对</span><span class="en">Correct</span></th>
+  <th><span class="zh">猜错</span><span class="en">Wrong</span></th>
+  <th><span class="zh">最低保本胜率</span><span class="en">Minimum break-even rate</span></th>
+  <th><span class="zh">能否提前卖出</span><span class="en">Early sale?</span></th>
+</tr></thead>
+<tbody>
+<tr data-worked-product="okx">
+  <td><strong>OKX</strong></td>
+  <td><span class="zh"><code>P=0.50</code> 买 100 份：成交额 50 + 基础 taker 费 1.125 = <strong>51.125 USDT</strong></span><span class="en">Buy 100 at <code>P=0.50</code>: 50 notional + 1.125 base taker fee = <strong>51.125 USDT</strong></span></td>
+  <td><span class="zh">回款 100，净赚 <strong>48.875</strong></span><span class="en">Payout 100; net profit <strong>48.875</strong></span></td>
+  <td><span class="zh">回款 0，净亏 <strong>51.125</strong></span><span class="en">Payout 0; net loss <strong>51.125</strong></span></td>
+  <td><strong>51.125%</strong></td>
+  <td><span class="zh">可以；按实时买盘成交</span><span class="en">Yes; executes against live bids</span></td>
+</tr>
+<tr data-worked-product="polymarket">
+  <td><strong>Polymarket</strong></td>
+  <td><span class="zh"><code>P=0.50</code> 买 100 份：成交额 50 + 基础 taker 费 1.75 = <strong>51.75 USDC</strong></span><span class="en">Buy 100 at <code>P=0.50</code>: 50 notional + 1.75 base taker fee = <strong>51.75 USDC</strong></span></td>
+  <td><span class="zh">回款 100，净赚 <strong>48.25</strong></span><span class="en">Payout 100; net profit <strong>48.25</strong></span></td>
+  <td><span class="zh">回款 0，净亏 <strong>51.75</strong></span><span class="en">Payout 0; net loss <strong>51.75</strong></span></td>
+  <td><strong>51.75%</strong></td>
+  <td><span class="zh">可以；按实时买盘成交</span><span class="en">Yes; executes against live bids</span></td>
+</tr>
+<tr data-worked-product="kalshi">
+  <td><strong>Kalshi</strong></td>
+  <td><span class="zh"><code>P=0.50</code> 买 100 份、标准 <code>M=1</code>：成交额 50 + 基础 taker 费 1.75 = <strong>51.75 USD</strong></span><span class="en">Buy 100 at <code>P=0.50</code> with standard <code>M=1</code>: 50 notional + 1.75 base taker fee = <strong>51.75 USD</strong></span></td>
+  <td><span class="zh">回款 100，净赚 <strong>48.25</strong></span><span class="en">Payout 100; net profit <strong>48.25</strong></span></td>
+  <td><span class="zh">回款 0，净亏 <strong>51.75</strong></span><span class="en">Payout 0; net loss <strong>51.75</strong></span></td>
+  <td><strong>51.75%</strong></td>
+  <td><span class="zh">可以；按实时买盘成交</span><span class="en">Yes; executes against live bids</span></td>
+</tr>
+<tr data-worked-product="predict">
+  <td><strong>Binance Wallet / Predict.fun</strong></td>
+  <td><span class="zh"><code>P=0.50</code> 买 100 份：成交额 50 + 基础 taker 费 1 = <strong>51 USDT</strong></span><span class="en">Buy 100 at <code>P=0.50</code>: 50 notional + 1 base taker fee = <strong>51 USDT</strong></span></td>
+  <td><span class="zh">非平局时回款 100，净赚 <strong>49</strong></span><span class="en">Non-tie payout 100; net profit <strong>49</strong></span></td>
+  <td><span class="zh">非平局时回款 0，净亏 <strong>51</strong></span><span class="en">Non-tie payout 0; net loss <strong>51</strong></span></td>
+  <td><span class="zh"><strong>51.00%</strong>；严格条件含 0.5×平局概率</span><span class="en"><strong>51.00%</strong>; strict condition includes 0.5× tie probability</span></td>
+  <td><span class="zh">可以；按实时买盘成交</span><span class="en">Yes; executes against live bids</span></td>
+</tr>
+<tr data-worked-product="binance-event">
+  <td><strong>Binance Event</strong></td>
+  <td><span class="zh">投入权利金 <strong>50 USDT</strong>，净赔付比 <code>r=0.80</code></span><span class="en">Stake a <strong>50 USDT</strong> Premium at net payout ratio <code>r=0.80</code></span></td>
+  <td><span class="zh">总回款 90，净赚 <strong>40</strong></span><span class="en">Gross payout 90; net profit <strong>40</strong></span></td>
+  <td><span class="zh">回款 0，净亏 <strong>50</strong>；平局退回 50</span><span class="en">Payout 0; net loss <strong>50</strong>; a tie refunds 50</span></td>
+  <td><span class="zh"><strong>55.56%</strong>（非平局）</span><span class="en"><strong>55.56%</strong> (non-tie)</span></td>
+  <td><strong><span class="zh">不可以</span><span class="en">No</span></strong></td>
+</tr>
+</tbody>
+</table></div>
+
+<p><span class="zh"><strong>三类数字作用不同：</strong><strong>标的/预言机价格</strong>决定结果；OKX、Polymarket、Kalshi 与 Wallet / Predict.fun 的<strong>份额价格 <code>P</code></strong>决定买入成本并近似表达市场隐含概率；Binance Event 的<strong>净赔付比 <code>r</code></strong>决定猜对后的利润。例如 <code>P=0.80</code> 表示每份成本 0.80；<code>r=0.80</code> 表示猜对时净赚权利金的 0.80 倍，两者不是同一个概念。</span><span class="en"><strong>The three number types serve different roles:</strong> the <strong>underlying/oracle price</strong> decides the outcome; <strong>share price <code>P</code></strong> on OKX, Polymarket, Kalshi, and Wallet / Predict.fun determines entry cost and approximates market-implied probability; Binance Event's <strong>net payout ratio <code>r</code></strong> determines profit when correct. <code>P=0.80</code> means a cost of 0.80 per share, while <code>r=0.80</code> means net profit equal to 0.80 times the Premium; they are not the same concept.</span></p>
+
+<h3><span class="zh">订单簿份额的计算</span><span class="en">Order-book share arithmetic</span></h3>
+<p><span class="zh">一份是标准化结算单位，通常猜对到期值 1、猜错值 0；它不是平台根据 BTC 市价计算的赔率。用户按份价 <code>P</code> 成交 <code>C</code> 份，不计费时：</span><span class="en">A share is a standardized settlement unit, usually worth 1 if correct and 0 if wrong; it is not an odds quote calculated from BTC's market price. A user fills <code>C</code> shares at price <code>P</code>. Before fees:</span></p>
+<p><code>A = C × P</code>　　<code>C = A / P</code>　　<code><span class="zh">猜对总回款</span><span class="en">correct gross payout</span> = C × 1</code></p>
+<p><span class="zh">跨多个价位吃单时，应按实际成交份数与加权均价计算，不能直接套用下单前的最优报价。Binance Wallet 买入界面通常先输入 USDT 金额，再由 Predict.fun quote 返回份数、费用与滑点。<strong>标的指数决定结果，份额价格决定交易成本与数量。</strong></span><span class="en">When a taker order crosses several price levels, use filled shares and volume-weighted price rather than the pre-trade best quote. Binance Wallet's buy flow usually starts with a USDT amount, after which the Predict.fun quote returns shares, fees, and slippage. <strong>The underlying index decides the result; share price determines trade cost and quantity.</strong></span></p>
+
+<h3><span class="zh">OKX 固定金额示例：投入 90 USDT，份额价格 <code>P=0.90</code></span><span class="en">OKX fixed-budget example: 90 USDT at share price <code>P=0.90</code></span></h3>
+<ol>
+  <li><span class="zh"><strong><code>0.90</code> 的含义：</strong>它是每份价格，也是约 90% 的市场隐含概率，不是“猜对返 0.90 倍”。不计费时，90 USDT 买到 <code>90/0.90=100</code> 份；猜对兑付 100，净赚 10；猜错归零，亏 90。总回款倍数是 <code>100/90=1.1111×</code>，净利润率是 <code>10/90=11.11%</code>，保本胜率是 90%。</span><span class="en"><strong>Meaning of <code>0.90</code>:</strong> it is the per-share price and roughly 90% market-implied probability, not “0.90× back if right.” Before fees, 90 USDT buys <code>90/0.90=100</code> shares; a win redeems 100 for +10 profit, while a loss goes to zero for −90. Gross return is <code>100/90=1.1111×</code>, net return is <code>10/90=11.11%</code>, and break-even is 90%.</span></li>
+  <li><span class="zh"><strong>如果立即吃单：</strong>OKX taker 费 <code>=0.045×C×P×(1−P)</code>，因此 100 份的费用是 <code>0.405</code>，总成本 <code>90.405</code>。猜对净赚 <code>100−90.405=9.595</code>；保本胜率升到 <code>90.405%</code>。</span><span class="en"><strong>If taking immediately:</strong> OKX taker fee is <code>0.045×C×P×(1−P)</code>, so 100 shares cost an additional <code>0.405</code>, for <code>90.405</code> total. A win nets <code>100−90.405=9.595</code>; break-even rises to <code>90.405%</code>.</span></li>
+  <li><span class="zh"><strong>胜负判定：</strong><code>0.90</code> 不参与指数比较。平台在到期窗口计算 OKX 指数平均价，再与该市场规则里的 Entry/Strike 比较；满足 Up 条件，Up 份额才兑付 1 USDT。</span><span class="en"><strong>Outcome test:</strong> <code>0.90</code> is not part of the index comparison. OKX averages its index over the expiry window, then compares it with the market's rule-defined Entry/Strike; only an Up result makes each Up share redeem for 1 USDT.</span></li>
+</ol>
+
+<h3><span class="zh">Polymarket 示例：份价 <code>P=0.50</code>，买 100 份</span><span class="en">Polymarket example: 100 shares at <code>P=0.50</code></span></h3>
+<p><span class="zh">成交额是 50 USDC；短周期加密盘基础 taker 费 <code>=0.07×100×0.50×0.50=1.75</code>，总成本 51.75。持有到期猜对回款 100、净赚 48.25；猜错回款 0、净亏 51.75，因此最低保本胜率为 51.75%。如果结算前卖出，最终盈亏改由卖价、买卖两次费用、点差和深度共同决定。</span><span class="en">Notional is 50 USDC. The short-horizon crypto base taker fee is <code>0.07×100×0.50×0.50=1.75</code>, for a total cost of 51.75. Holding to settlement pays 100 and nets 48.25 when correct, or pays zero and loses 51.75 when wrong, so minimum break-even is 51.75%. If sold before resolution, final P&amp;L instead depends on the sale price, fees on both legs, spread, and depth.</span></p>
+
+<h3><span class="zh">Kalshi 示例：份价 <code>P=0.50</code>，买 100 份</span><span class="en">Kalshi example: 100 contracts at <code>P=0.50</code></span></h3>
+<p><span class="zh">按标准 <code>M=1</code> 费率，成交额是 50 USD，基础 taker 费 <code>=0.07×100×0.50×0.50=1.75</code>，总成本 51.75。猜对回款 100、净赚 48.25；猜错回款 0、净亏 51.75，最低保本胜率也是 51.75%。具体系列的 multiplier 和舍入规则可能不同；提前卖出时同样要按当时买盘和退出费用重算。</span><span class="en">At the standard <code>M=1</code> rate, notional is 50 USD and the base taker fee is <code>0.07×100×0.50×0.50=1.75</code>, for a total cost of 51.75. A correct call pays 100 and nets 48.25; a wrong call pays zero and loses 51.75, giving the same 51.75% minimum break-even. A specific series may use a different multiplier or rounding rule; an early sale must likewise be recalculated from the live bid and exit fee.</span></p>
+
+<h3><span class="zh">Binance Event 通用公式：权利金 <code>A</code>，本次参评合约 <code>r=0.80</code></span><span class="en">Binance Event formula: Premium <code>A</code> and <code>r=0.80</code> for the compared contract</span></h3>
+<ol>
+  <li><span class="zh"><strong>赔付：</strong>2026-09-01 的生产界面截图显示 BTCUSDT 10 分钟产品 Higher 与 Lower 均为 80%，下单区两边也均显示 Payout 80%，所以本次参评合约按 <code>r=0.80</code> 计算；确认后，该笔 Potential Payout Amount 按 Binance Event Contracts Terms 锁定。猜对总回款为 <code>A×1.8</code>，净利润为 <code>A×0.8</code>。<strong>这证明本次 BTCUSDT 10 分钟产品两边都是 0.80，不外推成所有资产和期限的永久平台常数。</strong></span><span class="en"><strong>Payout:</strong> a September 1, 2026 production screenshot shows both Higher and Lower at 80% for the BTCUSDT ten-minute product, with both order panels again showing Payout 80%. The compared contract therefore uses <code>r=0.80</code>; after confirmation, its Potential Payout Amount is locked under the Binance Event Contracts Terms. A correct call returns <code>A×1.8</code> in total and earns <code>A×0.8</code> net. <strong>This proves 0.80 for both sides of the compared BTCUSDT ten-minute product without extrapolating it into a permanent constant for every asset and horizon.</strong></span></li>
+  <li><span class="zh"><strong>开仓：</strong>下单后的下一秒才确定开仓时间和开仓 <code>Price Index</code>。它是这一笔 Higher/Lower 的比较基准，不是由其他用户报出的概率。</span><span class="en"><strong>Open:</strong> open time and open <code>Price Index</code> are set at the next second after placement. This is the comparison reference for that Higher/Lower trade, not a probability quoted by other users.</span></li>
+  <li><span class="zh"><strong>结算：</strong>到期指数高于开仓指数时 Higher 赢，低于时 Lower 赢；相等退回权利金 <code>A</code>。猜错回款 0、净亏 <code>A</code>；猜对回款 <code>A×(1+r)</code>。</span><span class="en"><strong>Settle:</strong> Higher wins when the expiry index is above the open index, Lower wins when below, and equality refunds Premium <code>A</code>. A wrong call returns 0 for a net loss of <code>A</code>; a correct call returns <code>A×(1+r)</code>.</span></li>
+  <li><span class="zh"><strong>长期保本（EV）：</strong>设无条件猜中概率为 <code>q</code>、平局概率为 <code>t</code>，则每投入 <code>A</code> 的长期平均盈亏为 <code>A×[0.8q−(1−q−t)]</code>，无条件保本门槛为 <code>q*=(1−t)/1.8</code>。按非平局条件计算时，固定门槛为 <code>1/1.8=55.56%</code>。Price Index 行情流用于核对开盘与结算价格，<strong>不能代替赔付比</strong>。</span><span class="en"><strong>Long-run break-even (EV):</strong> let <code>q</code> be the unconditional win probability and <code>t</code> the tie probability. Long-run average P&amp;L per Premium <code>A</code> is <code>A×[0.8q−(1−q−t)]</code>, and the unconditional break-even threshold is <code>q*=(1−t)/1.8</code>. Conditional on a non-tie, the fixed hurdle is <code>1/1.8=55.56%</code>. The Index Price feed checks opening and settlement values; it <strong>does not substitute for the payout ratio</strong>.</span></li>
+</ol>
+
+<h3><span class="zh">OKX：本次指定市场流动性不足，100 份不能完整进出</span><span class="en">OKX: the sampled market lacked enough liquidity for a 100-share round trip</span></h3>
+<p><span class="zh">OKX 持有到期的保本条件可直接由公开卖盘复算：<code>q*=(买入成交额+买入费)/成交份数</code>。本次三个同步快照中，Up 侧 100 份买入的总成本分别为 94.902606、94.810581、94.779744 USDT，对应保本胜率 94.902606%、94.810581%、94.779744%；Down 侧三次分别只有 80.5、80、80 份可买，无法形成 100 份保本数字。更重要的是，Up 买入后也分别只有 80.5、80、80 份可立即卖回。因此结论是该市场在本次窗口的公开流动性不足，而不是 OKX 产品形态不支持进出；按本报告的 100 份硬门槛，成本分为 0。该结论不能外推到 OKX 其他市场或长期流动性。</span><span class="en">OKX held-to-resolution break-even is directly reproducible from public asks: <code>q*=(buy notional+buy fee)/filled shares</code>. Across the three synchronized snapshots, total cost to buy 100 Up shares was 94.902606, 94.810581, and 94.779744 USDT, giving break-even rates of 94.902606%, 94.810581%, and 94.779744%. On the Down side, only 80.5, 80, and 80 shares were available, so no 100-share break-even existed. More importantly, an Up purchase could immediately sell back only 80.5, 80, and 80 shares. The finding is insufficient visible liquidity in this market and sample window—not a product design that forbids entry or exit. Under the report's hard 100-share threshold, cost scores zero. This cannot be extrapolated to other OKX markets or long-run liquidity.</span></p>
+<blockquote><p><span class="zh"><strong>为什么会高到约 94.9%：</strong>这不是说 OKX 预测这笔合约有 94.9% 胜率，而是 100 份立即买满的流动性压力结果：买方付出约 94.9 USDT 后，真实胜率至少要达到约 94.9% 才保本；门槛越高，对买方越不利。官方 instrument 响应给出每份面值 <code>ctVal=1</code>、最小变动单位 <code>lotSz=0.1</code>；第一轮原始卖盘前十档合计仅 1 份、成交额 0.295 USDT，随后 40 份在 <code>0.90</code>、剩余 59 份在 <code>0.99</code>，所以买入成交额为 <code>0.295 + 40×0.90 + 59×0.99 = 94.705</code> USDT，再加 0.197606 USDT taker 费才得到 94.902606%。若真实胜率只有 50%，期望兑付约 50 USDT，减去买入总成本后的期望损失约 44.90 USDT，并不存在“无脑买入”机会。后两轮的深档结构同样是 40 份在 0.90、59 份在 0.99。若玩家设置较低限价、拒绝扫到 0.90 / 0.99，订单就买不满 100 份，不能据此改填一个更低的“100 份保本率”。</span><span class="en"><strong>Why it reaches about 94.9%:</strong> this does not mean OKX predicts a 94.9% chance of winning; it is the liquidity-stress result of filling 100 shares immediately. After the buyer pays about 94.9 USDT, the true win probability must be about 94.9% merely to break even; a higher hurdle is worse for the buyer. The official instrument response gives face value <code>ctVal=1</code> and lot size <code>lotSz=0.1</code>. In the first raw book, the first ten ask levels totaled only 1 share and 0.295 USDT of notional, followed by 40 shares at <code>0.90</code> and the remaining 59 shares at <code>0.99</code>. Buy notional was therefore <code>0.295 + 40×0.90 + 59×0.99 = 94.705</code> USDT; adding the 0.197606 USDT taker fee gives 94.902606%. At a true 50% win probability, expected redemption is about 50 USDT and expected loss after entry cost is about 44.90 USDT—there is no buy-it-blind opportunity. The next two books likewise required 40 shares at 0.90 and 59 shares at 0.99. If a player uses a lower limit and refuses those 0.90 / 0.99 fills, the order does not reach 100 shares; that cannot justify substituting a lower “100-share break-even” figure.</span></p></blockquote>
+
+<h3><span class="zh">Binance Wallet / Predict.fun 示例：份价 <code>P=0.50</code>，买 100 份</span><span class="en">Binance Wallet / Predict.fun example: 100 shares at <code>P=0.50</code></span></h3>
+<ol>
+  <li><span class="zh"><strong>下单：</strong>100 份的交易金额是 <code>100×0.50=50</code> USDT。<code>0.50</code> 是订单簿隐含概率，不是固定净赔付比。</span><span class="en"><strong>Order:</strong> 100 shares have trade value <code>100×0.50=50</code> USDT. <code>0.50</code> is an order-book probability price, not a fixed net payout ratio.</span></li>
+  <li><span class="zh"><strong>为什么 Up / Down 买价不一定相加等于 1：</strong>页面按钮显示的是两个方向各自的立即买入价，而不是同一个中间概率的互补拆分。Predict 盘口以 Up（Yes）记录：若其最优买价为 <code>b</code>、最优卖价为 <code>a</code>，则 Up 的立即买价是 <code>a</code>，Down 的立即买价是 <code>1−b</code>，两者合计 <code>1+(a−b)</code>。截图中的 Up <code>6¢</code>、Down <code>95¢</code> 合计 <code>101¢</code>，对应 <code>1¢</code> 的买卖价差，并不违反胜方每份兑付 $1 的规则；同时买两边还要另计费用和可能的滑点。只有同一互补价位或完整 Up + Down 份额的结算面值相加才是 $1。</span><span class="en"><strong>Why the Up and Down buy quotes need not add to one:</strong> the two buttons show the immediately executable buy price for each side, not one midpoint probability split into complements. Predict records the Up (Yes) book: if its best bid is <code>b</code> and best ask is <code>a</code>, the immediate Up buy price is <code>a</code>, while the immediate Down buy price is <code>1−b</code>, so they total <code>1+(a−b)</code>. The screenshot's Up <code>6¢</code> and Down <code>95¢</code> total <code>101¢</code>, reflecting a <code>1¢</code> bid-ask spread rather than contradicting the $1 winning-share payout. Buying both sides also incurs fees and possible slippage. Only prices derived from the same complementary level, or the settlement face value of a complete Up + Down set, add to $1.</span></li>
+  <li><span class="zh"><strong>吃单费用：</strong>按当前 200 bps 官方公式，费用为 <code>0.02×min(0.5,0.5)×100=1</code> USDT，总成本 51。当前 5 分钟盘若开收值不相等，100 份选中方兑付 100；若完全相等，两边每份各兑付 0.50。因此严格的保本条件是 <code>Pr(选中)+0.5×Pr(平局)=51.00%</code>；只有在平局概率视为 0 时，才可简写为“胜率 51%”。最终仍以当笔 Wallet quote 的份数、费用与滑点为准。</span><span class="en"><strong>Taker fee:</strong> under the current official 200-bps formula, the fee is <code>0.02×min(0.5,0.5)×100=1</code> USDT, for total cost 51. In the current 5-minute rule, 100 shares on the selected side redeem 100 when closing and opening values differ; exact equality pays 0.50 per share to both sides. The strict break-even condition is therefore <code>Pr(selected side wins)+0.5×Pr(tie)=51.00%</code>; it simplifies to a 51% win rate only under a zero-tie assumption. The actual Wallet quote still controls filled shares, fees, and slippage.</span></li>
+  <li><span class="zh"><strong>挂单与退出：</strong>限价单未立即成交时留在订单簿；成交后可在结算前卖出，但成交价和是否能全部退出取决于实时盘口。交易与结算 gas 由 Binance Wallet 赞助。</span><span class="en"><strong>Resting orders and exit:</strong> an unfilled limit order remains on the book; after a fill, shares may be sold before resolution, but price and full exit depend on live depth. Binance Wallet sponsors trading and settlement gas.</span></li>
+</ol>
+
+<h3><span class="zh">同样从五五开出发，产品机制把保本胜率推高多少</span><span class="en">Starting from 50/50, how far each product mechanism lifts break-even</span></h3>
+<p><span class="zh">前四款订单簿产品统一按份价 <code>P=0.50</code>、买入 100 份、吃单成交并持有到期，只计基础 taker 手续费；Binance Event 按净赔付比 <code>r=0.80</code> 计算。原本五五开的方向判断至少要达到下面的胜率才保本。<strong>这张图不是 2026-08-30 的真实盘口；点差、深度和提前卖出的成本在下一节单独计算。</strong></span><span class="en">The first four order-book products use a common <code>P=0.50</code>, 100-share taker entry held to settlement, counting base taker fees only; Binance Event uses a net payout ratio of <code>r=0.80</code>. A nominally even directional call needs at least the win rate below to break even. <strong>This is not the live August 30, 2026 book. Spread, depth, and early-sale costs are calculated separately in the next section.</strong></span></p>
+<figure class="viz-card" aria-labelledby="cost-chart-title">
+  <figcaption id="cost-chart-title"><span class="viz-title"><span class="zh">产品机制把 50% 保本门槛推高多少</span><span class="en">How far product mechanics lift the 50% break-even threshold</span></span><span class="viz-subtitle"><span class="zh">横轴为高于 50% 的百分点；横线越长，玩家越难保本</span><span class="en">Axis shows percentage points above 50%; a longer bar means a harder break-even hurdle</span></span></figcaption>
+  <div class="metric-axis" aria-hidden="true"><span>+0</span><span>+1.5</span><span>+3.0</span><span>+4.5</span><span>+6.0 pp</span></div>
+  <div class="metric-row winner"><div class="metric-head"><strong>Binance Wallet / Predict.fun</strong><code>51.00%</code></div><div class="metric-track"><span class="metric-fill" style="--bar:16.6667%"></span></div></div>
+  <div class="metric-row runner"><div class="metric-head"><strong>OKX</strong><code>51.125%</code></div><div class="metric-track"><span class="metric-fill" style="--bar:18.75%"></span></div></div>
+  <div class="metric-row"><div class="metric-head"><strong>Polymarket</strong><code>51.75%</code></div><div class="metric-track"><span class="metric-fill" style="--bar:29.1667%"></span></div></div>
+  <div class="metric-row"><div class="metric-head"><strong>Kalshi</strong><code>51.75%</code></div><div class="metric-track"><span class="metric-fill" style="--bar:29.1667%"></span></div></div>
+  <div class="metric-row"><div class="metric-head"><strong>Binance Event · <code>r=0.80</code></strong><code>55.56%</code></div><div class="metric-track"><span class="metric-fill" style="--bar:92.5926%"></span></div></div>
+  <p class="viz-note"><span class="zh"><strong>Binance Event 算法：</strong>猜对净赚权利金的 <code>0.80</code> 倍、猜错亏掉权利金，所以非平局保本胜率为 <code>1÷(1+0.80)=55.56%</code>；指数完全相等时退回权利金，不计作猜中或猜错。Binance 官方规则说明赔付比在下单前可能变化，玩家确认后该笔固定。前四款未计点差、深度滑点、返佣、折扣或奖励。</span><span class="en"><strong>Binance Event calculation:</strong> a correct call earns <code>0.80</code> times the Premium and a wrong call loses the Premium, so non-tie break-even is <code>1÷(1+0.80)=55.56%</code>. Exact index equality refunds the Premium and counts as neither a win nor a loss. Binance states that the payout ratio may change before placement and is fixed for that trade once confirmed. The first four exclude spread, depth slippage, rebates, discounts, and rewards.</span></p>
+</figure>
+<blockquote><p><span class="zh"><strong>读图结论：</strong>前四款都是可提前卖出的订单簿二元份额，统一场景下保本胜率只在 <strong>51.00%–51.75%</strong> 之间，相差最多 <strong>0.75 个百分点</strong>，基础费率不是拉开实际体验的主要因素。真正决定玩家成本的是第三节实测的<strong>买卖价差、盘口深度和能否完整退出</strong>；Binance Event 的 55.56% 门槛和不能提前退出，才是产品结构上的明显异类。</span><span class="en"><strong>Chart conclusion:</strong> the first four are order-book binary shares that permit early sale, and their standardized break-even rates cluster between <strong>51.00% and 51.75%</strong>, a maximum gap of only <strong>0.75 points</strong>. Base fees are not the main driver of the real trading experience. The decisive costs are the <strong>spread, book depth, and ability to complete an exit</strong> measured in section 3. Binance Event's 55.56% hurdle and lack of early exit make it the clear structural outlier.</span></p></blockquote>
+
+<h2><span class="zh">三、想提前走要付出多少：三次真实买入再卖出</span><span class="en">3 · What an early exit costs: three live buy-then-sell checks</span></h2>
+<p><span class="zh"><strong>玩家只需这样读：</strong>下面的“进出损耗”是假设现在买入 100 份、马上全部卖出会亏多少；数值越小越好。100 份下，<code>1 pp</code> 就是 <code>1 USDT / USD</code>。这不是路径 1 的潜在利润，而是玩家必须先赚回来才能真正盈利的交易阻力。</span><span class="en"><strong>How a trader should read this:</strong> “round-trip loss” is how much is lost by buying 100 shares now and immediately selling all of them; lower is better. At 100 shares, <code>1 point</code> equals <code>1 USDT / USD</code>. It is not Path 1's potential profit; it is the trading drag a price move must first overcome.</span></p>
+<details class="detail-block">
+<summary><span class="zh">展开样本时间与计算口径</span><span class="en">Expand sample times and calculation method</span></summary>
+<p><span class="zh"><strong>采集条件：</strong>2026-08-30 <code>07:39:39</code>、<code>07:40:32</code>、<code>07:41:20 UTC</code>（新加坡时间 <code>15:39:39</code>、<code>15:40:32</code>、<code>15:41:20</code>），每轮在 2.6–3.3 秒内读取四个平台同一个 BTC 15 分钟窗口 <code>07:30–07:45 UTC</code>。每个平台、每个方向都用公开可见订单簿模拟 100 份立即吃单买入，再按同一快照的买盘立即卖出；三次 × 两个方向，共六个观测，偶数样本中位数取中间两项平均。三次采集集中在 82 秒内，属于同一窗口的微观结构复测，不是三个独立市场样本。</span><span class="en"><strong>Collection conditions:</strong> <code>07:39:39</code>, <code>07:40:32</code>, and <code>07:41:20 UTC</code> on August 30, 2026 (<code>15:39:39</code>, <code>15:40:32</code>, and <code>15:41:20</code> Singapore time). Each round fetched all four venues within 2.6–3.3 seconds for the same <code>07:30–07:45 UTC</code> BTC 15-minute window. For each venue and side, the calculation walks visible asks to buy 100 shares, then walks bids from that same snapshot to sell 100 shares. With six observations—three times × two sides—the median averages the two middle values. Because the three collections fall within 82 seconds, they are microstructure retests of one market window, not three independent market samples.</span></p>
+</details>
+
+<div class="snapshot-grid" aria-label="Median immediate round-trip cost for 100 shares">
+  <article class="snapshot-card"><h3>Polymarket</h3><div class="snapshot-values"><div class="snapshot-value"><span><span class="zh">进出损耗中位数</span><span class="en">Median round-trip loss</span></span><strong>1.6013 pp</strong></div><div class="snapshot-value"><span><span class="zh">成本分</span><span class="en">Cost score</span></span><strong>16.8 / 20</strong></div></div></article>
+  <article class="snapshot-card"><h3>Kalshi</h3><div class="snapshot-values"><div class="snapshot-value"><span><span class="zh">进出损耗中位数</span><span class="en">Median round-trip loss</span></span><strong>0.5665 pp</strong></div><div class="snapshot-value"><span><span class="zh">成本分</span><span class="en">Cost score</span></span><strong>18.9 / 20</strong></div></div></article>
+  <article class="snapshot-card"><h3>Wallet / Predict.fun</h3><div class="snapshot-values"><div class="snapshot-value"><span><span class="zh">进出损耗中位数</span><span class="en">Median round-trip loss</span></span><strong>5.6620 pp</strong></div><div class="snapshot-value"><span><span class="zh">成本分</span><span class="en">Cost score</span></span><strong>8.7 / 20</strong></div></div></article>
+  <article class="snapshot-card alert"><h3>OKX</h3><div class="snapshot-values"><div class="snapshot-value"><span><span class="zh">本次100份完整进出</span><span class="en">Sampled 100-share round trips</span></span><strong>0 / 6</strong></div><div class="snapshot-value"><span><span class="zh">成本分</span><span class="en">Cost score</span></span><strong>0 / 20</strong></div></div></article>
+</div>
+
+<div class="scroll"><table>
+<thead><tr>
+  <th><span class="zh">产品</span><span class="en">Product</span></th>
+  <th><span class="zh">完整进出</span><span class="en">Complete round trips</span></th>
+  <th><span class="zh">买卖点差中位数</span><span class="en">Median spread</span></th>
+  <th><span class="zh">双边深度冲击中位数</span><span class="en">Median two-leg depth impact</span></th>
+  <th><span class="zh">双边手续费中位数</span><span class="en">Median two-leg fees</span></th>
+  <th><span class="zh">100 份立即进出总损耗</span><span class="en">100-share immediate round-trip loss</span></th>
+  <th><span class="zh">六个方向观测范围</span><span class="en">Six-observation range</span></th>
+</tr></thead>
+<tbody>
+<tr><td><strong>Kalshi</strong></td><td>6 / 6</td><td>0.1000 pp</td><td>0.0000 pp</td><td>$0.4665</td><td class="good"><strong>0.5665 pp</strong></td><td>0.3002–1.2922 pp</td></tr>
+<tr><td><strong>Polymarket</strong></td><td>6 / 6</td><td>1.0000 pp</td><td>0.0000 pp</td><td>$0.6013</td><td class="good"><strong>1.6013 pp</strong></td><td>1.3409–4.1591 pp</td></tr>
+<tr><td><strong>Binance Wallet / Predict.fun</strong></td><td>6 / 6</td><td>3.0000 pp</td><td>2.6183 pp</td><td>0.372852 USDT</td><td class="mid"><strong>5.6620 pp</strong></td><td>5.0648–5.9911 pp</td></tr>
+<tr><td><strong>OKX</strong></td><td class="bad">0 / 6</td><td>15.9000 pp</td><td><span class="zh">无法形成 100 份双边 VWAP</span><span class="en">No 100-share two-leg VWAP</span></td><td><span class="zh">买入腿可算；完整双边不适用</span><span class="en">Entry leg calculable; full pair N/A</span></td><td class="bad"><strong><span class="zh">本次100份无法完整进出</span><span class="en">Sampled 100-share round trip unfillable</span></strong></td><td><span class="zh">该市场当时流动性不足：Up 保本 94.779744%–94.902606%；退出仅 80–80.5 份</span><span class="en">Insufficient liquidity in that market at those times: Up break-even 94.779744%–94.902606%; exit only 80–80.5 shares</span></td></tr>
+<tr><td><strong>Binance Event</strong></td><td>N/A</td><td>N/A</td><td>N/A</td><td><span class="zh">官方称无额外手续费；本次经济折价按参评合约 <code>r=0.80</code> 计算</span><span class="en">Officially no additional fee; this comparison calculates the payout discount using the compared contract's <code>r=0.80</code></span></td><td><strong>N/A</strong></td><td><span class="zh">封闭式持有到结算；不是订单簿流动性测试对象</span><span class="en">Closed and held to settlement; not an order-book liquidity-test subject</span></td></tr>
+</tbody>
+</table></div>
+
+<h3><span class="zh">100 份买入并持有到期：买方最低保本胜率（不是预测胜率）</span><span class="en">Buy 100 and hold: buyer's minimum break-even win rate (not a predicted probability)</span></h3>
+<p><span class="zh">这张表与“立即买入再卖出损耗”分开：这里的百分比是按真实可成交买价计算、买方付出成本后必须达到的最低真实胜率，<strong>越高越难保本，不代表平台预测越容易赢</strong>；往返损耗则回答现在进出一趟会损失多少。四个订单簿产品均按同三次公开盘口逐档买入 100 份，以 <code>(买入成交额+买入费)/100</code> 计算。订单簿产品不存在一个脱离方向和报价的“平台固定保本率”，因此不再把相反方向混成一个约 50% 的中位数。</span><span class="en">This table is separate from immediate buy-then-sell loss. Its percentage uses executable entry prices and is the buyer's minimum true win rate after paying entry cost: <strong>higher means harder to break even, not that the platform predicts an easier win</strong>. Round-trip loss instead answers what an immediate exit costs. For the four order-book products, each value walks the same three public books to buy 100 shares and computes <code>(buy notional+buy fee)/100</code>. An order-book product has no platform-wide break-even rate independent of side and quote, so opposite sides are no longer blended into an approximately 50% median.</span></p>
+<div class="scroll"><table>
+<thead><tr>
+  <th><span class="zh">产品</span><span class="en">Product</span></th>
+  <th><span class="zh">100 份买入可成交</span><span class="en">100-share entries fillable</span></th>
+  <th><span class="zh">Up / Higher 三次最低胜率</span><span class="en">Three Up / Higher minimum win rates</span></th>
+  <th><span class="zh">Down / Lower 三次最低胜率</span><span class="en">Three Down / Lower minimum win rates</span></th>
+  <th><span class="zh">玩家结论 / 严格口径</span><span class="en">Player takeaway / strict convention</span></th>
+</tr></thead>
+<tbody>
+<tr><td><strong>Polymarket</strong></td><td>6 / 6</td><td>15.4199% / 5.3325% / 3.2037%</td><td>88.7392% / 96.2688% / 98.1372%</td><td><span class="zh">没有平台固定值；每笔必须使用当时方向的左侧门槛</span><span class="en">No platform-wide fixed rate; use the displayed threshold for that side and time</span></td></tr>
+<tr><td><strong>Kalshi</strong></td><td>6 / 6</td><td>9.9074% / 3.7365% / 1.6035%</td><td>91.3848% / 96.8300% / 98.6967%</td><td><span class="zh">没有平台固定值；每笔必须使用当时方向的左侧门槛</span><span class="en">No platform-wide fixed rate; use the displayed threshold for that side and time</span></td></tr>
+<tr><td><strong>Binance Wallet / Predict.fun</strong></td><td>6 / 6</td><td>19.6723% / 12.3730% / 10.4269%</td><td>85.3925% / 93.6181% / 95.2351%</td><td><span class="zh">严格条件：<code>Pr(猜中)+0.5×Pr(平局)=当笔门槛</code></span><span class="en">Strict condition: <code>Pr(win)+0.5×Pr(tie)=that trade's threshold</code></span></td></tr>
+<tr><td><strong>OKX</strong></td><td class="bad">3 / 6</td><td><strong>94.902606% / 94.810581% / 94.779744%</strong></td><td><span class="zh">无法买满：80.5 / 80 / 80 份</span><span class="en">Unfillable: 80.5 / 80 / 80 shares</span></td><td class="bad"><strong><span class="zh">三次 Up 的真实门槛均超过 94.77%；普通玩家极易亏损，不应下这笔 100 份立即买单</span><span class="en">All three real Up thresholds exceed 94.77%; an ordinary player is highly likely to lose and should not place this immediate 100-share buy</span></strong></td></tr>
+<tr><td><strong>Binance Event</strong></td><td><span class="zh">非份额产品</span><span class="en">Not share-based</span></td><td><strong>55.56%</strong></td><td><strong>55.56%</strong></td><td><span class="zh">本次参评合约 <code>r=0.80</code>；非平局门槛为 55.56%，含平局时无条件门槛为 <code>q*=(1−t)/1.8</code></span><span class="en">Compared contract at <code>r=0.80</code>; the non-tie hurdle is 55.56%, and with ties the unconditional hurdle is <code>q*=(1−t)/1.8</code></span></td></tr>
+</tbody>
+</table></div>
+
+<p><span class="zh">对支持提前卖出的订单簿产品，总损耗按 <code>买入成交额 + 买入 taker 费 − 卖出成交额 + 卖出 taker 费</code> 计算；100 份下，1 美元损耗等于 1 个百分点。点差是最优卖价减最优买价；深度冲击是买卖两侧 VWAP 相对最优价的额外损耗。若任何一侧不能成交 100 份，则不虚构价格，标为无法完成并记 0 成本分。Binance Event 不提供提前卖出，因而不是“不能完整进出”的订单簿样本，而是该指标不适用（N/A）。<a href="evidence/event-contract-orderbooks-2026-08-30.json">聚合证据 JSON</a>绑定三份不可变源响应文件；其中保存平台原始 HTTP / GraphQL 响应体、响应哈希、outcome 映射、市场标识、采集时间和费用输入，校验脚本直接从响应体重建盘口并复算全部数字。</span><span class="en">For order-book products that support early sale, total loss is <code>buy notional + buy taker fee − sell notional + sell taker fee</code>; at 100 shares, one dollar of loss equals one percentage point. Spread is best ask minus best bid, while depth impact is the additional two-sided VWAP loss beyond those top prices. If either leg cannot fill 100 shares, no price is invented: the observation is marked unfillable and cost scores zero. Binance Event offers no early sale, so it is not an unfillable order-book sample; this metric is not applicable (N/A). The <a href="evidence/event-contract-orderbooks-2026-08-30.json">aggregate evidence JSON</a> binds three immutable source-response files containing the platforms' original HTTP/GraphQL bodies, response hashes, outcome mappings, market IDs, timestamps, and fee inputs. The verifier rebuilds books directly from those bodies and recalculates every figure.</span></p>
+
+<blockquote>
+  <p><span class="zh"><strong>对玩家的直接含义：在预测准确率相同的情况下，Kalshi 本次最少消耗你的优势；其次是 Polymarket，再次是 Wallet / Predict.fun。</strong>对应的 100 份立即进出损耗中位数为 0.5665、1.6013、5.6620 pp。OKX 无法完整成交，不能塞进数值成本序列；Binance Event 的即时往返指标为 N/A，也不进入这条成本排名。这不是长期流动性承诺，而是指定规模、指定窗口、三次同步采集下的可成交结果。OKX 六个方向观测都无法完成 100 份立即进出：受限一侧最多只有 80.5 份可见深度，因此没有可负责任填写的完整交易成本。</span><span class="en"><strong>Direct player meaning: at the same forecasting accuracy, Kalshi consumed the least of your edge in this sample, followed by Polymarket and then Wallet / Predict.fun.</strong> Their median 100-share immediate round-trip losses were 0.5665, 1.6013, and 5.6620 points. OKX was unfillable and cannot be inserted into that numerical sequence; Binance Event's immediate round-trip metric is N/A and is likewise excluded from this cost ranking. This is not a promise of long-run liquidity; it is the executable result for the stated size, window, and three synchronized collections. None of OKX's six side-observations could complete a 100-share immediate round trip; the constrained leg showed at most 80.5 visible shares.</span></p>
+</blockquote>
+
+<h3><span class="zh">Binance Event：赔率可复算，但不能立即卖出</span><span class="en">Binance Event: the displayed odds are reproducible, but there is no immediate sale</span></h3>
+<p><span class="zh"><strong>Binance Event 的结论：</strong>它没有订单簿；本次参评合约使用 <code>r=0.80</code>，确认后该笔赔付金额锁定，所以按非平局条件计算的保本门槛为 55.56%；若平局概率为 <code>t</code>，无条件门槛为 <code>(1−t)/1.8</code>。公开 Index Price 可核对开盘和到期价格。确认后只能持有到结算是产品结构，不是流动性缺陷，因此即时往返成本记 N/A；排名只记录玩家没有自主定价和提前退出这一体验差异，改进建议不要求它变成订单簿产品。</span><span class="en"><strong>Binance Event conclusion:</strong> it has no order book. The compared contract uses <code>r=0.80</code>, and its payout amount is locked at confirmation, so its non-tie break-even hurdle is 55.56%; with tie probability <code>t</code>, the unconditional hurdle is <code>(1−t)/1.8</code>. The public Index Price lets users check opening and expiry values. Mandatory hold-to-settlement is the product structure, not a liquidity defect, so immediate round-trip cost is N/A. The ranking records only the player-experience difference of having no self-pricing or early exit; the improvement appendix does not ask it to become an order-book product.</span></p>
+
+<p class="viz-note"><span class="zh">未扣 maker 返佣、邀请折扣或奖励，也未计入金、提币、链上兑换或汇率成本；市价模拟只使用公开挂单，不假设隐藏流动性，也不把同一快照后的价格变化算进立即退出。</span><span class="en">Maker rebates, referral discounts, rewards, deposit and withdrawal costs, onchain conversion, and FX costs are excluded. The simulation uses visible orders only, assumes no hidden liquidity, and does not attribute post-snapshot market movement to the immediate exit.</span></p>
+
+<h2><span class="zh">四、排名怎么算：玩家最在意的五件事，各 20 分</span><span class="en">4 · How the ranking works: five trader priorities, 20 points each</span></h2>
+<p><span class="zh"><strong>排名结论：</strong>四款订单簿产品在定价/退出、规则公开和结算记录核对三项没有拉开差距；排名主要由本次可成交流动性决定，5 分钟适配只让 Polymarket 比 Kalshi 多 4 分。成本分来自六次真实的 100 份买入再卖出：全部能成交时，用损耗中位数 <code>R</code> 计算 <code>max(0,20−2R)</code>；任一次无法完整进出就记 0。Binance Event 没有订单簿，成本项为 N/A；持有到结算是产品结构，不当作待修缺陷。它在其余四项得到 <code>0+20+20+16=56/80</code>，折算为 70。</span><span class="en"><strong>Ranking conclusion:</strong> the four order-book products tie on price/exit controls, rule disclosure, and checkable settlement records. The ranking is driven mainly by executable liquidity in this sample; five-minute fit gives Polymarket only a four-point advantage over Kalshi. Cost comes from six live 100-share buy-then-sell checks: when all six fill, median loss <code>R</code> maps to <code>max(0,20−2R)</code>; any incomplete exit scores zero. Binance Event has no order book, so cost is N/A. Mandatory hold-to-settlement is its product structure, not a defect to fix. It earns <code>0+20+20+16=56/80</code> on the other four dimensions, normalized to 70.</span></p>
+<figure class="viz-card" aria-labelledby="score-chart-title">
+  <figcaption id="score-chart-title"><span class="viz-title"><span class="zh">适用维度如何构成总分</span><span class="en">How applicable dimensions build each total</span></span><span class="viz-subtitle"><span class="zh">前四款每项最多 20 分；Binance Event 排除 N/A 成本项后按 80 分折算</span><span class="en">The first four use 20 points per dimension; Binance Event excludes N/A cost and normalizes from 80</span></span></figcaption>
+  <div class="score-legend" aria-hidden="true">
+    <span class="legend-item"><i class="legend-dot s1"></i><span class="zh">进出损耗</span><span class="en">Exit loss</span></span>
+    <span class="legend-item"><i class="legend-dot s2"></i><span class="zh">交易自由</span><span class="en">Trade control</span></span>
+    <span class="legend-item"><i class="legend-dot s3"></i><span class="zh">规则清楚</span><span class="en">Clear rules</span></span>
+    <span class="legend-item"><i class="legend-dot s4"></i><span class="zh">结果可核对</span><span class="en">Checkable result</span></span>
+    <span class="legend-item"><i class="legend-dot s5"></i><span class="zh">周期够短</span><span class="en">Short enough</span></span>
+  </div>
+  <div class="score-row"><div class="score-head"><strong>① Polymarket</strong><span class="score-total">96.8</span></div><div class="score-track"><span class="score-seg s1" style="width:16.8%">16.8</span><span class="score-seg s2" style="width:20%">20</span><span class="score-seg s3" style="width:20%">20</span><span class="score-seg s4" style="width:20%">20</span><span class="score-seg s5" style="width:20%">20</span></div></div>
+  <div class="score-row"><div class="score-head"><strong>② Kalshi</strong><span class="score-total">94.9</span></div><div class="score-track"><span class="score-seg s1" style="width:18.9%">18.9</span><span class="score-seg s2" style="width:20%">20</span><span class="score-seg s3" style="width:20%">20</span><span class="score-seg s4" style="width:20%">20</span><span class="score-seg s5" style="width:16%">16</span></div></div>
+  <div class="score-row"><div class="score-head"><strong>③ Wallet / Predict.fun</strong><span class="score-total">88.7</span></div><div class="score-track"><span class="score-seg s1" style="width:8.7%">8.7</span><span class="score-seg s2" style="width:20%">20</span><span class="score-seg s3" style="width:20%">20</span><span class="score-seg s4" style="width:20%">20</span><span class="score-seg s5" style="width:20%">20</span></div></div>
+  <div class="score-row"><div class="score-head"><strong>④ OKX</strong><span class="score-total">80</span></div><div class="score-track"><span class="score-seg s1 zero" style="width:0%">0</span><span class="score-seg s2" style="width:20%">20</span><span class="score-seg s3" style="width:20%">20</span><span class="score-seg s4" style="width:20%">20</span><span class="score-seg s5" style="width:20%">20</span></div></div>
+  <div class="score-row"><div class="score-head"><strong>⑤ Binance Event</strong><span class="score-total">56/80 → 70</span></div><div class="score-track"><span class="score-seg s1 zero" style="width:0%">N/A</span><span class="score-seg s2 zero" style="width:0%">0</span><span class="score-seg s3" style="width:25%" title="20/80 × 100">25*</span><span class="score-seg s4" style="width:25%" title="20/80 × 100">25*</span><span class="score-seg s5" style="width:20%" title="16/80 × 100">20*</span></div></div>
+</figure>
+<p class="viz-note"><span class="zh">* Binance Event 图中三个有色数值是折算后的总分贡献；原始分为规则公开 20、结算记录可核对 20、短周期适配 16，定价与退出为 0，成本为 N/A。</span><span class="en">* Binance Event's three colored values are normalized contributions; raw scores are 20 for rule disclosure, 20 for checkable settlement records, 16 for short-horizon fit, zero for Pricing &amp; Exit, and N/A for cost.</span></p>
+<div class="criteria-grid" aria-label="Scoring anchors">
+  <article class="criteria-card"><b>01 / 20</b><strong><span class="zh">买进再卖出有多贵</span><span class="en">Cost to buy and sell</span></strong><p><span class="zh">六次都能完整进出才按 <code>max(0,20−2R)</code> 给分；有一次走不完就是 0。不能提前卖出的产品为 N/A。</span><span class="en">All six exits must fill before applying <code>max(0,20−2R)</code>; one incomplete exit means zero. Products with no early sale are N/A.</span></p></article>
+  <article class="criteria-card"><b>02 / 20</b><strong><span class="zh">玩家能否自己定价和提前走</span><span class="en">Control price and early exit</span></strong><p><span class="zh">能限价、撤未成交单、卖出持仓：三项全有 20，只少一项 13，只剩一项 7，全没有 0。</span><span class="en">Limit price, cancel unfilled orders, and sell positions: all three earn 20, two earn 13, one earns 7, none earns zero.</span></p></article>
+  <article class="criteria-card"><b>03 / 20</b><strong><span class="zh">费用和结算规则是否说清</span><span class="en">Are fees and settlement rules clear?</span></strong><p><span class="zh">费用或赔付折价、结果来源、平局等边界情况、订单与结算记录规则，各 5 分。</span><span class="en">Fees or payout discount, result source, tie or edge cases, and order/settlement-record rules earn five each.</span></p></article>
+  <article class="criteria-card"><b>04 / 20</b><strong><span class="zh">规则和结算记录能否核对</span><span class="en">Can rules and settlement records be checked?</span></strong><p><span class="zh">判胜规则、结果来源、开收值或等价结果输入、账户或链上结算记录，各 5 分；不再把“没有历史下载接口”误写成“结果不能核对”。</span><span class="en">Outcome rule, result source, opening/closing values or equivalent result inputs, and account/onchain settlement record earn five each; lack of a historical-download endpoint is not mislabeled as an unverifiable result.</span></p></article>
+  <article class="criteria-card"><b>05 / 20</b><strong><span class="zh">有没有足够短的周期</span><span class="en">Are sufficiently short markets available?</span></strong><p><span class="zh">5 分钟或更短=20；15 分钟=16；30 分钟=12；1 小时=8；更长=4。</span><span class="en">Five minutes or less=20; 15 minutes=16; 30 minutes=12; one hour=8; longer=4.</span></p></article>
+</div>
+<div class="scroll"><table>
+<thead><tr>
+  <th><span class="zh">排名 / 产品</span><span class="en">Rank / product</span></th>
+  <th><span class="zh">成本阈值</span><span class="en">Cost threshold</span></th>
+  <th><span class="zh">定价与退出控制</span><span class="en">Pricing &amp; exit control</span></th>
+  <th><span class="zh">规则透明度</span><span class="en">Rule transparency</span></th>
+  <th><span class="zh">规则与结算记录可核对</span><span class="en">Checkable rules &amp; settlement records</span></th>
+  <th><span class="zh">短周期适配</span><span class="en">Short-horizon fit</span></th>
+  <th><span class="zh">总分</span><span class="en">Total</span></th>
+</tr></thead>
+<tbody>
+<tr><td><strong>① Polymarket</strong></td><td>16.8/20</td><td>20/20</td><td>20/20</td><td>20/20</td><td>20/20</td><td class="good"><strong>96.8/100</strong></td></tr>
+<tr><td><strong>② Kalshi</strong></td><td>18.9/20</td><td>20/20</td><td>20/20</td><td>20/20</td><td>16/20</td><td class="good"><strong>94.9/100</strong></td></tr>
+<tr><td><strong>③ Binance Wallet · Predict.fun</strong></td><td>8.7/20</td><td>20/20</td><td>20/20</td><td>20/20</td><td>20/20</td><td class="good"><strong>88.7/100</strong></td></tr>
+<tr><td><strong>④ OKX</strong></td><td>0/20</td><td>20/20</td><td>20/20</td><td>20/20</td><td>20/20</td><td class="mid"><strong>80/100</strong></td></tr>
+<tr><td><strong>⑤ Binance Event</strong></td><td><span class="zh">N/A（持有到结算）</span><span class="en">N/A (held to settlement)</span></td><td>0/20</td><td>20/20</td><td>20/20</td><td>16/20</td><td class="mid"><strong>56/80 × 100 = 70</strong></td></tr>
+</tbody>
+</table></div>
+
+<details class="detail-block">
+<summary><span class="zh">展开逐项评分依据</span><span class="en">Expand product-by-product scoring rationale</span></summary>
+<ol>
+  <li><span class="zh"><strong>Polymarket · 96.8</strong>——六个 100 份立即进出观测全部可成交，损耗中位数为 1.6013 pp，成本分 <code>20−2×1.6013=16.7974→16.8</code>。用户可挂价、撤单并提前卖出；费用、Chainlink TWAP 数值与时间戳、原始签名报告读取方式、市场规则和最终结果公开，相关三项均为 20。它比 Kalshi 多出的 1.9 分，来自 5 分钟适配多 4 分、但本次成本少 2.1 分。</span><span class="en"><strong>Polymarket · 96.8</strong> — all six 100-share immediate round trips filled. Median loss was 1.6013 points, so cost is <code>20−2×1.6013=16.7974→16.8</code>. Users can set prices, cancel, and sell early; fees, Chainlink TWAP values and timestamps, access to original signed reports, market rules, and final results are public, so the three related dimensions each score 20. Its 1.9-point lead over Kalshi comes from four more points for five-minute fit but 2.1 fewer points on sampled cost.</span></li>
+  <li><span class="zh"><strong>Kalshi · 94.9</strong>——六个观测全部可成交，100 份立即进出损耗中位数最低，为 0.5665 pp，成本分 <code>20−2×0.5665=18.8670→18.9</code>。订单簿提供完整定价与退出控制，逐市场规则、BRTI 结果来源和结算记录可核对；本次可验证的加密盘为 15 分钟，周期适配得 16，因此综合第二。</span><span class="en"><strong>Kalshi · 94.9</strong> — all six observations filled, with the lowest median 100-share immediate round-trip loss at 0.5665 points, for <code>20−2×0.5665=18.8670→18.9</code> on cost. The book provides full pricing and exit control, while market-specific rules, the BRTI result source, and settlement records are checkable. The verified crypto product was 15 minutes, scoring 16 for horizon and placing second overall.</span></li>
+  <li><span class="zh"><strong>Binance Wallet / Predict.fun · 88.7</strong>——六个观测全部可成交，100 份立即进出损耗中位数为 5.6620 pp，成本分 <code>20−2×5.6620=8.6760→8.7</code>。用户可市价/限价、撤单并提前卖出；5 分钟盘使用签名 Chainlink 报告并链上结算。公开的暂停状态应急路径属于兜底治理，不在没有实际异常证据时当作缺陷扣分。Predict.fun 是交易场所，Binance 提供 Wallet 入口。</span><span class="en"><strong>Binance Wallet / Predict.fun · 88.7</strong> — all six observations filled. Median 100-share immediate round-trip loss was 5.6620 points, for <code>20−2×5.6620=8.6760→8.7</code> on cost. Users can use market or limit orders, cancel, and sell early; the five-minute market uses signed Chainlink reports and onchain settlement. Its disclosed paused-state emergency path is fallback governance, not a defect to penalize without evidence of an actual settlement failure. Predict.fun is the venue and Binance supplies the Wallet gateway.</span></li>
+  <li><span class="zh"><strong>OKX · 80</strong>——本次指定市场的六个方向观测都不能按公开深度完整买入再卖出 100 份，受限一侧最多只有 80.5 份；本质是该市场该窗口流动性不足，不是产品形态不同。报告不虚构完整损耗，成本证据记 0。六个观测的可见最佳买卖价差中位数为 15.9 pp，流动性问题远大于基础手续费。用户仍可自定价格、撤单并提前卖出；5 分钟盘、规则和结算记录均可核对，其余四项合计 80。</span><span class="en"><strong>OKX · 80</strong> — none of the six side-observations in the sampled market could complete a 100-share buy and sell against public depth; the constrained side showed at most 80.5 shares. This is a liquidity shortfall in that market and window, not a different product shape. The report does not invent a complete-loss number and awards zero for cost evidence. Median visible best bid-ask spread was 15.9 points across the six observations, making liquidity far more material than the base fee. Users can still set prices, cancel, and sell early; five-minute markets, rules, and settlement records are checkable, leaving 80 points across the other four dimensions.</span></li>
+  <li><span class="zh"><strong>Binance Event · 70（56/80 折算）</strong>——本次参评合约 <code>r=0.80</code>、下一秒 <code>Price Index</code> 开仓、到期指数结算、相等退权利金和订单结算记录均可核对，规则与记录两项各 20。官方条款保证确认时接受的 Potential Payout Amount 固定于该笔合约，但本文不把 0.80 外推为平台永久常数。用户不能自主报价或提前平仓，“定价与退出”为 0；即时往返成本因产品本来就封闭持有到结算而为 N/A，不重复扣分，也不把这一产品特性写成待修问题。四项适用维度合计 56/80，折算 70，最终第五。</span><span class="en"><strong>Binance Event · 70 (normalized from 56/80)</strong> — the compared contract's <code>r=0.80</code>, next-second <code>Price Index</code> entry, expiry-index settlement, Premium refunds on equality, and order settlement records are checkable, so rules and records each score 20. Official terms make the Potential Payout Amount accepted at confirmation fixed for that contract; this report does not extrapolate 0.80 into a permanent platform-wide constant. Users cannot set prices or close early, so Pricing &amp; Exit scores zero. Immediate round-trip cost is N/A because the product is designed to be held to settlement; this is neither double-penalized nor mislabeled as a defect. The four applicable dimensions total 56/80, normalized to 70, placing it fifth.</span></li>
+</ol>
+</details>
+
+<details class="detail-block">
+<summary><span class="zh">附：样本证实的可改进问题（不把产品特性当缺陷）</span><span class="en">Appendix: sample-proven improvements, without treating product design as a defect</span></summary>
+<p><span class="zh"><strong>结论：</strong>这里只保留由本次盘口或明确规则证明、且平台能在原产品结构内改进的问题。没有证据的“凭证缺失”、已公开的链上结算、固定赔付产品不支持提前退出，以及未经合规验证的更短周期，均不列为问题。</span><span class="en"><strong>Conclusion:</strong> this section keeps only issues demonstrated by the sampled books or explicit rules and fixable within the existing product structure. Unsupported claims of missing receipts, already-public onchain settlement, no early exit on a fixed-payout product, and shorter horizons without compliance evidence are not listed as defects.</span></p>
+<div class="scroll"><table id="improvement-plan">
+<thead><tr>
+  <th><span class="zh">产品</span><span class="en">Product</span></th>
+  <th><span class="zh">最严重问题 → 对应解决方案</span><span class="en">Most serious problem → matching fix</span></th>
+</tr></thead>
+<tbody>
+<tr data-improvement-product="polymarket"><td><strong>Polymarket</strong></td><td><ol class="compact-list"><li><span class="zh"><strong>问题：</strong>100 份立即进出损耗中位数为 1.6013 USDT，高于 Kalshi 的 0.5665；<strong>解决：</strong>降低短周期吃单费并奖励更紧的双边报价。</span><span class="en"><strong>Problem:</strong> Median immediate round-trip loss was 1.6013 USDT per 100 shares versus Kalshi's 0.5665; <strong>fix:</strong> lower short-horizon taker fees and reward tighter two-sided quotes.</span></li></ol></td></tr>
+<tr data-improvement-product="kalshi"><td><strong>Kalshi</strong></td><td><ol class="compact-list"><li><span class="zh"><strong>问题：</strong>本次只确认到 15 分钟盘，不满足只玩 5 分钟盘的玩家；<strong>解决：</strong>清楚标注各地区当前最短周期，不在缺少合规依据时把推出 5 分钟盘写成当然答案。</span><span class="en"><strong>Problem:</strong> only a 15-minute market was verified, so it does not fit players seeking five-minute markets; <strong>fix:</strong> clearly display the current minimum horizon by region rather than treating a five-minute launch as an automatic answer without compliance evidence.</span></li></ol></td></tr>
+<tr data-improvement-product="predict"><td><strong>Binance Wallet / Predict.fun</strong></td><td><ol class="compact-list"><li><span class="zh"><strong>问题：</strong>可完整成交产品中，100 份立即进出损耗中位数最高，为 5.6620 USDT；<strong>解决：</strong>增加双边深度、缩小价差并降低吃单费。</span><span class="en"><strong>Problem:</strong> Among fillable products, median immediate round-trip loss was highest at 5.6620 USDT per 100 shares; <strong>fix:</strong> deepen both sides, narrow spreads, and lower taker fees.</span></li></ol></td></tr>
+<tr data-improvement-product="okx"><td><strong>OKX</strong></td><td><ol class="compact-list"><li><span class="zh"><strong>问题：</strong>六次测试均无法完整进出 100 份，价差中位数达 15.9 pp；<strong>解决：</strong>持续提供两边各至少 100 份真实深度并公开达标率。</span><span class="en"><strong>Problem:</strong> None of six tests completed a 100-share round trip and median spread reached 15.9 points; <strong>fix:</strong> maintain at least 100 executable shares on both sides and publish compliance rates.</span></li></ol></td></tr>
+<tr data-improvement-product="binance-event"><td><strong>Binance Event</strong></td><td><ol class="compact-list"><li><span class="zh"><strong>问题：</strong>本次参评合约 <code>r=0.80</code> 把非平局保本胜率推到 55.56%，明显高于四款订单簿产品约 51%–51.75% 的基础费率场景；<strong>解决：</strong>提高该类合约净赔付比，直接降低玩家需要跨过的平台优势。</span><span class="en"><strong>Problem:</strong> the compared contract's <code>r=0.80</code> raises non-tie break-even to 55.56%, well above the roughly 51%–51.75% base-fee scenarios for the four order-book products; <strong>fix:</strong> increase the net payout ratio for such contracts to reduce the platform edge the player must overcome.</span></li></ol></td></tr>
+</tbody>
+</table></div>
+</details>
+
+<details class="detail-block">
+<summary><span class="zh">附：排名数据与逐分复算</span><span class="en">Appendix: ranking data and point-by-point calculation</span></summary>
+<p><span class="zh"><strong>技术校验完整性为高：</strong>原始响应哈希、市场身份、方向映射、逐档成交、费用公式、分项得分、适用维度分母、总分和图表均由校验器复算。这个“高”只描述数据链与算术完整性；排名回答的是 2026-08-30 指定窗口、100 份订单和公开适用维度等权规则下的结果，不延伸为长期排名。</span><span class="en"><strong>Technical validation integrity is high:</strong> the verifier recalculates original-response hashes, market identity, side mapping, level-by-level fills, fee formulas, component scores, applicable-dimension denominators, totals, and charts. “High” describes data-chain and arithmetic integrity only. The rank answers the stated August 30, 2026 window, 100-share order, and disclosed equal-weight applicable-dimension rule; it is not extended into a long-run rank.</span></p>
+<div class="scroll"><table>
+<thead><tr>
+  <th><span class="zh">排名 / 产品</span><span class="en">Rank / product</span></th>
+  <th><span class="zh">当前盘口数据来源与成本分</span><span class="en">Current-book source and cost score</span></th>
+  <th><span class="zh">其余四项</span><span class="en">Other four dimensions</span></th>
+  <th><span class="zh">总分</span><span class="en">Total</span></th>
+</tr></thead>
+<tbody>
+<tr><td><strong>① Polymarket</strong></td><td><span class="zh">Gamma 市场元数据 + 两个 CLOB token 盘口；三轮原始响应；<code>R=1.6013 pp → 16.8</code></span><span class="en">Gamma market metadata + two CLOB token books; three original-response rounds; <code>R=1.6013 pp → 16.8</code></span></td><td><code>20+20+20+20=80</code></td><td class="good"><strong>96.8</strong></td></tr>
+<tr><td><strong>② Kalshi</strong></td><td><span class="zh">市场与订单簿 API，ticker <code>KXBTC15M-26AUG300345-45</code>；三轮原始响应；<code>R=0.5665 pp → 18.9</code></span><span class="en">Market and order-book APIs, ticker <code>KXBTC15M-26AUG300345-45</code>; three original-response rounds; <code>R=0.5665 pp → 18.9</code></span></td><td><code>20+20+20+16=76</code></td><td class="good"><strong>94.9</strong></td></tr>
+<tr><td><strong>③ Binance Wallet · Predict.fun</strong></td><td><span class="zh">Predict.fun GraphQL 市场 <code>1800299</code>；三轮原始响应；<code>R=5.6620 pp → 8.7</code></span><span class="en">Predict.fun GraphQL market <code>1800299</code>; three original-response rounds; <code>R=5.6620 pp → 8.7</code></span></td><td><code>20+20+20+20=80</code></td><td class="good"><strong>88.7</strong></td></tr>
+<tr><td><strong>④ OKX</strong></td><td><span class="zh">公开 instrument + book API，<code>BTC-UPDOWN-15MIN-260830-1530-1545</code>；六个方向均不能完整进出 100 份，成本分 0</span><span class="en">Public instrument + book APIs, <code>BTC-UPDOWN-15MIN-260830-1530-1545</code>; none of six side-observations completed 100 shares, so cost scores zero</span></td><td><code>20+20+20+20=80</code></td><td><strong>80</strong></td></tr>
+<tr><td><strong>⑤ Binance Event</strong></td><td><span class="zh">本次参评合约 <code>r=0.80</code>，确认后该笔赔付金额锁定；非平局门槛为 55.56%，含平局则为 <code>(1−t)/1.8</code>。封闭持有到结算使即时往返成本为 N/A，不是流动性 0 分</span><span class="en">The compared contract uses <code>r=0.80</code>, with its payout amount locked at confirmation; the non-tie hurdle is 55.56%, and including tie probability <code>t</code> it is <code>(1−t)/1.8</code>. Closed hold-to-settlement makes immediate round-trip cost N/A, not a zero liquidity score</span></td><td><code>0+20+20+16=56/80</code></td><td><strong>70</strong></td></tr>
+</tbody>
+</table></div>
+<ul>
+  <li><span class="zh"><strong>排名敏感性：</strong>Polymarket 只领先 Kalshi 1.9 分。其他项不变时，Polymarket 的 100 份进出损耗中位数从 1.6013 pp 升至 2.5500 pp 即与 Kalshi 打平。若保持成本与短周期两项权重合计 40，精确打平点是成本 26.229508、短周期 13.770492；只有成本权重高于 26.229508、短周期低于 13.770492 时，Kalshi 才升至第一。因此“Polymarket 第一”只对公开的等权综合问题成立；若问题是“哪个最少侵蚀同等预测能力玩家的优势”，本次答案是 Kalshi。</span><span class="en"><strong>Rank sensitivity:</strong> Polymarket leads Kalshi by only 1.9 points. With all other components fixed, Polymarket ties Kalshi if its median 100-share round-trip loss rises from 1.6013 to 2.5500 points. Holding the combined cost and short-horizon weight at 40, the exact tie is cost 26.229508 and short horizon 13.770492; Kalshi moves first only above 26.229508 on cost and below 13.770492 on short horizon. “Polymarket is first” therefore applies only to the disclosed equal-weight overall question; if the question is which venue eroded the least edge for an equally accurate player, the answer in this sample is Kalshi.</span></li>
+  <li><span class="zh"><strong>可证伪条件：</strong>任何人都可用保存的原始响应运行校验器；市场标识不一致、响应哈希错误、任一公式不能复算、图表与表格不一致，都会使验证失败。更多独立时间窗口的数据若改变成本中位数，应重算全文，不得保留旧排名。</span><span class="en"><strong>Falsification conditions:</strong> anyone can run the verifier against the preserved original responses. A market-ID mismatch, response-hash failure, unreproducible formula, or chart-table inconsistency fails validation. If more independent market windows change the cost medians, the entire report must be recalculated rather than retaining the old rank.</span></li>
+</ul>
+</details>
+
+<h2><span class="zh">五、适用性与风险</span><span class="en">5 · Suitability and risk</span></h2>
+<p><span class="zh"><strong>排名第一不等于建议参与：没有经足够样本验证的扣费后优势，普通玩家不适合参与任何一款，包括综合第一的 Polymarket。</strong></span><span class="en"><strong>First place is not a participation recommendation: without an after-cost edge demonstrated over a sufficient sample, ordinary players are not suited to any of these products, including overall leader Polymarket.</strong></span></p>
+<ol>
+  <li><span class="zh"><strong>打算持有到期：</strong>先按目标数量逐档计算 <code>q*=(买入成交额+买入费)/份数</code>，再问自己的真实胜率是否长期高于这个门槛。本次 OKX 100 份 Up 的三次真实门槛均超过 94.77%，普通玩家几乎不可能证明自己有如此稳定的准确率，因此不应下这笔立即买单。</span><span class="en"><strong>Planning to hold to expiry:</strong> first walk the book for the intended size and calculate <code>q*=(buy notional+buy fee)/shares</code>, then ask whether your true win rate can remain above it. All three real thresholds for the sampled OKX 100-share Up entry exceed 94.77%; an ordinary trader is extraordinarily unlikely to prove such stable accuracy and should not place that immediate order.</span></li>
+  <li><span class="zh"><strong>打算提前卖出：</strong>先看买盘能否接住全部份额，再把第二次手续费、点差和滑点算进去。第三节的三次采样只证明当时可成交，不证明全天或长期深度。</span><span class="en"><strong>Planning to sell early:</strong> first check whether live bids can absorb the full position, then include the second fee, spread, and slippage. The three collections in section 3 prove executability only at those times, not all-day or long-run depth.</span></li>
+  <li><span class="zh"><strong>选择 Binance Event：</strong>本次参评合约 <code>r=0.80</code> 时，按非平局条件计算的保本门槛是 55.56%；若平局概率为 <code>t</code>，无条件门槛为 <code>(1−t)/1.8</code>。确认后该笔赔付金额锁定，并且必须持有到期；0.80 不外推为所有合约的永久平台常数。</span><span class="en"><strong>Choosing Binance Event:</strong> at <code>r=0.80</code> for the compared contract, the non-tie break-even hurdle is 55.56%; with tie probability <code>t</code>, the unconditional hurdle is <code>(1−t)/1.8</code>. That contract's payout amount is locked at confirmation and must be held to expiry; 0.80 is not extrapolated into a permanent platform-wide constant.</span></li>
+  <li><span class="zh"><strong>不要用交易次数替代优势：</strong>频繁交易会反复支付点差、深度冲击或赔付折价。真实胜率没有超过全部成本时，交易越多，结果越趋向亏损。</span><span class="en"><strong>More trades do not create an edge:</strong> frequent trading repeatedly pays spread, depth impact, or payout discount. When true accuracy does not clear all costs, more trades make losses more likely to converge.</span></li>
+</ol>
+<p class="callout"><span class="zh"><strong>无真钱测试网体验：</strong>如果只想熟悉方向选择、链上确认和到期结算，可以使用 <a href="https://updown.bluffking.ai/" target="_blank" rel="noreferrer">https://updown.bluffking.ai/</a>。它运行在 BNB Smart Chain 测试网，测试币没有价值。BluffKing UpDown 由本报告发布方运营，仅作为教育与机制体验入口；它不是本报告的参评产品，不参与评分、成本比较或排名。</span><span class="en"><strong>No-real-money testnet experience:</strong> to learn direction selection, onchain confirmation, and expiry settlement without risking funds, use <a href="https://updown.bluffking.ai/" target="_blank" rel="noreferrer">https://updown.bluffking.ai/</a>. It runs on BNB Smart Chain testnet, where the test tokens have no value. BluffKing UpDown is operated by this report's publisher and is included only as an educational mechanism demo; it is not a ranked product and does not enter scoring, cost comparison, or ranking.</span></p>
+
+<h2><span class="zh">六、来源</span><span class="en">6 · Sources</span></h2>
+<p class="viz-note"><span class="zh"><strong>独立性披露：</strong>本次分析没有使用厂商付费材料、联盟链接、推荐码、厂商排名输入或非公开优惠，参评公司也未在出榜前参与改分。报告只采用官方规则、公开接口和可复算公式；缺失的关键数据不以有利假设补齐。</span><span class="en"><strong>Independence disclosure:</strong> this analysis uses no vendor-paid material, affiliate links, referral codes, vendor ranking inputs, or private discounts, and no ranked company participated in changing scores before publication. It relies only on official rules, public endpoints, and reproducible formulas; missing critical data is not filled with favorable assumptions.</span></p>
+<ul>
+  <li><a href="evidence/event-contract-orderbooks-2026-08-30.json"><span class="zh">本报告 · 三次同步盘口、市场标识、采集时间、公式、原始响应文件与 SHA-256</span><span class="en">Report evidence · three synchronized books, market IDs, timestamps, formulas, original-response files, and SHA-256</span></a></li>
+  <li><a href="https://www.okx.com/en-us/help/what-are-event-contracts" target="_blank" rel="noreferrer">OKX · What Are Event Contracts (price, probability, 1−P liquidity mapping)</a></li>
+  <li><a href="https://www.okx.com/en-us/help/how-to-trade-event-contracts-and-settlement-logic" target="_blank" rel="noreferrer">OKX · How to Trade Event Contracts and Settlement Logic</a></li>
+  <li><a href="https://www.okx.com/en-gb/help/events-contract-user-agreement" target="_blank" rel="noreferrer">OKX · Events Contract User Agreement (order book, collateral, settlement and review)</a></li>
+  <li><a href="https://www.okx.com/en-us/help/notice-on-event-contracts-fee-updates" target="_blank" rel="noreferrer">OKX · Notice on Event Contract Fee Update</a></li>
+  <li><a href="https://www.okx.com/en-gb/help/trading-mechanism" target="_blank" rel="noreferrer">OKX · Trading Mechanism (shared 1−P liquidity and maker/taker controls)</a></li>
+  <li><a href="https://www.okx.com/api/v5/public/instruments?instType=EVENTS&amp;seriesId=BTC-UPDOWN-15MIN" target="_blank" rel="noreferrer">OKX public API · BTC 15-minute event instruments</a></li>
+  <li><a href="https://www.okx.com/api/v5/market/books?instId=BTC-UPDOWN-15MIN-260830-1530-1545&amp;sz=400" target="_blank" rel="noreferrer">OKX public API · Sampled order book</a></li>
+  <li><a href="https://www.okx.com/zh-hans-sg/help/event-contracts-hit-settlement-and-dispute-rules" target="_blank" rel="noreferrer">OKX · 事件合约触达类型结算与复议规则</a></li>
+  <li><a href="https://www.binance.com/en/support/faq/what-are-binance-event-contracts-and-how-to-use-it-172247f1c4b8401ab106fb63900f3825" target="_blank" rel="noreferrer">Binance · What Are Binance Event Contracts and How to Use It</a></li>
+  <li><a href="evidence/binance-event-btcusdt-10m-payout-2026-09-01.jpg"><span class="zh">本报告 · Owner 提供的 Binance 生产界面截图（发布用 JPEG 副本）：BTCUSDT 10 分钟 Higher / Lower 均为 80%</span><span class="en">Report evidence · Published JPEG copy of the owner-supplied Binance production screenshot: BTCUSDT ten-minute Higher and Lower both at 80%</span></a> · <a href="evidence/binance-event-btcusdt-10m-payout-2026-09-01.json"><span class="zh">来源与 JPEG 哈希记录</span><span class="en">Provenance and JPEG hash record</span></a></li>
+  <li><a href="https://bin.bnbstatic.com/static/cms/cg08ou2ak0tn7mcplvfg/file/ff1ed8c9a32e4a61aa0aa66ccd618f76bbc88cd420e210d7721001e235cd9acd.pdf" target="_blank" rel="noreferrer">Binance · Event Contracts Terms (accepted Potential Payout Amount is fixed for that contract)</a></li>
+  <li><a href="https://developers.binance.com/docs/derivatives/change-log" target="_blank" rel="noreferrer">Binance Developer Docs · public <code>&lt;pair&gt;@indexPrice</code> WebSocket stream</a></li>
+  <li><a href="https://www.binance.com/en/academy/articles/a-guide-to-binance-wallet-prediction-markets" target="_blank" rel="noreferrer">Binance Academy · Guide to Binance Wallet Prediction Markets (orders, account, sell-before-resolution, fees)</a></li>
+  <li><a href="https://predict.fun/markets/crypto" target="_blank" rel="noreferrer">Predict.fun · Current Crypto Markets (BTC / ETH / BNB and live horizons)</a></li>
+  <li><a href="https://predict.fun/market/btc-updown-15m-1788075000" target="_blank" rel="noreferrer">Predict.fun · BTC 15-minute market used in the live sample</a></li>
+  <li><a href="https://docs.predict.fun/developers/technical-overview" target="_blank" rel="noreferrer">Predict.fun · Technical Overview (offchain CLOB, BSC execution, ERC-1155 outcome tokens)</a></li>
+  <li><a href="https://docs.predict.fun/the-basics/predict-fees-and-limits" target="_blank" rel="noreferrer">Predict.fun · Fees and Limits (base taker formula, minimum order)</a></li>
+  <li><a href="https://docs.predict.fun/the-basics/understanding-the-order-book" target="_blank" rel="noreferrer">Predict.fun · Understanding the Order Book (spread, market-order depth, YES/NO mirroring)</a></li>
+  <li><a href="https://dev.predict.fun/doc-685654" target="_blank" rel="noreferrer">Predict.fun API · Understanding the Orderbook (best bid/ask and complementary No-side prices)</a></li>
+  <li><a href="https://predict.fun/learn/how-prediction-market-fees-work" target="_blank" rel="noreferrer">Predict.fun · How Prediction Market Fees Work (gasless Wallet trading and fee behavior)</a></li>
+  <li><a href="https://docs.predict.fun/developers/chainlink-price-markets" target="_blank" rel="noreferrer">Predict.fun · Chainlink Price Markets (Data Streams, round logic, emergency resolution)</a></li>
+  <li><a href="https://academy.binance.com/en/articles/what-order-types-can-you-use-on-binance" target="_blank" rel="noreferrer">Binance Academy · Market, limit, maker and cancellation order mechanics</a></li>
+  <li><a href="https://www.binance.com/en/support/faq/what-are-mark-price-and-price-index-in-usd%E2%93%A2-margined-futures-360033525071" target="_blank" rel="noreferrer">Binance · Price Index methodology (linked from the Event Contracts FAQ)</a></li>
+  <li><a href="https://docs.polymarket.com/trading/fees" target="_blank" rel="noreferrer">Polymarket · Fees</a></li>
+  <li><a href="https://docs.polymarket.com/market-makers/liquidity-rewards" target="_blank" rel="noreferrer">Polymarket · Liquidity Rewards</a></li>
+  <li><a href="https://gamma-api.polymarket.com/markets?slug=btc-updown-15m-1788075000" target="_blank" rel="noreferrer">Polymarket Gamma API · BTC 15-minute sample metadata</a></li>
+  <li><a href="https://clob.polymarket.com/book?token_id=40970792126425077575079257675032106674644138134665951356209864002069325320576" target="_blank" rel="noreferrer">Polymarket CLOB API · Sampled Up-token order book</a></li>
+  <li><a href="https://clob.polymarket.com/book?token_id=563186745349044798086606273287503452997332504346441030540858670100665732052" target="_blank" rel="noreferrer">Polymarket CLOB API · Sampled Down-token order book</a></li>
+  <li><a href="https://docs.polymarket.com/polymarket-101" target="_blank" rel="noreferrer">Polymarket · Product, pUSD collateral, CLOB and onchain settlement</a></li>
+  <li><a href="https://docs.polymarket.com/concepts/prices-orderbook" target="_blank" rel="noreferrer">Polymarket · Prices &amp; Orderbook</a></li>
+  <li><a href="https://docs.polymarket.com/concepts/positions-tokens" target="_blank" rel="noreferrer">Polymarket · Positions &amp; Tokens (sell before resolution)</a></li>
+  <li><a href="https://docs.polymarket.com/concepts/resolution" target="_blank" rel="noreferrer">Polymarket · Resolution and UMA dispute flow</a></li>
+  <li><a href="https://docs.polymarket.com/market-data/chainlink-twap" target="_blank" rel="noreferrer">Polymarket · Chainlink TWAP Prices</a></li>
+  <li><a href="https://docs.polymarket.com/changelog" target="_blank" rel="noreferrer">Polymarket · Changelog</a></li>
+  <li><a href="https://help.kalshi.com/en/articles/13823805-fees" target="_blank" rel="noreferrer">Kalshi · Fees (fee schedule, 2026-07 update)</a></li>
+  <li><a href="https://external-api.kalshi.com/trade-api/v2/events?status=open&amp;series_ticker=KXBTC15M&amp;with_nested_markets=true&amp;limit=20" target="_blank" rel="noreferrer">Kalshi public API · KXBTC15M event and market metadata</a></li>
+  <li><a href="https://external-api.kalshi.com/trade-api/v2/markets/KXBTC15M-26AUG300345-45/orderbook?depth=100" target="_blank" rel="noreferrer">Kalshi public API · Sampled order book</a></li>
+  <li><a href="https://docs.kalshi.com/getting_started/fee_rounding" target="_blank" rel="noreferrer">Kalshi · Fee Rounding (direct and non-direct member precision)</a></li>
+  <li><a href="https://kalshi.com/combos/15-min/15-min/crypto" target="_blank" rel="noreferrer">Kalshi · Current 15-minute crypto markets</a></li>
+  <li><a href="https://help.kalshi.com/en/articles/13823811-limit-orders" target="_blank" rel="noreferrer">Kalshi · Limit Orders</a></li>
+  <li><a href="https://help.kalshi.com/en/articles/13823808-who-are-you-trading-with" target="_blank" rel="noreferrer">Kalshi · Member-to-member trading</a></li>
+  <li><a href="https://help.kalshi.com/en/articles/13823822-market-rules" target="_blank" rel="noreferrer">Kalshi · Market Rules and named resolution sources</a></li>
+  <li><a href="https://docs.kalshi.com/getting_started/fixed_point_migration" target="_blank" rel="noreferrer">Kalshi · Subpenny pricing and fractional contracts</a></li>
+  <li><a href="https://help.kalshi.com/en/articles/13823838-crypto-markets" target="_blank" rel="noreferrer">Kalshi · Crypto Markets and CF Benchmarks RTI access</a></li>
+  <li><a href="https://docs.kalshi.com/getting_started/historical_data" target="_blank" rel="noreferrer">Kalshi · Historical Data API</a></li>
+  <li><a href="https://kalshi-public-docs.s3.amazonaws.com/regulatory/rulebook/Kalshi%20Rulebook%20v1.24.pdf" target="_blank" rel="noreferrer">Kalshi · Rulebook v1.24 (Market Outcome Review)</a></li>
+  <li><a href="https://institutional.kalshi.com/" target="_blank" rel="noreferrer">Kalshi · KalshiEX DCM and Kalshi Klear DCO</a></li>
+  <li><a href="https://kalshi.com/docs/kalshi-fee-schedule.pdf" target="_blank" rel="noreferrer">Kalshi · Official Fee Schedule (effective 2026-07-07)</a></li>
+  <li><a href="https://www.cftc.gov/IndustryOversight/IndustryFilings/TradingOrganizations/42993" target="_blank" rel="noreferrer">CFTC · Kalshi designated-contract-market record</a></li>
+  <li><a href="https://www.cftc.gov/LearnAndProtect/AdvisoriesAndArticles/fraudadv_binaryoptions.html" target="_blank" rel="noreferrer">CFTC / SEC Investor Alert · Binary options (automatic exercise, fixed cash-or-nothing payout, no underlying ownership)</a></li>
+  <li><a href="https://website-prod.nadex.com/learning/how-to-trade-event-contracts/" target="_blank" rel="noreferrer">Nadex · Exchange-traded event contracts (hold to expiry or close early)</a></li>
+</ul>
+<p><span class="zh">注：费用、赔付比、市场目录、结算路径、地区与账户资格均可能变化。盘口与核心产品规则核验日期为 2026-08-30；Binary Option 对照资料核验日期为 2026-08-31。交易前应复核具体市场规则与确认页。</span><span class="en">Note: fees, payout ratios, market listings, settlement paths, regional access, and account eligibility may change. Order books and core product rules were checked on August 30, 2026; binary-options comparison sources were checked on August 31, 2026. Verify each market's rules and confirmation screen before trading.</span></p>
+
+</main>
+<script>
+  (function () {
+    var root = document.documentElement;
+    var buttons = document.querySelectorAll('.toggle button');
+    function apply(lang) {
+      root.setAttribute('data-lang', lang);
+      root.setAttribute('lang', lang === 'en' ? 'en' : 'zh-Hans');
+      document.title = lang === 'en'
+        ? 'Event-contract ranking for binary-options traders: Polymarket ranks first overall; Kalshi has the lowest buy-then-sell loss'
+        : '给 Binary Option 玩家的事件合约排名：Polymarket 综合第一；Kalshi 买入再卖出损耗最低';
+      buttons.forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.set === lang)); });
+      try { localStorage.setItem('updown-doc-lang', lang); } catch (e) {}
+    }
+    var saved = null;
+    try { saved = localStorage.getItem('updown-doc-lang'); } catch (e) {}
+    apply(saved === 'en' ? 'en' : 'zh');
+    buttons.forEach(function (b) { b.addEventListener('click', function () { apply(b.dataset.set); }); });
+  })();
+</script>
+</body>
+</html>
