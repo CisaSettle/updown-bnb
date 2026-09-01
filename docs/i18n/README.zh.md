@@ -67,17 +67,17 @@
 
 | 合约 | 地址 |
 |---|---|
-| `UpDownRegistry` | [`0x115dAb3400CF8EE8949F71ADB7696b54dD2E45bd`](https://testnet.bscscan.com/address/0x115dAb3400CF8EE8949F71ADB7696b54dD2E45bd) |
-| BTC/USD 1m | [`0x05ee686BeB6aeefEF07BBAcc8C2F4748B23fBC9C`](https://testnet.bscscan.com/address/0x05ee686BeB6aeefEF07BBAcc8C2F4748B23fBC9C) |
-| BTC/USD 10m | [`0x167217BA44E780B084E1F585208AfBBFD0aA5bE4`](https://testnet.bscscan.com/address/0x167217BA44E780B084E1F585208AfBBFD0aA5bE4) |
-| ETH/USD 1m | [`0x1b6d890659A73950b88ce8EF980021F6DE9A7409`](https://testnet.bscscan.com/address/0x1b6d890659A73950b88ce8EF980021F6DE9A7409) |
-| ETH/USD 10m | [`0xeedE6730a89f119Bf40c1b6439FCBA85ea770241`](https://testnet.bscscan.com/address/0xeedE6730a89f119Bf40c1b6439FCBA85ea770241) |
-| BNB/USD 1m | [`0x9818De06A32a9E50125A00916b4Be707E320D4ae`](https://testnet.bscscan.com/address/0x9818De06A32a9E50125A00916b4Be707E320D4ae) |
-| BNB/USD 10m | [`0xbDa9785c1F26fe3a8e66738252418Ca9C75EDAE0`](https://testnet.bscscan.com/address/0xbDa9785c1F26fe3a8e66738252418Ca9C75EDAE0) |
-| `TestUSDT`（水龙头，18 位小数） | [`0x52CdFacA6E7639e60EEdd88CE4BD24f8877b83e5`](https://testnet.bscscan.com/address/0x52CdFacA6E7639e60EEdd88CE4BD24f8877b83e5) |
-| `RelayAggregator` BTC/USD | [`0x81f6A0c6215bc0d8B3b64Ea946F58Bd159a7ed4A`](https://testnet.bscscan.com/address/0x81f6A0c6215bc0d8B3b64Ea946F58Bd159a7ed4A) |
-| `RelayAggregator` ETH/USD | [`0x0643De0C0bf26f081e4C28d11DB90f562174bF6C`](https://testnet.bscscan.com/address/0x0643De0C0bf26f081e4C28d11DB90f562174bF6C) |
-| `RelayAggregator` BNB/USD | [`0x99B5a4202B3247Bc326003a68dE5B301b1D4D541`](https://testnet.bscscan.com/address/0x99B5a4202B3247Bc326003a68dE5B301b1D4D541) |
+| `UpDownRegistry` | [`0x382789ECE97161713B49684bcaF7E5ff5a89AE77`](https://testnet.bscscan.com/address/0x382789ECE97161713B49684bcaF7E5ff5a89AE77) |
+| BTC/USD 1m | [`0xAFc1DfE668797c5f3d5003311AD9315E44bB9f72`](https://testnet.bscscan.com/address/0xAFc1DfE668797c5f3d5003311AD9315E44bB9f72) |
+| BTC/USD 10m | [`0x8f9d01fE059663F1f30783D3a09db6054Bd91402`](https://testnet.bscscan.com/address/0x8f9d01fE059663F1f30783D3a09db6054Bd91402) |
+| ETH/USD 1m | [`0xA1712874372770439c0D24e3Cb950113369F3DF1`](https://testnet.bscscan.com/address/0xA1712874372770439c0D24e3Cb950113369F3DF1) |
+| ETH/USD 10m | [`0xAcA99C75b0fe8a935D17B052B6B7C4bf4D5C9f62`](https://testnet.bscscan.com/address/0xAcA99C75b0fe8a935D17B052B6B7C4bf4D5C9f62) |
+| BNB/USD 1m | [`0x0B1EF73563557E6dbac971517ba3b23d111484D2`](https://testnet.bscscan.com/address/0x0B1EF73563557E6dbac971517ba3b23d111484D2) |
+| BNB/USD 10m | [`0xB42c6773025B0b525be24933ae6590Ae12B94cCa`](https://testnet.bscscan.com/address/0xB42c6773025B0b525be24933ae6590Ae12B94cCa) |
+| `TestUSDT`（水龙头，18 位小数） | [`0x2d279465d5755E972D3EC897A75Ab12983B7117F`](https://testnet.bscscan.com/address/0x2d279465d5755E972D3EC897A75Ab12983B7117F) |
+| `RelayAggregator` BTC/USD | [`0x2201C089a11fb573cF1c7CFE6a177FE0E5D03eea`](https://testnet.bscscan.com/address/0x2201C089a11fb573cF1c7CFE6a177FE0E5D03eea) |
+| `RelayAggregator` ETH/USD | [`0x5fC6307De0088093B0AcCc906054c62cbbaC7313`](https://testnet.bscscan.com/address/0x5fC6307De0088093B0AcCc906054c62cbbaC7313) |
+| `RelayAggregator` BNB/USD | [`0x4Aa11965dF670360036e4e7395446C029374AC10`](https://testnet.bscscan.com/address/0x4Aa11965dF670360036e4e7395446C029374AC10) |
 
 **六个市场：BTC、ETH、BNB，每个各有 1 分钟与 10 分钟两种轮长，全部以 USDT 结算。** 统一的结算资产意味着交易者可以用
 同一个单位比较六个盘口，并且只需要一次授权，而不必为了交易两个不同的标的去持有两种不同的东西。
