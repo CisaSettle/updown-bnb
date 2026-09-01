@@ -2,6 +2,32 @@
   "schemaVersion": 1,
   "entries": [
     {
+      "id": "2026-09-01-empty-markets-open-without-gas",
+      "releaseId": "web-2026.09.01.1",
+      "releasedAt": "2026-09-01",
+      "status": "released",
+      "title": {
+        "zh": "空盘无需 keeper gas 也会正常开盘",
+        "en": "Empty markets open without keeper gas"
+      },
+      "summary": {
+        "zh": "没有任何下注时，六个市场的空轮次现在会沿固定时间网格自动开盘，不再依赖 keeper 余额或持续链上交易。",
+        "en": "When nobody has bet, empty rounds across all six markets now open automatically on the fixed time grid without depending on keeper balance or recurring on-chain transactions."
+      },
+      "highlights": {
+        "zh": [
+          "空轮次保持虚拟开盘；第一笔真实下注才把轮次写上链并唤醒 keeper。",
+          "测试网空盘首注保留 50 秒的完整三路中继余量；已有资金的轮次仍按原锁盘时间接收下注。",
+          "六个 BSC 测试网市场和常在线 keeper 已切换到新合约，空盘健康检查现在保持为绿色。"
+        ],
+        "en": [
+          "Empty rounds remain virtually open; the first real stake materializes the round and wakes the keeper.",
+          "A dormant testnet first stake reserves 50 seconds for the full three-feed relay path; funded rounds retain their normal betting deadline.",
+          "All six BSC testnet markets and the always-on keeper have moved to the replacement contracts, with empty-market health now staying green."
+        ]
+      }
+    },
+    {
       "id": "2026-08-30-keeper-prod-cutover",
       "releaseId": "web-2026.08.30.3",
       "releasedAt": "2026-08-30",
