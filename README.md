@@ -96,17 +96,17 @@ Four properties are worth knowing before reading any code:
 
 | Contract | Address |
 |---|---|
-| `UpDownRegistry` | [`0x382789ECE97161713B49684bcaF7E5ff5a89AE77`](https://testnet.bscscan.com/address/0x382789ECE97161713B49684bcaF7E5ff5a89AE77) |
-| BTC/USD 1m | [`0xAFc1DfE668797c5f3d5003311AD9315E44bB9f72`](https://testnet.bscscan.com/address/0xAFc1DfE668797c5f3d5003311AD9315E44bB9f72) |
-| BTC/USD 10m | [`0x8f9d01fE059663F1f30783D3a09db6054Bd91402`](https://testnet.bscscan.com/address/0x8f9d01fE059663F1f30783D3a09db6054Bd91402) |
-| ETH/USD 1m | [`0xA1712874372770439c0D24e3Cb950113369F3DF1`](https://testnet.bscscan.com/address/0xA1712874372770439c0D24e3Cb950113369F3DF1) |
-| ETH/USD 10m | [`0xAcA99C75b0fe8a935D17B052B6B7C4bf4D5C9f62`](https://testnet.bscscan.com/address/0xAcA99C75b0fe8a935D17B052B6B7C4bf4D5C9f62) |
-| BNB/USD 1m | [`0x0B1EF73563557E6dbac971517ba3b23d111484D2`](https://testnet.bscscan.com/address/0x0B1EF73563557E6dbac971517ba3b23d111484D2) |
-| BNB/USD 10m | [`0xB42c6773025B0b525be24933ae6590Ae12B94cCa`](https://testnet.bscscan.com/address/0xB42c6773025B0b525be24933ae6590Ae12B94cCa) |
-| `TestUSDT` (faucet, 18 dec) | [`0x2d279465d5755E972D3EC897A75Ab12983B7117F`](https://testnet.bscscan.com/address/0x2d279465d5755E972D3EC897A75Ab12983B7117F) |
-| `RelayAggregator` BTC/USD | [`0x2201C089a11fb573cF1c7CFE6a177FE0E5D03eea`](https://testnet.bscscan.com/address/0x2201C089a11fb573cF1c7CFE6a177FE0E5D03eea) |
-| `RelayAggregator` ETH/USD | [`0x5fC6307De0088093B0AcCc906054c62cbbaC7313`](https://testnet.bscscan.com/address/0x5fC6307De0088093B0AcCc906054c62cbbaC7313) |
-| `RelayAggregator` BNB/USD | [`0x4Aa11965dF670360036e4e7395446C029374AC10`](https://testnet.bscscan.com/address/0x4Aa11965dF670360036e4e7395446C029374AC10) |
+| `UpDownRegistry` | [`0xAC6039E6cB9dcAa97932284433c64ee7aaAD5270`](https://testnet.bscscan.com/address/0xAC6039E6cB9dcAa97932284433c64ee7aaAD5270) |
+| BTC/USD 1m | [`0x166B7c1Fcd5a6b99f303bd5D37dCca62ABEcD4eA`](https://testnet.bscscan.com/address/0x166B7c1Fcd5a6b99f303bd5D37dCca62ABEcD4eA) |
+| BTC/USD 10m | [`0xE8872d45801CC97a6202B81F7D602294f437fd07`](https://testnet.bscscan.com/address/0xE8872d45801CC97a6202B81F7D602294f437fd07) |
+| ETH/USD 1m | [`0x2ff6F71D5a29E686D8Ac5ba2A8b9bc5E061502F1`](https://testnet.bscscan.com/address/0x2ff6F71D5a29E686D8Ac5ba2A8b9bc5E061502F1) |
+| ETH/USD 10m | [`0x4a79c230350Ae2c2179183064d9617A317D8cD1F`](https://testnet.bscscan.com/address/0x4a79c230350Ae2c2179183064d9617A317D8cD1F) |
+| BNB/USD 1m | [`0xA7FE586377863718429Ee36974DD31189422E1Ee`](https://testnet.bscscan.com/address/0xA7FE586377863718429Ee36974DD31189422E1Ee) |
+| BNB/USD 10m | [`0xf24cd2b4dAB0CBbb8cE678E618D9caf775833EB8`](https://testnet.bscscan.com/address/0xf24cd2b4dAB0CBbb8cE678E618D9caf775833EB8) |
+| `TestUSDT` (faucet, 18 dec) | [`0x215F2795f3f8265c5F48a7ea73C765a97414fAD0`](https://testnet.bscscan.com/address/0x215F2795f3f8265c5F48a7ea73C765a97414fAD0) |
+| `RelayAggregator` BTC/USD | [`0xaCC05721293Ac60459F26ccCCC2a5daAFfE907d8`](https://testnet.bscscan.com/address/0xaCC05721293Ac60459F26ccCCC2a5daAFfE907d8) |
+| `RelayAggregator` ETH/USD | [`0x527f6099216AeC563291AdeEAbB090c7b68533C6`](https://testnet.bscscan.com/address/0x527f6099216AeC563291AdeEAbB090c7b68533C6) |
+| `RelayAggregator` BNB/USD | [`0x023818a693bD515cd49Ab8246bC6c7EF5E7D7C78`](https://testnet.bscscan.com/address/0x023818a693bD515cd49Ab8246bC6c7EF5E7D7C78) |
 
 **Six markets: BTC, ETH and BNB, each over a 1-minute and a 10-minute round, every one of them settled
 in USDT.** One settlement asset across the board means a trader compares six books in a single unit

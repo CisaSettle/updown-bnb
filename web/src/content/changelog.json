@@ -2,6 +2,32 @@
   "schemaVersion": 1,
   "entries": [
     {
+      "id": "2026-09-01-continuous-rounds-and-watchdog",
+      "releaseId": "web-2026.09.01.2",
+      "releasedAt": "2026-09-01",
+      "status": "released",
+      "title": {
+        "zh": "连续轮次与故障告警修复",
+        "en": "Continuous rounds and failure alerts"
+      },
+      "summary": {
+        "zh": "做市 bot 现在能唤醒虚拟空轮次，并在 keeper 已活跃时持续为后续轮次提供盘口；独立 watchdog 会通过 Telegram 报告 keeper 或测试网 gas 故障及恢复。",
+        "en": "The market-making bot can now wake virtual empty rounds and keep successor rounds funded while the keeper is active; an independent watchdog reports keeper or testnet-gas failures and recovery through Telegram."
+      },
+      "highlights": {
+        "zh": [
+          "只有真正休眠的空盘首注需要保留 50 秒中继余量；已有结算任务使 keeper 保持活跃时，下一轮仍可正常接收首注。",
+          "prod watchdog 每分钟独立检查六个市场、keeper、两个做市 bot 与 gas 资金账户，并发送首次故障、定时提醒和恢复通知。",
+          "六个 BSC 测试网市场已迁移到修复后的新合约，11 份合约源码全部通过 Sourcify 验证。"
+        ],
+        "en": [
+          "Only a genuinely dormant empty book reserves the 50-second relay runway; when settlement work already keeps the keeper active, the successor round can accept its first stake normally.",
+          "The production watchdog independently checks all six markets, the keeper, both market-making bots, and the gas funder every minute, sending first-failure, reminder, and recovery notifications.",
+          "All six BSC testnet markets moved to the corrected contracts, with all 11 deployed contracts source-verified by Sourcify."
+        ]
+      }
+    },
+    {
       "id": "2026-09-01-empty-markets-open-without-gas",
       "releaseId": "web-2026.09.01.1",
       "releasedAt": "2026-09-01",
