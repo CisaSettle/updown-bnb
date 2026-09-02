@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { hasPlanningRunway, readBettableRound } from '../lib/bet-window.mjs'
+import { firstBetMinLeadReader, hasPlanningRunway, readBettableRound } from '../lib/bet-window.mjs'
 
 test('reads the projected bettable epoch instead of the stale materialized epoch', async () => {
   const calls = []
@@ -9,20 +9,53 @@ test('reads the projected bettable epoch instead of the stale materialized epoch
     calls.push([fn, args])
     if (fn === 'currentBettableEpoch') return 153n
     if (fn === 'getRound') return projected
-    if (fn === 'FIRST_BET_MIN_LEAD_SECONDS') return 50n
     if (fn === 'maintenanceRequired') return false
     throw new Error(`unexpected read ${fn}`)
   }
 
   const result = await readBettableRound(read)
 
-  assert.deepEqual(result, { epoch: 153n, round: projected, firstBetMinLeadSeconds: 50n, maintenanceRequired: false })
+  assert.deepEqual(result, { epoch: 153n, round: projected, maintenanceRequired: false })
   assert.deepEqual(calls, [
     ['currentBettableEpoch', []],
     ['getRound', [153n]],
-    ['FIRST_BET_MIN_LEAD_SECONDS', []],
     ['maintenanceRequired', []],
   ])
+})
+
+test('reads the first-bet lead constant once per market, not once per tick', async () => {
+  const calls = []
+  const read = async (fn, args = []) => {
+    calls.push([fn, args])
+    assert.equal(fn, 'FIRST_BET_MIN_LEAD_SECONDS')
+    return 50n
+  }
+  const lead = firstBetMinLeadReader()
+
+  assert.equal(await lead('0xa', read), 50n)
+  assert.equal(await lead('0xa', read), 50n)
+  assert.equal(await lead('0xb', read), 50n)
+  assert.equal(await lead('0xa', read), 50n)
+
+  assert.deepEqual(calls, [
+    ['FIRST_BET_MIN_LEAD_SECONDS', []],
+    ['FIRST_BET_MIN_LEAD_SECONDS', []],
+  ])
+})
+
+test('does not cache a failed first-bet lead read', async () => {
+  let attempts = 0
+  const read = async () => {
+    attempts += 1
+    if (attempts === 1) throw new Error('rpc blip')
+    return 50n
+  }
+  const lead = firstBetMinLeadReader()
+
+  await assert.rejects(() => lead('0xa', read), /rpc blip/)
+  assert.equal(await lead('0xa', read), 50n)
+  assert.equal(await lead('0xa', read), 50n)
+  assert.equal(attempts, 2)
 })
 
 test('requires the full dormant-relay runway for the first stake', () => {

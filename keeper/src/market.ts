@@ -72,6 +72,27 @@ import { computeBackoff, errorText, isContractRejection, type BackoffOptions } f
  * instead of spinning on a zero-delay timer.
  */
 const TICK_BACKOFF: BackoffOptions = { baseMs: 2_000, factor: 2, maxMs: 60_000, jitter: 0.2 };
+/**
+ * Funded spells that may end without this keeper executing once before the market is `degraded`.
+ *
+ * A funded spell lasts at most `interval + bufferSeconds`: `_roundNeedsMaintenance` releases an
+ * unlocked round at `lockTs + bufferSeconds`, and `bufferSeconds < interval` is enforced on chain.
+ * That is under the `2 × interval` staleness budget, and every wake resets that budget so a
+ * deliberately dormant market cannot page on an execution from hours ago. Together they mean a
+ * keeper that never executes is never `stale` on a market whose bets arrive with gaps between them:
+ * each spell ends inside its budget, each round in it voids into refunds, and `/healthz` stays
+ * green. Counting the spells is what sees it. Two, not one: a keeper that boots into the last
+ * seconds of a spell has genuinely missed nothing.
+ */
+const MISSED_SPELLS_BEFORE_DEGRADED = 2;
+/**
+ * How long a missed spell counts against the market. The state has to clear without a future bet:
+ * an operator who fixed the cause but sees no traffic should not stay paged indefinitely. Six hours
+ * is long enough for the hourly reminders to be acted on and short enough that the next missed
+ * spell starts a fresh count instead of paging on stale history. A keeper restart also clears it —
+ * the count lives in this process.
+ */
+const MISSED_SPELL_MEMORY_MS = 6 * 3_600_000;
 
 /**
  * How long density ticks stop after one fails on the wire.
@@ -514,6 +535,9 @@ export class MarketWorker {
   #missedSettlementEpoch: bigint | null = null;
   #lastExecutionMs: number | null = null;
   #supervisedSinceMs: number;
+  /** Consecutive funded spells that ended without this keeper executing once. */
+  #missedSpells = 0;
+  #lastMissedSpellAtMs = 0;
   #currentEpoch: bigint = 0n;
   #lastInactiveLogMs = 0;
   #lastPausedSettlementLogMs = 0;
@@ -578,6 +602,15 @@ export class MarketWorker {
   }
 
   /**
+   * Consecutive funded spells that came and went without this keeper executing once. Zero again
+   * `MISSED_SPELL_MEMORY_MS` after the last one, so the state clears without a future bet.
+   */
+  get missedSpells(): number {
+    if (this.#missedSpells > 0 && this.#now() - this.#lastMissedSpellAtMs > MISSED_SPELL_MEMORY_MS) return 0;
+    return this.#missedSpells;
+  }
+
+  /**
    * A keeper-side condition that makes correct settlement impossible for this market, or null.
    * Reported through `/healthz`: this is the failure mode that otherwise looks perfectly healthy,
    * because the keeper keeps executing on time and every round it touches voids.
@@ -588,6 +621,14 @@ export class MarketWorker {
       return (
         `keeper is not the updater or owner of relay feed ${relay.feed}, so every relay() reverts ` +
         `and every round on this market voids into refunds`
+      );
+    }
+    const missed = this.missedSpells;
+    if (missed >= MISSED_SPELLS_BEFORE_DEGRADED) {
+      return (
+        `${missed} consecutive funded spells ended without this keeper executing once: ` +
+        `every round in them ran out its window and voided into refunds. The staleness budget cannot ` +
+        `see this, because a funded spell lasts at most interval + bufferSeconds, under the 2×interval budget`
       );
     }
     return null;
@@ -824,6 +865,7 @@ export class MarketWorker {
     }
 
     this.#observed = true;
+    const previousEpoch = this.#currentEpoch;
     this.#currentEpoch = snapshot.currentEpoch;
     const wasActive = this.#active;
     this.#active = snapshot.genesisStarted && !snapshot.paused && snapshot.maintenanceRequired;
@@ -832,6 +874,34 @@ export class MarketWorker {
       // An execution from an older active spell is not the baseline for a market that deliberately
       // slept through empty rounds. This wake gets a fresh budget to reach its first boundary.
       this.#lastExecutionMs = null;
+    }
+    if (wasActive && !this.#active && snapshot.genesisStarted && !snapshot.paused && this.#lastExecutionMs === null) {
+      // The market released its funded round with no execution from this keeper. That is a missed
+      // spell only if the round demonstrably ran out its window: in chain time, past
+      // `lockTs + bufferSeconds` of the round this read describes, and with the epoch not having
+      // gone backwards. One answer from a lagging RPC node — the state from before the first bet,
+      // or an older epoch — satisfies neither, and must not count as a round lost.
+      const chainNowSec = Math.floor(this.#chainNow() / 1000);
+      const deadlineSec = snapshot.round.lockTs + snapshot.round.bufferSeconds;
+      const ranOut = snapshot.currentEpoch >= previousEpoch && chainNowSec > deadlineSec;
+      if (ranOut) {
+        this.#missedSpells = this.missedSpells + 1;
+        this.#lastMissedSpellAtMs = this.#now();
+        this.#log.warn('funded spell ended without an execution from this keeper', {
+          missedSpells: this.#missedSpells,
+          epoch: snapshot.currentEpoch,
+          deadlineTs: deadlineSec,
+          chainNow: chainNowSec,
+          hint: 'the funded round(s) in it ran out their window and voided into refunds',
+        });
+      } else {
+        this.#log.debug('market read as quiet before its funded round could run out; not counted as a missed spell', {
+          epoch: snapshot.currentEpoch,
+          previousEpoch,
+          deadlineTs: deadlineSec,
+          chainNow: chainNowSec,
+        });
+      }
     }
     this.#paused = snapshot.paused;
     this.#pausedSettlement = this.#classifyPausedSettlement(snapshot);
@@ -1840,6 +1910,7 @@ export class MarketWorker {
       if (this.#deps.config.dryRun) {
         this.#log.info('DRY_RUN: would executeRound', { epoch, boundaryTs, boundaryRoundId });
         this.#lastExecutionMs = this.#now();
+        this.#missedSpells = 0;
         // Nothing moved on chain, so the very next plan sees the same catch-up boundary and fires
         // again. Reporting the tick as unproductive lets the idle backoff space these out; calling
         // it productive would spin this market at the re-arm floor and hammer the RPC provider for
@@ -1903,6 +1974,7 @@ export class MarketWorker {
         });
 
         this.#lastExecutionMs = this.#now();
+        this.#missedSpells = 0;
         const latencyMs = this.#lastExecutionMs - startedAt;
         this.#deps.metrics.increment(M.executions, HELP[M.executions] as string, { market: this.name });
         this.#deps.metrics.increment(

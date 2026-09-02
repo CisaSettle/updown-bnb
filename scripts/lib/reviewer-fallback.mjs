@@ -2,7 +2,8 @@ import crypto from 'node:crypto'
 
 export const REVIEW_POLICY_ID = 'reviewer-quota-auto-auth-2026-07-24'
 export const CODEX_FALLBACK_MODEL = 'gpt-5.6-terra'
-export const CLAUDE_FALLBACK_MODEL = 'opus'
+/** Owner ruling 2026-09-02: a Claude-authored change whose Codex reviewer is out of quota is reviewed by Opus 5. */
+export const CLAUDE_FALLBACK_MODEL = 'claude-opus-5'
 
 export const REVIEW_SCHEMA = {
   type: 'object',
@@ -90,6 +91,65 @@ export function structuredCodexQuota(events, exitCode) {
   }
 }
 
+/**
+ * A usage-limit refusal that arrived as prose only: the provider's terminal error names the limit
+ * in its message but carries no typed code. On its own this never selects a fallback — the
+ * standing policy above needs the typed evidence, and a message is not a code. It exists so that
+ * an explicit owner ruling given for the run (`--owner-fallback`) can be honoured with the refusal
+ * recorded verbatim, and so that under that flag anything that is not even a usage-limit message
+ * still blocks. A retryable rate limit does not match: "rate limit" is not "usage limit".
+ */
+export function proseUsageLimit(vendor, events, exitCode) {
+  if (exitCode === 0) return null
+  const messages = events.flatMap((event) => {
+    if (vendor === 'openai') {
+      if (event?.type === 'error' && typeof event.message === 'string') return [event.message]
+      if (event?.type === 'turn.failed' && typeof event?.error?.message === 'string') return [event.error.message]
+      return []
+    }
+    if (event?.type === 'result' && event.is_error === true && typeof event.result === 'string') return [event.result]
+    return []
+  })
+  const message = messages.find((text) => /\busage limit\b/i.test(text))
+  if (!message) return null
+  return { provider: vendor, classification: 'prose_only_usage_limit', message }
+}
+
+/** The model a Claude stream-json session reports for itself in its init event, or null. */
+export function reportedClaudeModel(events) {
+  const init = events.find((event) => event?.type === 'system' && event?.subtype === 'init')
+  return typeof init?.model === 'string' ? init.model : null
+}
+
+/**
+ * The reviewer that answered must be the one the route pinned. A Claude session reports its model
+ * in its init event; a full id must match by prefix (a dated variant of the pin is the pin), and a
+ * family alias such as `opus` must name the family. Anything else is a different reviewer than the
+ * receipt would claim, and its verdict is refused rather than relabelled.
+ */
+export function assertReviewerModel(route, reportedModel) {
+  if (route.vendor !== 'anthropic') return
+  const pinned = String(route.model)
+  if (reportedModel === null || reportedModel === undefined) {
+    // A degraded review is worth only as much as the identity of who performed it: the receipt
+    // stamps the pinned model beside `owner_override=true`, so a session that never said what it
+    // is cannot be allowed to fill that slot. On the cross-vendor route the receipt claims no
+    // degraded authority, and a session that reports no model is tolerated rather than blocking a
+    // review that is otherwise exactly what the policy asks for.
+    if (route.crossVendor === false) {
+      throw new Error(`reviewer reported no model on the degraded route, which pins ${pinned}`)
+    }
+    return
+  }
+  // A full id matches itself or its dated build (`<pin>-YYYYMMDD`) and nothing else: a plain
+  // `startsWith` would accept `claude-opus-5-1`, a different model, under a receipt claiming the
+  // pin. A family alias (`opus`) matches any id naming that family.
+  const ok = pinned.includes('-')
+    ? reportedModel === pinned || new RegExp(`^${pinned}-\\d{8}$`).test(reportedModel)
+    : reportedModel.split('-').includes(pinned)
+  if (!ok) throw new Error(`reviewer reported model ${reportedModel}, route pinned ${pinned}`)
+}
+
 export function reviewRoute(authorVendor, fallback = false) {
   if (authorVendor === 'openai') {
     return fallback
@@ -102,6 +162,23 @@ export function reviewRoute(authorVendor, fallback = false) {
       : { vendor: 'openai', model: CODEX_FALLBACK_MODEL, crossVendor: true }
   }
   throw new Error(`unsupported author vendor: ${authorVendor}`)
+}
+
+/**
+ * The executable image behind a pid, from `lsof -a -p <pid> -d txt -Fn`.
+ *
+ * `ps -o comm=` only names a process the way it was invoked — a bare `claude` when it came through
+ * PATH — and codesign needs the file. The first `txt` entry lsof lists for a pid is the mapped
+ * executable; the entries after it are libraries. Null when the listing names no executable.
+ */
+export function executableFromLsof(output) {
+  const lines = String(output ?? '').split('\n')
+  for (let i = 0; i < lines.length; i += 1) {
+    if (lines[i].trim() !== 'ftxt') continue
+    const next = (lines[i + 1] ?? '').trim()
+    return next.startsWith('n/') ? next.slice(1) : null
+  }
+  return null
 }
 
 export function singleControllerVendor(claims) {
@@ -173,7 +250,11 @@ export function buildReviewReceipt({
   scope,
   verdict,
   transcript,
+  ownerRuling = null,
+  reportedModel = null,
 }) {
+  if (ownerRuling !== null && !fallbackUsed) throw new Error('an owner ruling is only recorded on a fallback review')
+  const ownerOverride = fallbackUsed && ownerRuling !== null
   return {
     schema_version: 1,
     kind: 'updown-review-receipt',
@@ -181,11 +262,21 @@ export function buildReviewReceipt({
     primary_reviewer_vendor: primaryRoute.vendor,
     reviewer_vendor: finalRoute.vendor,
     model: finalRoute.model,
+    reviewer_model_reported: reportedModel,
     cross_vendor: finalRoute.crossVendor,
     fallback_used: fallbackUsed,
-    fallback_reason: fallbackUsed ? 'quota_exhausted' : 'none',
-    automatic_owner_policy: fallbackUsed,
-    owner_policy_id: fallbackUsed ? REVIEW_POLICY_ID : null,
+    // The two degraded paths must stay tellable apart in the receipt: `quota_exhausted` means the
+    // provider's own typed evidence selected the fallback under the standing policy, and only the
+    // standing policy may claim it. An owner-ruled fallback rests on a prose refusal, which is
+    // exactly what the policy refuses to accept, so it says so.
+    fallback_reason: !fallbackUsed ? 'none' : ownerOverride ? 'owner_ruled_usage_limit' : 'quota_exhausted',
+    // Degraded approval has two possible authorities and the receipt names exactly one: the
+    // standing policy, selected by typed provider evidence, or an explicit owner ruling for this
+    // run, selected by a human. Neither is cross-vendor consensus.
+    automatic_owner_policy: fallbackUsed && !ownerOverride,
+    owner_policy_id: fallbackUsed && !ownerOverride ? REVIEW_POLICY_ID : null,
+    owner_override: ownerOverride,
+    owner_ruling: ownerOverride ? ownerRuling : null,
     quota_evidence: quotaEvidence,
     quota_evidence_sha256: fallbackUsed ? sha256(quotaTranscript) : null,
     scope,

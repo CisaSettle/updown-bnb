@@ -11,7 +11,7 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createPublicClient, formatEther, getAddress, http, parseEther, type Address } from 'viem';
+import { createPublicClient, formatEther, getAddress, http, isAddress, parseEther, type Address } from 'viem';
 import { createLogger, registerEnvSecrets } from './logger.js';
 
 const SERVICE = 'updown-health-monitor';
@@ -24,6 +24,10 @@ export interface MonitorSnapshot {
   healthReachable: boolean;
   healthHealthy?: boolean;
   healthMarkets: string[];
+  /** Market name → checksummed contract address, as each `/healthz` row reports it. */
+  healthMarketAddresses: Record<string, string>;
+  /** Market name → checksummed address from `DEPLOYMENTS_PATH`; null when the manifest was not read. */
+  deploymentMarkets: Record<string, string> | null;
   healthBlockers: string[];
   balances: Array<{ label: string; balance: bigint; minimum: bigint; requireAbove?: boolean }>;
   errors: string[];
@@ -32,6 +36,15 @@ export interface MonitorSnapshot {
 export interface MonitorVerdict {
   healthy: boolean;
   problems: string[];
+  /** Conditions worth logging that do not page on their own. */
+  notes: string[];
+  /**
+   * Whether this run could tell which contracts the keeper serves. `indeterminate` — an
+   * unreachable endpoint or an unreadable manifest — is not evidence either way, and must not
+   * restart the unverified clock: a flapping endpoint would otherwise hold a pre-address keeper
+   * below the grace period for ever.
+   */
+  addressCheck: 'verified' | 'unverified' | 'indeterminate';
   summary: string;
 }
 
@@ -39,13 +52,24 @@ export interface MonitorState {
   failedSince?: string;
   lastAlertAt?: string;
   alertDelivered?: boolean;
+  /** When the keeper first reported no market addresses; absent once it reports them. */
+  unverifiedSince?: string;
+}
+
+/** How long the keeper may report no market addresses before that is a failure in itself. */
+export interface UnverifiedEscalation {
+  unverifiedSince?: string;
+  nowMs: number;
+  graceMs: number;
 }
 
 export type Notification = 'failure' | 'reminder' | 'recovery' | null;
 
 /** Pure verdict used by both the executable and focused tests. */
-export function evaluateSnapshot(snapshot: MonitorSnapshot): MonitorVerdict {
+export function evaluateSnapshot(snapshot: MonitorSnapshot, escalation?: UnverifiedEscalation): MonitorVerdict {
   const problems = [...snapshot.errors];
+  const notes: string[] = [];
+  let addressCheck: MonitorVerdict['addressCheck'] = 'indeterminate';
   if (snapshot.chainId !== undefined && snapshot.chainId !== 97) problems.push(`RPC chain is ${snapshot.chainId}, expected 97`);
   if (!snapshot.healthReachable) problems.push('keeper /healthz is unreachable');
   if (snapshot.healthReachable && snapshot.healthHealthy !== true) problems.push('keeper /healthz reports unhealthy');
@@ -57,6 +81,42 @@ export function evaluateSnapshot(snapshot: MonitorSnapshot): MonitorVerdict {
   }
   for (const blocker of snapshot.healthBlockers.slice(0, 3)) problems.push(`keeper blocker: ${blocker}`);
 
+  // Names and states read identically on a keeper still serving a superseded deployment; only the
+  // addresses differ. A keeper build that reports no addresses at all cannot be verified and is
+  // not called wrong for it: this monitor shares the keeper's dist directory, and a timer run
+  // between a dist rsync and the keeper restart scrapes the OLD process with the NEW check — a
+  // page about a mismatch that does not exist, which would also burn the alert slot for the hour
+  // in which a real failure is most likely. A report that names addresses on some rows and not
+  // others is a bug, and is reported as one.
+  if (snapshot.healthReachable && snapshot.deploymentMarkets) {
+    const served = EXPECTED_MARKETS.filter((name) => snapshot.healthMarkets.includes(name));
+    const withAddress = served.filter((name) => snapshot.healthMarketAddresses[name] !== undefined);
+    // Unverifiable is never silent, and it is bounded: a note while the build gap could still be
+    // the deploy window, a failure once it has outlived the grace period.
+    if (served.length > 0) addressCheck = withAddress.length === 0 ? 'unverified' : 'verified';
+    if (addressCheck === 'unverified') {
+      const since = Date.parse(escalation?.unverifiedSince ?? '');
+      const forMs = escalation && Number.isFinite(since) ? escalation.nowMs - since : 0;
+      if (escalation && forMs > escalation.graceMs) {
+        problems.push(
+          `keeper /healthz has reported no market addresses for ${Math.floor(forMs / 60_000)} min; ` +
+          `deployment identity is unverified (a keeper build predating address reporting, left running past the ` +
+          `${Math.floor(escalation.graceMs / 60_000)} min grace)`,
+        );
+      } else {
+        notes.push('keeper /healthz reports no market addresses; deployment identity is unverified (keeper build predates address reporting)');
+      }
+    }
+    for (const name of served) {
+      const expected = snapshot.deploymentMarkets[name];
+      const actual = snapshot.healthMarketAddresses[name];
+      if (!expected) problems.push(`${name} is missing from the deployment manifest`);
+      else if (actual === undefined) {
+        if (withAddress.length > 0) problems.push(`keeper /healthz reports no address for ${name} while other markets carry one`);
+      } else if (actual !== expected) problems.push(`keeper serves ${name} at ${actual}, deployment manifest says ${expected}`);
+    }
+  }
+
   for (const item of snapshot.balances) {
     const bad = item.requireAbove ? item.balance <= item.minimum : item.balance < item.minimum;
     if (bad) {
@@ -67,6 +127,8 @@ export function evaluateSnapshot(snapshot: MonitorSnapshot): MonitorVerdict {
   return {
     healthy: problems.length === 0,
     problems,
+    notes,
+    addressCheck,
     summary: problems.length === 0 ? 'keeper, six markets, and gas rails are healthy' : problems.slice(0, 6).join('; '),
   };
 }
@@ -95,6 +157,7 @@ interface Config {
   funderReserve: bigint;
   statePath: string;
   repeatMs: number;
+  unverifiedGraceMs: number;
   alertToken: string;
   alertChatId: string;
   envLabel: string;
@@ -111,6 +174,10 @@ function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (botAddresses.length === 0) throw new Error('BOT_ADDRESSES must contain at least one address');
   const repeatSeconds = Number(env['UPDOWN_ALERT_REPEAT_SECONDS'] ?? '3600');
   if (!Number.isFinite(repeatSeconds) || repeatSeconds < 60) throw new Error('UPDOWN_ALERT_REPEAT_SECONDS must be at least 60');
+  const unverifiedGraceSeconds = Number(env['UPDOWN_UNVERIFIED_GRACE_SECONDS'] ?? '600');
+  if (!Number.isFinite(unverifiedGraceSeconds) || unverifiedGraceSeconds < 60) {
+    throw new Error('UPDOWN_UNVERIFIED_GRACE_SECONDS must be at least 60');
+  }
   return {
     rpcUrl: required(env, 'RPC_URL'),
     healthUrl: env['KEEPER_HEALTH_URL']?.trim() || DEFAULT_HEALTH_URL,
@@ -122,6 +189,7 @@ function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     funderReserve: parseEther(env['FUNDER_RESERVE_BNB']?.trim() || '0.01'),
     statePath: env['UPDOWN_MONITOR_STATE_PATH']?.trim() || DEFAULT_STATE_PATH,
     repeatMs: repeatSeconds * 1_000,
+    unverifiedGraceMs: unverifiedGraceSeconds * 1_000,
     alertToken: env['ALERT_TELEGRAM_BOT_TOKEN']?.trim() || required(env, 'TELEGRAM_BOT_TOKEN'),
     alertChatId: required(env, 'ALERT_TELEGRAM_CHAT_ID'),
     envLabel: env['ALERT_ENV_LABEL']?.trim() || 'prod',
@@ -151,6 +219,8 @@ async function collectSnapshot(config: Config): Promise<MonitorSnapshot> {
   const snapshot: MonitorSnapshot = {
     healthReachable: false,
     healthMarkets: [],
+    healthMarketAddresses: {},
+    deploymentMarkets: null,
     healthBlockers: [],
     balances: [],
     errors: [],
@@ -158,21 +228,37 @@ async function collectSnapshot(config: Config): Promise<MonitorSnapshot> {
 
   try {
     const response = await fetch(config.healthUrl, { signal: AbortSignal.timeout(10_000) });
-    const body = await response.json() as { healthy?: unknown; markets?: Array<{ name?: unknown }>; blockers?: unknown };
+    const body = await response.json() as {
+      healthy?: unknown;
+      markets?: Array<{ name?: unknown; address?: unknown }>;
+      blockers?: unknown;
+    };
     snapshot.healthReachable = response.ok || response.status === 503;
     snapshot.healthHealthy = body.healthy === true;
-    snapshot.healthMarkets = Array.isArray(body.markets)
-      ? body.markets.flatMap((market) => typeof market.name === 'string' ? [market.name] : [])
-      : [];
+    const markets = Array.isArray(body.markets) ? body.markets : [];
+    snapshot.healthMarkets = markets.flatMap((market) => typeof market.name === 'string' ? [market.name] : []);
+    snapshot.healthMarketAddresses = Object.fromEntries(
+      markets.flatMap((market) =>
+        typeof market.name === 'string' && typeof market.address === 'string' && isAddress(market.address)
+          ? [[market.name, getAddress(market.address)]]
+          : [],
+      ),
+    );
     snapshot.healthBlockers = safeStrings(body.blockers);
   } catch (error) {
     snapshot.errors.push(`health read failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 
   try {
-    const deployment = JSON.parse(readFileSync(config.deploymentPath, 'utf8')) as { operator?: unknown };
-    if (typeof deployment.operator !== 'string') throw new Error('deployment operator is missing');
-    const operator = getAddress(deployment.operator);
+    const deployment = JSON.parse(readFileSync(config.deploymentPath, 'utf8')) as Record<string, unknown>;
+    snapshot.deploymentMarkets = Object.fromEntries(
+      EXPECTED_MARKETS.flatMap((name) => {
+        const value = deployment[name];
+        return typeof value === 'string' && isAddress(value) ? [[name, getAddress(value)]] : [];
+      }),
+    );
+    if (typeof deployment['operator'] !== 'string') throw new Error('deployment operator is missing');
+    const operator = getAddress(deployment['operator']);
     const client = createPublicClient({ transport: http(config.rpcUrl) });
     snapshot.chainId = await client.getChainId();
     const accounts = [
@@ -199,7 +285,33 @@ async function sendTelegram(config: Config, text: string): Promise<void> {
   if (!response.ok || body?.ok !== true) throw new Error(`Telegram returned HTTP ${response.status}`);
 }
 
-function alertText(config: Config, kind: Exclude<Notification, null>, verdict: MonitorVerdict, state: MonitorState): string {
+/**
+ * State written after a send attempt. `alertDelivered` records whether the incident's latest red
+ * alert — the first failure alert or a reminder — reached anyone; a lost one is re-sent as a fresh
+ * failure on the next unhealthy run. A recovery notice that fails to send says nothing about that,
+ * so it leaves the flag as it was and the eventual green message does not claim the incident was
+ * never announced.
+ */
+export function stateAfterSend(
+  state: MonitorState,
+  kind: Exclude<Notification, null>,
+  delivered: boolean,
+  nowIso: string,
+): MonitorState {
+  if (kind === 'recovery' && delivered) return {};
+  return {
+    failedSince: state.failedSince ?? nowIso,
+    lastAlertAt: delivered ? nowIso : state.lastAlertAt,
+    alertDelivered: kind === 'recovery' ? state.alertDelivered === true : delivered,
+  };
+}
+
+export function alertText(
+  config: Pick<Config, 'envLabel'>,
+  kind: Exclude<Notification, null>,
+  verdict: MonitorVerdict,
+  state: MonitorState,
+): string {
   if (kind === 'recovery') {
     const qualifier = state.alertDelivered ? '' : ' after an undelivered failure alert';
     return `🟢 [UpDown ${config.envLabel}] recovered${qualifier}. ${verdict.summary}.`;
@@ -221,38 +333,42 @@ async function main(): Promise<void> {
   }
 
   const snapshot = await collectSnapshot(config);
-  const verdict = evaluateSnapshot(snapshot);
   const state = readState(config.statePath);
   const now = new Date();
+  // The unverified clock is independent of the alert state: it starts when the keeper first
+  // reports no addresses, survives every alert write, and stops only when the keeper actually
+  // reports them. A run that could not look at all leaves it exactly as it was.
+  const firstPass = evaluateSnapshot(snapshot);
+  const unverifiedSince =
+    firstPass.addressCheck === 'unverified' ? (state.unverifiedSince ?? now.toISOString())
+      : firstPass.addressCheck === 'verified' ? undefined
+        : state.unverifiedSince;
+  const verdict = evaluateSnapshot(snapshot, { unverifiedSince, nowMs: now.getTime(), graceMs: config.unverifiedGraceMs });
+  const persist = (alertState: MonitorState): void =>
+    writeState(config.statePath, unverifiedSince ? { ...alertState, unverifiedSince } : alertState);
   const notification = notificationFor(state, verdict.healthy, now.getTime(), config.repeatMs);
 
   if (!verdict.healthy) logger.error('UpDown watchdog failed', { problems: verdict.problems });
   else logger.info('UpDown watchdog healthy', { summary: verdict.summary });
+  if (verdict.notes.length > 0) logger.warn('UpDown watchdog note', { notes: verdict.notes, unverifiedSince });
 
   if (notification) {
+    let delivered = false;
     try {
       await sendTelegram(config, alertText(config, notification, verdict, state));
-      if (notification === 'recovery') {
-        writeState(config.statePath, {});
-      } else {
-        writeState(config.statePath, {
-          failedSince: state.failedSince ?? now.toISOString(),
-          lastAlertAt: now.toISOString(),
-          alertDelivered: true,
-        });
-      }
+      delivered = true;
     } catch (error) {
       logger.error('Telegram alert delivery failed', { error });
-      writeState(config.statePath, {
-        failedSince: state.failedSince ?? now.toISOString(),
-        lastAlertAt: state.lastAlertAt,
-        alertDelivered: false,
-      });
+    }
+    persist(stateAfterSend(state, notification, delivered, now.toISOString()));
+    if (!delivered) {
       process.exitCode = 1;
       return;
     }
   } else if (!verdict.healthy && !state.failedSince) {
-    writeState(config.statePath, { failedSince: now.toISOString(), alertDelivered: false });
+    persist({ failedSince: now.toISOString(), alertDelivered: false });
+  } else if (state.unverifiedSince !== unverifiedSince) {
+    persist({ failedSince: state.failedSince, lastAlertAt: state.lastAlertAt, alertDelivered: state.alertDelivered });
   }
   process.exitCode = verdict.healthy ? 0 : 1;
 }

@@ -216,6 +216,12 @@ describe('Keeper bootstrap failures', () => {
     expect(h.keeper.workers.map((w) => w.name)).toContain('ethUsd5m');
     expect(h.keeper.pendingMarkets).toEqual([]);
     expect(h.keeper.health().markets.map((m) => m.name).sort()).toEqual(['btcUsd5m', 'ethUsd5m']);
+    // Each row names its contract, so the out-of-process watchdog can tell this keeper from one
+    // still serving a superseded deployment.
+    expect(h.keeper.health().markets.map((m) => [m.name, m.address]).sort()).toEqual([
+      ['btcUsd5m', BTC],
+      ['ethUsd5m', ETH],
+    ]);
     expect(h.keeper.health().healthy).toBe(true);
 
     await h.keeper.stop();

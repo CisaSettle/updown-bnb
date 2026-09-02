@@ -461,7 +461,7 @@ curl -fsS localhost:9464/metrics            # Prometheus text format
 | `ok` | yes | Executed within `HEALTH_INTERVALS × interval` | none |
 | `paused` | yes | Market is paused. Either nothing is owed, or a round locked *before* the pause is still inside its settlement window and the keeper is still calling `executeRound` for it — pause stops new risk, never risk already taken | none, unless you did not expect it to be paused |
 | `inactive` | yes | No funded round currently needs a keeper transaction. This includes a market whose empty rounds remain virtually open, and one whose `genesisStart()` has not been called. **Paused is a separate state**, not this one | none |
-| `degraded` | **no** | The keeper is calling on time but what it settles is worthless. Three causes: a keeper-side fault (a relay feed this key may not write); too many fault-voids in the recent settlement window; or **a paused market whose already-locked round ran out its settlement window**, which has just turned a decided outcome into refunds | **Page.** For the third cause, unpausing is *not* the fix — settling is, and it works while paused. See §3.4 and residual risk 2 in §4 |
+| `degraded` | **no** | The keeper is calling on time but what it settles is worthless — or it is not calling at all and `stale` cannot see it. Four causes: a keeper-side fault (a relay feed this key may not write); too many fault-voids in the recent settlement window; **two consecutive funded spells passing without this keeper executing once** (a funded spell ends at `lockTs + bufferSeconds`, under the two-interval budget, and every wake resets that budget, so a keeper that never executes is never `stale` on a market whose bets arrive with gaps; a spell counts only once chain time is past that deadline, so one answer from a lagging RPC node cannot count); or **a paused market whose already-locked round ran out its settlement window**, which has just turned a decided outcome into refunds | **Page.** For the missed-spell cause: fix why `executeRound` is not landing (gas, RPC, key — §3.1), then the state clears on the next executed round, on a keeper restart (the count is in-process), or six hours after the last missed spell. For the fourth cause, unpausing is *not* the fix — settling is, and it works while paused. See §3.4 and residual risk 2 in §4 |
 | `stale` | **no** | No successful `executeRound` inside the budget | **Page.** Rounds are heading for void/refund — see §3.1 |
 | `unknown` | **no** | The keeper has never successfully read this market's state | **Page.** Almost always the RPC or a wrong address: re-run the §1.4 sanity-check calls against the addresses in `DEPLOYMENTS_PATH` |
 
@@ -477,9 +477,17 @@ present for > 10 minutes; keeper process not running.
 The keeper cannot report its own death, and an empty virtual market legitimately leaves
 `/healthz` green while no transaction is due. The separate `updown-health-monitor.timer` therefore
 runs once a minute outside the keeper process. It fails on an unreachable/unhealthy endpoint, a
-market set other than the six current 1m/10m markets, chain id other than 97, or keeper/bot/funder
-gas crossing its configured floor. This last check catches the otherwise silent state where the
-board remains open but both demo-liquidity accounts can no longer place the first stake.
+market set other than the six current 1m/10m markets, a market whose address on `/healthz` differs
+from the one in `DEPLOYMENTS_PATH` (a keeper process still serving a superseded deployment reports
+the same names and the same green states), chain id other than 97, or keeper/bot/funder gas
+crossing its configured floor. That last check catches the otherwise silent state where the board
+remains open but both demo-liquidity accounts can no longer place the first stake. A keeper build
+that predates address reporting cannot be checked against the manifest at all: the watchdog notes
+that on every run and fails once it has been running unverified for longer than
+`UPDOWN_UNVERIFIED_GRACE_SECONDS` (default 600), which covers the minute between a dist rsync and
+the keeper restart without paging. A run that cannot reach `/healthz` or read the manifest leaves
+that clock where it was, so a flapping endpoint cannot hold an unverified keeper below the grace
+for ever.
 
 On the first failure it writes a structured `ERROR` to `journalctl -u updown-health-monitor` and
 sends one incident through the dedicated `@bluff_alert_bot`; an undelivered alert is retried, a

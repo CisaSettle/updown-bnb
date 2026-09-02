@@ -575,6 +575,143 @@ describe('MarketWorker execute path', () => {
     expect(health.state).toBe('ok');
   });
 
+  it('reports a keeper that never executes as degraded after two funded spells, since stale cannot see it', async () => {
+    // A funded spell ends at `lockTs + bufferSeconds`, under the 2×interval budget, and every wake
+    // resets that budget: a keeper that never executes is never stale on a market whose bets
+    // arrive with gaps. Every round in those spells voids into refunds behind a green /healthz.
+    const h = makeHarness({ maintenanceRequired: true });
+    h.deps.config.schedule.idlePollMs = 25;
+    await h.worker.bootstrap();
+
+    const spell = async (funded: boolean): Promise<void> => {
+      h.worker.stop();
+      h.state.maintenanceRequired = funded;
+      h.worker.start();
+      await vi.waitFor(() => expect(h.worker.active).toBe(funded), { timeout: 2_000, interval: 5 });
+    };
+    // A funded round whose boundary this keeper never reaches, then chain time past
+    // `lockTs + bufferSeconds` (240s in this harness): the round ran out with nothing executed.
+    const fundedRoundThatRunsOut = async (): Promise<void> => {
+      h.state.lockTs = Math.floor(h.now() / 1_000) + 1_000;
+      await spell(true);
+      h.advanceMs(1_300_000);
+      await spell(false);
+    };
+
+    await fundedRoundThatRunsOut();
+    expect(h.worker.missedSpells).toBe(1);
+    expect(h.worker.degradedReason).toBeNull();
+
+    await fundedRoundThatRunsOut();
+    h.worker.stop();
+    expect(h.worker.missedSpells).toBe(2);
+    expect(h.worker.lastExecutionMs).toBeNull();
+    expect(h.worker.degradedReason).toMatch(/2 consecutive funded spells ended without this keeper executing once/);
+    const health = evaluateMarketHealth({
+      name: 'btcUsd5m',
+      intervalSec: INTERVAL,
+      lastExecutionMs: h.worker.lastExecutionMs,
+      supervisedSinceMs: h.worker.supervisedSinceMs,
+      active: h.worker.active,
+      observed: h.worker.observed,
+      degraded: h.worker.degradedReason,
+    }, h.now());
+    expect(health.state).toBe('degraded');
+    expect(health.healthy).toBe(false);
+
+    // One real execution clears it: the keeper has proved it can settle again. The boundary has to
+    // be a live one with a usable print — chain time is far past the original round by now.
+    const lockTs = Math.floor(h.now() / 1_000) - 2;
+    h.state.lockTs = lockTs;
+    h.state.chainNow = lockTs + 2;
+    h.state.prints.set(78n, { answer: 8_412_345_000_000n, updatedAt: lockTs - 5 });
+    await spell(true);
+    await vi.waitFor(() => expect(h.worker.lastExecutionMs).not.toBeNull(), { timeout: 2_000, interval: 5 });
+    h.worker.stop();
+    expect(h.worker.missedSpells).toBe(0);
+    expect(h.worker.degradedReason).toBeNull();
+  });
+
+  it('does not count a spell that one lagging read says ended before its round could run out', async () => {
+    const h = makeHarness({ maintenanceRequired: true });
+    h.deps.config.schedule.idlePollMs = 25;
+    h.publicClient.simulateContract.mockRejectedValue(new Error('execution reverted'));
+    await h.worker.bootstrap();
+    const spell = async (funded: boolean): Promise<void> => {
+      h.worker.stop();
+      h.state.maintenanceRequired = funded;
+      h.worker.start();
+      await vi.waitFor(() => expect(h.worker.active).toBe(funded), { timeout: 2_000, interval: 5 });
+    };
+
+    // Read as quiet while the round is still inside its window: the state from before the first
+    // bet, as a lagging node reports it. Not a missed spell.
+    await spell(true);
+    await spell(false);
+    expect(h.worker.missedSpells).toBe(0);
+
+    // An older epoch than the one already observed is a lagging read too, however late the clock.
+    await spell(true);
+    h.advanceMs(300_000);
+    h.state.currentEpoch = 41n;
+    await spell(false);
+    expect(h.worker.missedSpells).toBe(0);
+    h.state.currentEpoch = 42n;
+
+    // The same clock with a consistent epoch is the round genuinely running out.
+    await spell(true);
+    h.advanceMs(300_000);
+    await spell(false);
+    h.worker.stop();
+    expect(h.worker.missedSpells).toBe(1);
+  });
+
+  it('forgets missed spells six hours on, so the state clears without a future bet', async () => {
+    const h = makeHarness({ maintenanceRequired: true });
+    h.deps.config.schedule.idlePollMs = 25;
+    h.publicClient.simulateContract.mockRejectedValue(new Error('execution reverted'));
+    await h.worker.bootstrap();
+    const spell = async (funded: boolean): Promise<void> => {
+      h.worker.stop();
+      h.state.maintenanceRequired = funded;
+      h.worker.start();
+      await vi.waitFor(() => expect(h.worker.active).toBe(funded), { timeout: 2_000, interval: 5 });
+    };
+    for (let i = 0; i < 2; i += 1) {
+      await spell(true);
+      h.advanceMs(300_000);
+      await spell(false);
+    }
+    h.worker.stop();
+    expect(h.worker.missedSpells).toBe(2);
+    expect(h.worker.degradedReason).not.toBeNull();
+
+    h.advanceMs(6 * 3_600_000 + 1_000);
+    expect(h.worker.missedSpells).toBe(0);
+    expect(h.worker.degradedReason).toBeNull();
+  });
+
+  it('does not count a pause as a missed spell', async () => {
+    const h = makeHarness({ maintenanceRequired: true });
+    h.deps.config.schedule.idlePollMs = 25;
+    h.publicClient.simulateContract.mockRejectedValue(new Error('execution reverted'));
+    await h.worker.bootstrap();
+    h.worker.start();
+    await vi.waitFor(() => expect(h.worker.active).toBe(true), { timeout: 2_000, interval: 5 });
+
+    // Past `lockTs + bufferSeconds`, so the chain-time guard is satisfied and the pause is the
+    // only thing that can stop the count. Without this the test passes even with the pause guard
+    // removed, and proves nothing.
+    h.advanceMs(300_000);
+    h.worker.stop();
+    h.state.paused = true;
+    h.worker.start();
+    await vi.waitFor(() => expect(h.worker.active).toBe(false), { timeout: 2_000, interval: 5 });
+    h.worker.stop();
+    expect(h.worker.paused).toBe(true);
+    expect(h.worker.missedSpells).toBe(0);
+  });
+
   it('prices the boundary read at send time, not the one captured when the tick was planned', async () => {
     const h = makeHarness();
     await h.worker.bootstrap();

@@ -198,6 +198,7 @@ export class Keeper {
       version: VERSION,
       chain_id: String(this.config.chainId),
       keeper: this.config.keeperAddress,
+      registry: this.config.deployment.registry ?? '',
       relay_feeds: String(this.config.deployment.relayFeeds),
     });
     this.metrics.setGauge(M.healthy, HELP[M.healthy] as string, 0);
@@ -441,6 +442,9 @@ export class Keeper {
   healthInputs(nowMs: number = this.#now()): MarketHealthInput[] {
     const inputs: MarketHealthInput[] = this.#workers.map((worker) => ({
       name: worker.name,
+      // The address is what tells a keeper on the live deployment from one still serving the
+      // previous contracts: names and states read identically on both.
+      address: worker.address,
       intervalSec: worker.intervalSec,
       lastExecutionMs: worker.lastExecutionMs,
       supervisedSinceMs: worker.supervisedSinceMs,
@@ -460,6 +464,7 @@ export class Keeper {
     for (const entry of this.#pending) {
       inputs.push({
         name: entry.ref.name,
+        address: entry.ref.address,
         intervalSec: UNKNOWN_INTERVAL_SEC,
         lastExecutionMs: null,
         supervisedSinceMs: this.#startedAtMs,

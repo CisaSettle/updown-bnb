@@ -48,11 +48,24 @@ caller-supplied vendor cannot select the route or label the receipt.
 The opposite vendor is always first. Only a provider-structured terminal `quota_exhausted` event
 may activate the pinned same-vendor independent reviewer under owner policy
 `reviewer-quota-auto-auth-2026-07-24`. Generic errors, timeouts, prose-only quota messages,
-findings, and missing verdicts never select a fallback. A fallback must return `APPROVED` with
-`findings=[]` and `open=[]`; recursive fallback is forbidden. Its receipt must state
-`cross_vendor=false`, `fallback_reason=quota_exhausted`, and the policy id. This degraded approval
-allows the normal commit/push path without waiting for a per-run owner confirmation, but it must
-never be described as cross-vendor consensus.
+findings, and missing verdicts never select a fallback on their own. A fallback must return
+`APPROVED` with `findings=[]` and `open=[]`; recursive fallback is forbidden. Its receipt must
+state `cross_vendor=false`, `fallback_reason=quota_exhausted`, and the policy id. This degraded
+approval allows the normal commit/push path without waiting for a per-run owner confirmation, but
+it must never be described as cross-vendor consensus.
+
+The one path past a prose-only refusal is an explicit owner ruling given in the current session,
+passed verbatim as `--owner-fallback="<the ruling>"`. Under it a usage-limit message from the
+opposite vendor (and nothing else — a generic error still blocks) proceeds to the same-vendor
+reviewer, Opus 5 (`claude-opus-5`) for Claude-authored work (owner ruling 2026-09-02:
+用同厂商 Opus 5 来 review，如果 Codex 没额度了), and the receipt says `owner_override=true`,
+`automatic_owner_policy=false`, `fallback_reason=owner_ruled_usage_limit` — never
+`quota_exhausted`, which is the standing policy's word for its own typed evidence — and carries the
+refusal verbatim. On that degraded route the reviewer session must report a model for itself, and
+it must equal the pinned id or its dated build, or the verdict is refused rather than relabelled. Never pass the flag on your own
+initiative, and never widen `structuredCodexQuota` / `structuredClaudeQuota` to make a prose
+refusal look typed: the controller-identification bug fixed on 2026-09-02 (`ps -o comm=` naming
+`claude` without a path) was safe to fix unilaterally; the evidence bar is not.
 
 You do not have to remember the preflight: both vendors' `SessionStart` hooks run it for you and
 put anything open in front of you, and a `Stop` hook says so when a commit lands after the last

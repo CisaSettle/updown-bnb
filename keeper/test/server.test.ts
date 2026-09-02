@@ -9,6 +9,7 @@ const healthy: HealthReport = {
   markets: [
     {
       name: 'btcUsd5m',
+      address: '0x00000000000000000000000000000000000000aa',
       state: 'ok',
       healthy: true,
       secondsSinceExecution: 12,
@@ -29,6 +30,7 @@ const unhealthy: HealthReport = {
   markets: [
     {
       name: 'btcUsd5m',
+      address: '0x00000000000000000000000000000000000000aa',
       state: 'stale',
       healthy: false,
       secondsSinceExecution: 900,

@@ -2,6 +2,34 @@
   "schemaVersion": 1,
   "entries": [
     {
+      "id": "2026-09-02-keeper-health-and-watchdog-fixes",
+      "releaseId": "web-2026.09.02.1",
+      "releasedAt": "2026-09-02",
+      "status": "released",
+      "title": {
+        "zh": "keeper 健康与看门狗修复",
+        "en": "Keeper health and watchdog fixes"
+      },
+      "summary": {
+        "zh": "keeper 现在能报告一个从不执行却始终显示绿色的自身；看门狗会核对 keeper 服务的合约地址，并修正恢复通知的文案；做市 bot 不再每 10 秒重复读取合约常量。",
+        "en": "The keeper now reports itself when it never executes yet stays green; the watchdog checks which contracts the keeper serves and no longer misstates recovery; the market-making bot stops re-reading a contract constant every ten seconds."
+      },
+      "highlights": {
+        "zh": [
+          "连续两个有资金的活跃时段过去而 keeper 一次都没有执行时，该市场报告为 degraded：有资金的时段在 lockTs + bufferSeconds 结束，短于两个 interval 的 stale 预算，此前一个从不执行的 keeper 会一直保持绿色，每一轮都作废退款。只有链上时间已过截止点才计数，状态在下一次成功执行、keeper 重启或六小时后清除。",
+          "/healthz 的每个市场行现在带合约地址，独立看门狗会逐一与 DEPLOYMENTS_PATH 中的部署清单比对，仍在服务已替换旧合约的 keeper 进程会告警，而不是因名称和状态相同而通过。早于本次发布的旧版 keeper 不上报地址、无法核对：看门狗会记录这一点，并在其未经核对运行超过宽限期（默认 10 分钟）后告警。",
+          "恢复通知发送失败时，看门狗保留故障告警已送达的记录，后续成功的恢复通知不再附带“故障告警未送达”的错误说明。",
+          "FIRST_BET_MIN_LEAD_SECONDS 是编译进每个市场合约的常量，bot 现在每个市场只读取一次，六个市场每分钟减少约 36 次公共 RPC 调用。"
+        ],
+        "en": [
+          "A market whose funded spells pass twice in a row without the keeper executing once is reported degraded: a funded spell ends at lockTs + bufferSeconds, under the two-interval stale budget, so a keeper that never executed used to stay green while every round voided into refunds. A spell counts only once chain time is past that deadline, and the state clears on the next executed round, on a keeper restart, or after six hours.",
+          "Each /healthz market row now carries its contract address, and the independent watchdog compares every one with the deployment manifest at DEPLOYMENTS_PATH, so a keeper process still serving superseded contracts alerts instead of passing on identical names and states. A keeper build predating this release reports no addresses and cannot be checked: the watchdog notes that, and alerts once it has run unverified past the grace period (ten minutes by default).",
+          "When a recovery notice fails to send, the watchdog keeps the record that the failure alert was delivered, so a later successful recovery notice no longer carries a false undelivered qualifier.",
+          "FIRST_BET_MIN_LEAD_SECONDS is a constant compiled into each market contract; the bot now reads it once per market, saving about 36 public RPC calls a minute across six markets."
+        ]
+      }
+    },
+    {
       "id": "2026-09-01-continuous-rounds-and-watchdog",
       "releaseId": "web-2026.09.01.2",
       "releasedAt": "2026-09-01",

@@ -5,12 +5,26 @@
  */
 export async function readBettableRound(read) {
   const epoch = await read('currentBettableEpoch')
-  const [round, firstBetMinLeadSeconds, maintenanceRequired] = await Promise.all([
-    read('getRound', [epoch]),
-    read('FIRST_BET_MIN_LEAD_SECONDS'),
-    read('maintenanceRequired'),
-  ])
-  return { epoch, round, firstBetMinLeadSeconds, maintenanceRequired }
+  const [round, maintenanceRequired] = await Promise.all([read('getRound', [epoch]), read('maintenanceRequired')])
+  return { epoch, round, maintenanceRequired }
+}
+
+/**
+ * `FIRST_BET_MIN_LEAD_SECONDS` is a Solidity constant compiled into each market, so it cannot
+ * change without a redeploy and one read per market per process is exact. Reading it on every
+ * tick of every market only spent the shared public RPC's budget. A failed read is not cached:
+ * the tick that hit it fails as any other read failure does, and the next tick reads again.
+ */
+export function firstBetMinLeadReader() {
+  const byMarket = new Map()
+  return async (marketAddress, read) => {
+    let lead = byMarket.get(marketAddress)
+    if (lead === undefined) {
+      lead = await read('FIRST_BET_MIN_LEAD_SECONDS')
+      byMarket.set(marketAddress, lead)
+    }
+    return lead
+  }
 }
 
 /**

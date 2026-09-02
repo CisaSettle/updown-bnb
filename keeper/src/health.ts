@@ -81,6 +81,12 @@ export const DEFAULT_FAULT_VOID_RATIO = 0.5;
 
 export interface MarketHealthInput {
   name: string;
+  /**
+   * The market contract this row describes. An out-of-process check compares it with the
+   * deployment manifest: a keeper still serving a superseded deployment reports the same names,
+   * the same green states, and different addresses.
+   */
+  address?: string | null;
   /** Round length in seconds. */
   intervalSec: number;
   /** Wall-clock ms of the last successful `executeRound()`, or null if none yet. */
@@ -120,6 +126,8 @@ export interface MarketHealthInput {
 
 export interface MarketHealth {
   name: string;
+  /** The market contract this row describes; null only when the keeper has no address for it. */
+  address: string | null;
   state: MarketHealthState;
   healthy: boolean;
   /** True when the market is paused. Surfaced in the body so an operator sees it without guessing. */
@@ -200,7 +208,15 @@ export function evaluateMarketHealth(
   const settlement = input.settlement ?? null;
   const paused = input.paused === true;
   const pausedSettlement: PausedSettlementState = paused ? (input.pausedSettlement ?? 'none') : 'none';
-  const base = { name: input.name, secondsSinceExecution, budgetSec, settlement, paused, pausedSettlement };
+  const base = {
+    name: input.name,
+    address: input.address ?? null,
+    secondsSinceExecution,
+    budgetSec,
+    settlement,
+    paused,
+    pausedSettlement,
+  };
 
   if (input.bootstrapError) {
     return {

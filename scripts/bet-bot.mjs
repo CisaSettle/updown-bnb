@@ -46,7 +46,7 @@ import {
 } from '../keeper/node_modules/viem/_esm/index.js'
 import { privateKeyToAccount } from '../keeper/node_modules/viem/_esm/accounts/index.js'
 import { allocateGasRefills, selectGasRefills } from './lib/gas-refill.mjs'
-import { hasPlanningRunway, readBettableRound } from './lib/bet-window.mjs'
+import { firstBetMinLeadReader, hasPlanningRunway, readBettableRound } from './lib/bet-window.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const dep = JSON.parse(readFileSync(join(ROOT, 'contracts/deployments', '97.json'), 'utf8'))
@@ -397,9 +397,13 @@ async function keeperGasGuard() {
  * bet, and what is left of the side cap right now.
  */
 const plans = new Map()
+const firstBetMinLead = firstBetMinLeadReader()
 async function tick(market) {
   const read = (fn, args = []) => pub.readContract({ address: market.address, abi: MARKET, functionName: fn, args })
-  const { epoch, round: bettableRound, firstBetMinLeadSeconds, maintenanceRequired } = await readBettableRound(read)
+  const [{ epoch, round: bettableRound, maintenanceRequired }, firstBetMinLeadSeconds] = await Promise.all([
+    readBettableRound(read),
+    firstBetMinLead(market.address, read),
+  ])
   let plan = plans.get(market.key)
 
   if (!plan || plan.epoch !== epoch) {

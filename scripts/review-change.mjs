@@ -8,11 +8,15 @@ import { spawnSync } from 'node:child_process'
 import {
   REVIEW_POLICY_ID,
   REVIEW_SCHEMA,
+  assertReviewerModel,
   buildReviewReceipt,
   escapeReviewText,
+  executableFromLsof,
   extractClaudeVerdict,
   extractCodexVerdict,
   parseJsonLines,
+  proseUsageLimit,
+  reportedClaudeModel,
   reviewRoute,
   sha256,
   singleControllerVendor,
@@ -26,20 +30,26 @@ const MAX_PATCH_BYTES = 900 * 1024
 const DEFAULT_OUT = path.join(os.homedir(), 'bluffking-evidence', 'updown-review-latest.json')
 
 function usage() {
-  return `usage: node scripts/review-change.mjs [--expect-author-vendor=openai|anthropic] [--base=REF] [--out=PATH]\n\n` +
+  return `usage: node scripts/review-change.mjs [--expect-author-vendor=openai|anthropic] [--base=REF] [--out=PATH] [--owner-fallback="<ruling>"]\n\n` +
     `Runs the opposite-vendor reviewer over an immutable snapshot of the current change. ` +
-    `Only provider-structured quota exhaustion selects the pinned same-vendor fallback.\n` +
-    `Fallback receipts record cross_vendor=false and policy ${REVIEW_POLICY_ID}.`
+    `Only provider-structured quota exhaustion selects the pinned same-vendor fallback automatically.\n` +
+    `Fallback receipts record cross_vendor=false and policy ${REVIEW_POLICY_ID}.\n` +
+    `--owner-fallback carries an explicit owner ruling from the current session, quoted verbatim; it lets a ` +
+    `prose-only usage-limit refusal proceed to the same-vendor reviewer with owner_override=true. Never pass it on your own initiative.`
 }
 
 function parseArgs(argv) {
-  const options = { expectedAuthorVendor: '', base: 'HEAD', out: DEFAULT_OUT }
+  const options = { expectedAuthorVendor: '', base: 'HEAD', out: DEFAULT_OUT, ownerRuling: null }
   for (const arg of argv) {
     if (arg === '-h' || arg === '--help') options.help = true
     else if (arg.startsWith('--expect-author-vendor=')) options.expectedAuthorVendor = arg.slice(23)
     else if (arg.startsWith('--base=')) options.base = arg.slice(7)
     else if (arg.startsWith('--out=')) options.out = path.resolve(arg.slice(6))
+    else if (arg.startsWith('--owner-fallback=')) options.ownerRuling = arg.slice(17).trim()
     else throw new Error(`unknown argument: ${arg}`)
+  }
+  if (options.ownerRuling !== null && options.ownerRuling.length < 8) {
+    throw new Error('--owner-fallback must quote the owner ruling itself')
   }
   if (options.expectedAuthorVendor && !['openai', 'anthropic'].includes(options.expectedAuthorVendor)) {
     throw new Error('--expect-author-vendor must be openai or anthropic')
@@ -57,6 +67,30 @@ function signedTeam(executable, teamId) {
   return result.status === 0
 }
 
+/**
+ * The file a pid is running, for codesign.
+ *
+ * `ps -o comm=` reports the name the process was invoked by. A Claude Code session started as
+ * `claude` from a shell reports exactly that, `realpathSync('claude')` resolves nowhere, and the
+ * signature check then sees a relative path and rejects it — so no Claude-controlled session could
+ * ever identify itself as the author and the gate read "no signed controller". The kernel knows
+ * the mapped executable regardless of how it was invoked; `lsof -d txt` reports it. The invocation
+ * name stays as the fallback for a process lsof cannot list.
+ *
+ * This is a controller-identification defect, separate from the quota detector in
+ * `structuredCodexQuota`: resolving the executable correctly is safe to fix here; widening what
+ * counts as provider-structured quota exhaustion is a review-policy change and is not.
+ */
+function executableOf(pid, invokedAs) {
+  let executable = invokedAs
+  try {
+    const listed = run('/usr/sbin/lsof', ['-a', '-p', String(pid), '-d', 'txt', '-Fn'], { timeout: 10_000 })
+    if (listed.status === 0) executable = executableFromLsof(listed.stdout) ?? invokedAs
+  } catch { /* lsof unavailable: fall back to the invocation name */ }
+  try { executable = fs.realpathSync(executable) } catch { /* not a verifiable executable */ }
+  return executable
+}
+
 function controllerIdentity() {
   const claims = []
   let pid = process.ppid
@@ -66,8 +100,7 @@ function controllerIdentity() {
     const match = /^\s*(\d+)\s+(.+?)\s*$/.exec(info.stdout)
     if (!match) break
     const parent = Number(match[1])
-    let executable = match[2]
-    try { executable = fs.realpathSync(executable) } catch { /* not a verifiable executable */ }
+    const executable = executableOf(pid, match[2])
     if (signedTeam(executable, CODEX_TEAM_ID)) claims.push({ vendor: 'openai', pid, executable })
     if (signedTeam(executable, 'Q6L2SF6YDW')) claims.push({ vendor: 'anthropic', pid, executable })
     pid = parent
@@ -224,9 +257,31 @@ function quotaEvidence(route, execution) {
     : structuredCodexQuota(execution.events, execution.result.status)
 }
 
-function verdictFor(route, execution) {
+/**
+ * A reviewer that dies takes its transcript with it, and the run that most needs the transcript is
+ * exactly the one that produced no verdict. Keep it next to the receipt so the next run starts
+ * from evidence rather than from a guess.
+ */
+function saveFailedTranscript(outPath, route, execution) {
+  const target = `${outPath.replace(/\.json$/, '')}-failed-${route.vendor}-${route.model}.jsonl`
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, execution.transcript, { mode: 0o600 })
+    return target
+  } catch {
+    return null
+  }
+}
+
+function verdictFor(route, execution, outPath) {
   if (execution.result.status !== 0) {
-    throw new Error(`${route.vendor}/${route.model} review failed without structured quota exhaustion`)
+    const saved = outPath ? saveFailedTranscript(outPath, route, execution) : null
+    const terminal = execution.events.at(-1)
+    const detail = terminal?.subtype ?? terminal?.type ?? 'no terminal event'
+    throw new Error(
+      `${route.vendor}/${route.model} review failed without structured quota exhaustion ` +
+      `(exit ${execution.result.status}, terminal ${detail})${saved ? `; transcript ${saved}` : ''}`,
+    )
   }
   return route.vendor === 'anthropic'
     ? extractClaudeVerdict(execution.events)
@@ -261,17 +316,37 @@ function main() {
     let finalRoute = primaryRoute
     let finalExecution = primary
     let fallbackUsed = false
+    let fallbackEvidence = primaryQuota
+    let ownerRuling = null
+    // A prose-only refusal is looked at only when the owner has ruled for this run. It never
+    // widens the standing policy: without the flag, the same events block exactly as before.
+    const proseQuota = !primaryQuota && options.ownerRuling !== null
+      ? proseUsageLimit(primaryRoute.vendor, primary.events, primary.result.status)
+      : null
     if (primaryQuota) {
       finalRoute = reviewRoute(authorVendor, true)
       fallbackUsed = true
       console.error(`[review] structured ${primaryRoute.vendor} quota; automatic fallback to ${finalRoute.vendor}/${finalRoute.model} cross_vendor=false`)
+    } else if (proseQuota) {
+      finalRoute = reviewRoute(authorVendor, true)
+      fallbackUsed = true
+      fallbackEvidence = proseQuota
+      ownerRuling = options.ownerRuling
+      console.error(`[review] prose-only ${primaryRoute.vendor} usage-limit refusal; owner-ruled fallback to ${finalRoute.vendor}/${finalRoute.model} owner_override=true cross_vendor=false`)
+    } else if (options.ownerRuling !== null && primary.result.status !== 0) {
+      throw new Error(`${primaryRoute.vendor}/${primaryRoute.model} failed without a usage-limit refusal; the owner ruling does not cover it`)
+    }
+    if (fallbackUsed) {
       finalExecution = executeReview(finalRoute, prompt, schemaPath)
-      if (quotaEvidence(finalRoute, finalExecution)) {
+      if (quotaEvidence(finalRoute, finalExecution) || proseUsageLimit(finalRoute.vendor, finalExecution.events, finalExecution.result.status)) {
         throw new Error('fallback reviewer quota exhausted; recursive fallback is forbidden')
       }
     }
 
-    const verdict = verdictFor(finalRoute, finalExecution)
+    // The model that answered gates the verdict; it is not merely written down.
+    const reportedModel = finalRoute.vendor === 'anthropic' ? reportedClaudeModel(finalExecution.events) : null
+    assertReviewerModel(finalRoute, reportedModel)
+    const verdict = verdictFor(finalRoute, finalExecution, options.out)
     if (verdict.verdict !== 'APPROVED' || verdict.findings.length || verdict.open.length) {
       throw new Error(`${finalRoute.vendor}/${finalRoute.model} returned ${verdict.verdict}: ${JSON.stringify(verdict.open)}`)
     }
@@ -290,8 +365,10 @@ function main() {
       primaryRoute,
       finalRoute,
       fallbackUsed,
-      quotaEvidence: primaryQuota,
+      quotaEvidence: fallbackEvidence,
       quotaTranscript: primary.transcript,
+      ownerRuling,
+      reportedModel,
       scope: {
         base_sha: scope.base_sha,
         head_sha: scope.head_sha,
