@@ -499,6 +499,79 @@ Install `keeper/updown-health-monitor.service` and `.timer` beside the keeper un
 contains only the RPC URL, public operational addresses, thresholds, and the dedicated
 `ALERT_TELEGRAM_BOT_TOKEN` / `ALERT_TELEGRAM_CHAT_ID`; never copy the keeper signing key into it.
 
+### The daily on-chain report
+
+The watchdog answers "is the board alive right now"; this answers "what did it do yesterday".
+`updown-daily-report.timer` fires at 08:00 local, `Persistent=true`, and sends one Chinese-language
+Telegram summary of the
+previous local calendar day across all six markets: stake and rounds split between the project's own
+internal accounts and everyone else, settled rounds with their up/down split, refunds by kind, the
+day's fee against the ledger's outstanding liability, keeper/bot/funder gas, and a comparison with
+the day before. It is a separate unit from the watchdog on purpose — a pager and a report cannot
+share a timer, because a timer that runs every minute either pages every minute or reports every
+minute. `/var/lib/updown-daily-report/state.json` records the last date delivered, so a restart or a
+`Persistent=true` catch-up re-sends nothing — and it records the days that FAILED, which is the
+other half of the same problem: the next run computes a different date and a `Type=oneshot` unit is
+not re-fired by its timer, so without that list one transient RPC error at 08:00 would drop a day
+for ever with nothing saying so. A failed day is carried forward and retried, at most one arrear per
+run alongside the current day, and at most a week of them, so a backlog can neither starve today's
+report nor grow without bound.
+
+Install it beside the watchdog. `/etc/updown/daily-report.env` carries the RPC URL, the deployment
+manifest path, the public internal addresses (`BOT_ADDRESSES`, `FUNDER_ADDRESS`, and anything extra
+in `UPDOWN_INTERNAL_ADDRESSES`), the gas floors, the report's own day boundary
+(`UPDOWN_REPORT_UTC_OFFSET_MINUTES`, default 480, so the calendar day is Asia/Shanghai's whatever
+the host clock happens to be) and the same dedicated `@bluff_alert_bot` credentials as the watchdog;
+never copy the keeper signing key into it.
+
+```bash
+sudo install -m 0600 -o updown -g updown keeper/daily-report.env.example /etc/updown/daily-report.env
+sudo install -m 0644 keeper/updown-daily-report.service keeper/updown-daily-report.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now updown-daily-report.timer
+```
+
+To rehearse one by hand, or to re-read a day that has already been sent, run it as `updown` with the
+service's own environment:
+
+```bash
+sudo -u updown bash -c 'set -a; . /etc/updown/daily-report.env; set +a
+UPDOWN_REPORT_DRY_RUN=1 UPDOWN_REPORT_DATE=2026-09-03 node /opt/updown-keeper/dist/daily-report.js'
+```
+
+`UPDOWN_REPORT_DATE` bypasses the once-a-day dedupe deliberately: an explicit date is a re-run you
+asked for, so it neither consults nor rewrites the state file. `UPDOWN_REPORT_DRY_RUN=1` prints the
+rendered report to stdout instead of sending it, and lifts the requirement for real Telegram
+credentials, which is what makes a rehearsal safe. Drop both to reproduce exactly what the timer
+does. Budget about 75 seconds: one day plus its day-over-day comparison measured ~73.
+
+Read the report's own 口径 line before you read its numbers. Everything in it comes from contract
+views, never from logs: the public BSC testnet data-seed nodes reject `eth_getLogs` outright at every
+block span down to ten, and chain 97 mines roughly every 0.45 s, so one day is ~192k blocks and no
+free endpoint will serve that range. Views are exact, but they expose no global participant index,
+only `_userEpochs[user]` — so **there is no way to count distinct bettor addresses, and the report
+does not pretend to**. What it measures instead is real-user **stake** and **rounds**: whatever a
+funded round holds that is not attributable to one of the project's own internal accounts, meaning
+the two demo-liquidity bots, the keeper/operator, the owner/deployer and the gas funder, exactly the
+staff/QA exclusion the texas-h5 daily report makes. That is a floor and never an overcount, because
+an internal address missing from the config shows up as a real user and never the reverse, and the
+report states the definition in its own header line so the figure cannot be misread as a user count.
+For 2026-09-03 it reported 21,977.75 USDT staked over 1,845 rounds with 0.00 from real users, which
+is exactly what a board carried entirely by demo liquidity is supposed to look like.
+
+The one thing in it that means somebody has to act is 🔴 有资金回合未按时结算、已全额退款 and
+🔴 逾期未处理回合 (overdue unhandled rounds). Both are funded rounds whose boundary price never landed
+inside the buffer: the first has already handed every stake back, the second is still holding
+refundable money that nobody has triggered. That is normally the keeper failing at its only job, and
+the fix is §3.1, not the report — but an owner pause produces the identical state through no fault of
+the keeper, because pausing suspends locking while the round's clock keeps running, so the line names
+the effect and tells you to check for a pause first when one is in force. Everything else is
+information — a clean day prints ✅ 无未按时结算的退款 in the same section, and 数据健康 re-checks that
+every market still holds at least `outstanding + treasuryAmount`, and that no single market sat out
+a day the others traded — one silent market beside five busy ones is a stuck worker. A board that is
+silent everywhere is not a fault and is not coloured like one: rounds only come into being when
+somebody bets, so nothing anywhere means nobody bet, and the report says that at the top instead.
+
 ### The betting bot (testnet demo liquidity)
 
 `scripts/bet-bot.mjs` keeps every market showing a real, moving book: each round it stakes varying

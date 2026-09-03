@@ -1,0 +1,60 @@
+[Unit]
+# Install beside updown-keeper.service and the watchdog:
+#   sudo install -m 0600 -o updown -g updown daily-report.env.example /etc/updown/daily-report.env
+#   sudo install -m 0644 updown-daily-report.service updown-daily-report.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now updown-daily-report.timer
+#
+# `/etc/updown/daily-report.env` carries only reporting credentials/public addresses — never the
+# keeper signing key. ALERT_TELEGRAM_BOT_TOKEN is the dedicated @bluff_alert_bot token.
+#
+# This is a separate unit from updown-health-monitor on purpose: that one pages, this one reports,
+# and one timer cannot do both — sharing it would either page once a day or report every minute.
+Description=UpDown daily Telegram report of market stake and real-user activity
+Documentation=https://github.com/updown-protocol/updown
+After=network-online.target updown-keeper.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=updown
+Group=updown
+WorkingDirectory=/opt/updown-keeper
+EnvironmentFile=/etc/updown/daily-report.env
+Environment=NODE_ENV=production
+Environment=UPDOWN_REPORT_STATE_PATH=/var/lib/updown-daily-report/state.json
+ExecStart=/usr/bin/node /opt/updown-keeper/dist/daily-report.js
+StateDirectory=updown-daily-report
+StateDirectoryMode=0700
+# A measured full run — one day plus the day-over-day comparison, six markets, views only — takes
+# ~73s. The ceiling is an order of magnitude above that, not a tight fit: a run carrying a failed
+# day forward does two collections, and each RPC call retries three times at a 30s timeout, so a
+# slow-but-not-dead endpoint can stretch a normal run far past its measured time. Killing that run
+# would only defer the same work to tomorrow.
+TimeoutStartSec=600s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=updown-daily-report
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=false
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+UMask=0077

@@ -1,0 +1,14 @@
+[Unit]
+Description=Send the UpDown daily report every morning at 08:00 local time
+
+[Timer]
+OnCalendar=*-*-* 08:00:00
+# The report always renders the PREVIOUS local day, so a host that was down at 08:00 sends exactly
+# the same numbers whenever it comes back — a catch-up run is never a partial day.
+Persistent=true
+RandomizedDelaySec=120
+AccuracySec=1min
+Unit=updown-daily-report.service
+
+[Install]
+WantedBy=timers.target

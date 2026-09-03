@@ -452,6 +452,58 @@ gas 穿过配置阈值。最后一项专门捕获本次静默状态：市场仍�
 URL、公开运营地址、阈值和专用的 `ALERT_TELEGRAM_BOT_TOKEN` / `ALERT_TELEGRAM_CHAT_ID`；绝不要把 keeper 签名私钥
 复制进去。
 
+### 每日链上报告
+
+看门狗回答的是「盘口此刻是否还活着」，这一份回答的是「昨天它到底做了什么」。`updown-daily-report.timer` 每天本地时间
+08:00 触发（`Persistent=true`），把前一个自然日六个市场的情况汇成一条中文 Telegram 摘要：下注额与回合数按「项目自有内部账户」和「其余所有
+人」拆开，结算回合及其涨跌分布，按类别拆开的退款，当日手续费与账本上尚未兑付的负债，keeper / bot / funder 的
+gas，以及与前一天的环比。它和看门狗刻意分成两个 unit——传呼机和报表不能共用一个定时器，因为每分钟跑一次的定时器
+要么每分钟传呼一次，要么每分钟报表一次。`/var/lib/updown-daily-report/state.json` 记录最后送达的日期，所以重启或
+`Persistent=true` 的补跑都不会重复发送；它同时记录**失败**的日期，这是同一个问题的另一半：下一次运行算出的是另一个日期，而
+`Type=oneshot` 的单元不会被定时器重跑，所以没有这份清单的话，08:00 的一次偶发 RPC 错误就会让那一天永远消失、且无人知晓。失败的日期
+会被顺延重试，每次运行最多补一天旧账、并与当天的报告一起发送，最多累积一周——既不会让积压饿死当天的报告，也不会无限增长。
+
+把它安装在看门狗旁边。`/etc/updown/daily-report.env` 里只放 RPC URL、部署清单路径、公开的内部地址
+（`BOT_ADDRESSES`、`FUNDER_ADDRESS`，以及 `UPDOWN_INTERNAL_ADDRESSES` 中额外补充的地址）、gas 阈值、报告自己的
+日界（`UPDOWN_REPORT_UTC_OFFSET_MINUTES`，默认 480，于是无论宿主机时钟是什么，自然日都按 Asia/Shanghai 切），
+以及和看门狗相同的专用 `@bluff_alert_bot` 凭据；绝不要把 keeper 签名私钥复制进去。
+
+```bash
+sudo install -m 0600 -o updown -g updown keeper/daily-report.env.example /etc/updown/daily-report.env
+sudo install -m 0644 keeper/updown-daily-report.service keeper/updown-daily-report.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now updown-daily-report.timer
+```
+
+要手动预演一次，或者重新读一个已经发过的日子，用 `updown` 用户、带上该服务自己的环境变量运行：
+
+```bash
+sudo -u updown bash -c 'set -a; . /etc/updown/daily-report.env; set +a
+UPDOWN_REPORT_DRY_RUN=1 UPDOWN_REPORT_DATE=2026-09-03 node /opt/updown-keeper/dist/daily-report.js'
+```
+
+`UPDOWN_REPORT_DATE` 是刻意绕过「一天只发一次」去重的：显式指定日期就是你主动要求的重跑，因此它既不查也不改状态
+文件。`UPDOWN_REPORT_DRY_RUN=1` 则把渲染好的报告打到 stdout 而不是发出去，同时免除对真实 Telegram 凭据的要求，
+预演之所以安全就在这里。两个都不加，跑的就是定时器每天做的那件事。时间预算约 75 秒：一天加上它的环比实测约 73 秒。
+
+先读报告自己的那行口径，再读数字。里面的一切都来自合约 view，绝不来自日志：BSC 测试网公共 data-seed 节点直接
+拒绝 `eth_getLogs`（区间一路缩到 10 个块也照样拒绝），而链 97 大约每 0.45 秒出一个块，一天就是约 19.2 万个块，
+没有任何免费端点会服务这样的范围。view 是精确的，但它不暴露全局下注者索引，只有 `_userEpochs[user]`，
+**所以根本没有办法统计去重下注地址数，报告也不假装能统计**。它衡量的是真实用户的**下注额**与**参与回合数**：
+一个有资金的回合里，凡是不能归因到项目自有内部地址的部分——内部地址指两个演示流动性 bot、keeper/operator、
+owner/deployer 和 gas 加注账户，与 texas-h5 每日报告排除员工／QA 的口径完全一致。这是下限而不是高估，因为配置里
+漏掉的内部地址只会被算成真实用户，反过来则不可能；而且报告在自己的口径行里写明了这个定义，这个数字不会被误读成
+用户数。2026-09-03 那天它报出六市场共 21,977.75 USDT 下注、1,845 个回合，其中真实用户 0.00——一块完全由演示
+流动性撑着的盘口，本来就该是这个样子。
+
+其中唯一意味着「必须动手」的，是 🔴 有资金回合未按时结算、已全额退款 和 🔴 逾期未处理回合。两者都是有资金的回合、边界价格没能在
+缓冲期内落地：前者已经把每一笔下注原样退了回去，后者的钱还躺在合约里可退、但还没有人触发。通常这说明 keeper
+没做好它唯一的那件工作，该修的是 §3.1，不是报告；但 owner 暂停市场会产生一模一样的状态，而那并不是 keeper 的错——暂停会停掉锁价、
+回合自己的时钟却照走，所以这一行只陈述结果，并在有市场处于暂停时提醒先确认是不是暂停。其余每一行都只是信息——干净的一天会在同一节打印
+✅ 无未按时结算的退款，而 数据健康 一节会重新核对每个市场持有的 USDT 至少等于 `outstanding + treasuryAmount`，并核对有没有哪个
+市场在其余市场照常成交的那一天一个回合都没开出来——五个在跑、一个不动，那是卡住的 worker。整块盘口都没有动静则不算故障、也不会被涂成
+红色：回合只有在有人下注时才会诞生，处处为零就是没人下注，报告会在最上面直接这么说。
+
 ### 下注机器人（测试网演示流动性）
 
 `scripts/bet-bot.mjs` 让每个市场都展示一个真实、会动的盘口：每一轮它用两个专用账户押入不等的金额——通常两边都押，偶尔故意只押一边，偶尔整轮不押——并领取此前轮次欠它的钱，所以每个市场的持续成本大致就是输的那一边池子上的协议手续费。它自己从水龙头补给 TestUSDT（每地址每小时 1,000），并且在链 id

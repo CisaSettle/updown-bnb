@@ -67,6 +67,70 @@ export const marketAbi = [
     ],
     stateMutability: 'view',
   },
+  /**
+   * Batch form of `getRound`. The daily report walks a whole local day of the epoch grid, and one
+   * call per minute-slot would be thousands of round trips against a public data-seed node.
+   */
+  {
+    type: 'function',
+    name: 'getRounds',
+    inputs: [{ name: 'epochs', type: 'uint256[]', internalType: 'uint256[]' }],
+    outputs: [
+      { name: '', type: 'tuple[]', internalType: 'struct UpDownMarketBase.Round[]', components: roundStructComponents },
+    ],
+    stateMutability: 'view',
+  },
+  /** Public `ledger` mapping getter: one account's stake in one epoch, and whether it has collected. */
+  {
+    type: 'function',
+    name: 'ledger',
+    inputs: [
+      { name: 'epoch', type: 'uint256', internalType: 'uint256' },
+      { name: 'user', type: 'address', internalType: 'address' },
+    ],
+    outputs: [
+      { name: 'upAmount', type: 'uint256', internalType: 'uint256' },
+      { name: 'downAmount', type: 'uint256', internalType: 'uint256' },
+      { name: 'claimed', type: 'bool', internalType: 'bool' },
+    ],
+    stateMutability: 'view',
+  },
+  /**
+   * The append-only, strictly increasing list of epochs an account has bet in, plus its length.
+   * Strictly increasing because a bet is only accepted on `currentEpoch`, which never moves
+   * backwards — which is what lets a caller binary-search it for a time window instead of reading
+   * an account's entire history every day.
+   */
+  {
+    type: 'function',
+    name: 'userEpochs',
+    inputs: [
+      { name: 'user', type: 'address', internalType: 'address' },
+      { name: 'offset', type: 'uint256', internalType: 'uint256' },
+      { name: 'limit', type: 'uint256', internalType: 'uint256' },
+    ],
+    outputs: [
+      { name: 'epochs', type: 'uint256[]', internalType: 'uint256[]' },
+      { name: 'total', type: 'uint256', internalType: 'uint256' },
+    ],
+    stateMutability: 'view',
+  },
+  /** Protocol revenue accrued and not yet withdrawn. */
+  {
+    type: 'function',
+    name: 'treasuryAmount',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256', internalType: 'uint256' }],
+    stateMutability: 'view',
+  },
+  /** Settlement asset still owed to users: stakes not yet claimed or refunded. */
+  {
+    type: 'function',
+    name: 'outstanding',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256', internalType: 'uint256' }],
+    stateMutability: 'view',
+  },
   {
     type: 'function',
     name: 'getRound',

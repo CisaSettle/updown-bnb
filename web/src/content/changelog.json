@@ -2,6 +2,34 @@
   "schemaVersion": 1,
   "entries": [
     {
+      "id": "2026-09-04-daily-on-chain-report",
+      "releaseId": "web-2026.09.04.1",
+      "releasedAt": "2026-09-04",
+      "status": "released",
+      "title": {
+        "zh": "每日链上报告",
+        "en": "Daily on-chain report"
+      },
+      "summary": {
+        "zh": "每天早上通过 Telegram 发送一份前一自然日的链上报告：六个 chain-97 市场的下注、回合与手续费，真实用户下注与项目自有做市资金分开计量，未按时结算而全额退款的回合单独标出。",
+        "en": "A Telegram report each morning covers the previous calendar day on chain: stake, rounds, and fees across the six chain-97 markets, with real-user stake counted separately from the project's own market-making liquidity and rounds refunded because they never settled in time called out on their own line."
+      },
+      "highlights": {
+        "zh": [
+          "真实用户下注＝六个市场上非内部地址投入的金额，内部地址（做市 bot、keeper/operator、owner、gas 加注账户）单列且不计入。链上视图没有全局下注地址索引，因此只统计下注额与参与回合数，不报去重用户数；漏列的内部地址只会被算进真实用户一侧，所以这个数字是下限而非高估。",
+          "有资金却未按时结算、被全额退款的回合，以及已过截止时间、资金可退但尚未有人触发的回合，各自用 🔴 单独一行标出；平局与单边无对手的退款按设计另行列示，两者都不收手续费。",
+          "全部读自合约视图：公共 BSC 测试网节点直接拒绝 eth_getLogs，而 chain 97 一天约 19.2 万个区块，没有免费节点会返回这么大的范围。回合由 epoch 网格算出、经 Multicall3 批量读取，一天加上环比对比约 73 秒读完。",
+          "每次发送都重新核对六个市场的偿付能力（USDT 余额 ≥ 待兑付用户资金 + 未提取手续费）、keeper 与 bot 的 gas 下限，以及 keeper /healthz，任一不通过则健康行转为 🔴。自然日边界固定为 UTC+08，与 keeper 主机时区无关；已发送日期落盘，重启或补跑不会把同一天发第二遍。"
+        ],
+        "en": [
+          "Real-user stake is what non-internal addresses put up across the six markets, with the internal accounts — the market-making bots, keeper/operator, owner, and gas funder — on a line of their own and excluded from it. Contract views carry no global index of bettors, so the report counts stake and participating rounds rather than unique addresses; an internal address left off the list can only land on the real-user side, which makes the figure a floor rather than an overcount.",
+          "Funded rounds refunded in full because they never settled in time, and funded rounds already past their deadline that nobody has voided yet, each get their own 🔴 line; tie and one-sided refunds are listed separately as the by-design outcomes they are, and neither takes a fee.",
+          "Everything is read from contract views: the public BSC testnet nodes reject eth_getLogs outright, and chain 97 produces roughly 192k blocks a day, a range no free endpoint will serve. Rounds are derived from the epoch grid and read in batches through Multicall3, so a day plus its day-over-day comparison takes about 73 seconds.",
+          "Every send re-checks solvency for all six markets (USDT balance ≥ outstanding user funds + unwithdrawn fees), the keeper and bot gas floors, and keeper /healthz, turning the health line red if any of them fails. The calendar-day boundary is fixed at UTC+08 rather than the keeper host's timezone, and the last delivered date is written to disk so a restart or catch-up run cannot send the same day twice."
+        ]
+      }
+    },
+    {
       "id": "2026-09-02-keeper-health-and-watchdog-fixes",
       "releaseId": "web-2026.09.02.1",
       "releasedAt": "2026-09-02",
