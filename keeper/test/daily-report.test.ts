@@ -647,48 +647,44 @@ describe('shouldSend', () => {
   });
 });
 
+const solventMarket = market({ assetBalance: 1_000n, outstanding: 600n, treasuryAmount: 400n });
+const solventMarket2 = market({ name: 'btcUsd1m', assetBalance: 1_000n, outstanding: 600n, treasuryAmount: 400n });
+
 describe('a market that produced nothing', () => {
-  const solvent = market({ assetBalance: 1_000n, outstanding: 600n, treasuryAmount: 400n });
   const live = marketDay({ name: 'btcUsd1m', slots: 1_440, materialised: 1_200 });
 
-  it('is a health problem when the other markets ran — that is a stuck worker', () => {
-    const stalled = snapshot({
-      markets: [solvent, market({ name: 'btcUsd1m', assetBalance: 1_000n, outstanding: 600n, treasuryAmount: 400n })],
+  it('is never a health problem, however its siblings did', () => {
+    // A round only exists once somebody bets — `_activateBettableRound` is what materialises the
+    // grid slot, and the keeper only settles what a bet funded. So zero rounds is always zero
+    // demand and never a stuck keeper, which would instead surface as a funded round that failed
+    // to settle. Calling it unhealthy would paint the report red every day liquidity is
+    // deliberately restricted to a subset of markets.
+    const oneQuiet = snapshot({
+      markets: [solventMarket, solventMarket2],
       today: totalsFor('2026-09-03', [marketDay({ slots: 1_440, materialised: 0 }), live]),
     });
-    expect(evaluateHealth(stalled)).toEqual({
-      healthy: false,
-      problems: ['bnbUsd1m produced no rounds in 1440 grid slots'],
-    });
-  });
+    expect(evaluateHealth(oneQuiet)).toEqual({ healthy: true, problems: [] });
 
-  it('is NOT a health problem when the whole board is silent — nobody bet is not a fault', () => {
-    // Rounds only exist once somebody bets, so a board-wide zero means no bets, not breakage.
-    // Painting that red would make the health line red every day the demo bot is off, and the
-    // report already says it at the top.
-    const quiet = snapshot({
+    const allQuiet = snapshot({
       today: totalsFor('2026-09-03', [marketDay({ slots: 1_440, materialised: 0 })]),
     });
-    expect(evaluateHealth(quiet)).toEqual({ healthy: true, problems: [] });
+    expect(evaluateHealth(allQuiet)).toEqual({ healthy: true, problems: [] });
   });
 
-  it('says nothing about a market that is paused, unstarted, or simply had no slots', () => {
-    const paused = snapshot({
-      markets: [market({ paused: true, assetBalance: 1_000n, outstanding: 600n, treasuryAmount: 400n })],
+  it('is named in 各市场 instead, so an absent row is not mistaken for an absent market', () => {
+    const oneQuiet = snapshot({
       today: totalsFor('2026-09-03', [marketDay({ slots: 1_440, materialised: 0 }), live]),
     });
-    expect(evaluateHealth(paused).problems).toEqual(['bnbUsd1m is paused']);
-    const noSlots = snapshot({
-      today: totalsFor('2026-09-03', [marketDay({ slots: 0, materialised: 0 }), live]),
-    });
-    expect(evaluateHealth(noSlots)).toEqual({ healthy: true, problems: [] });
+    expect(formatReport(oneQuiet, { envLabel: 'testnet', offsetMinutes: 480 })).toContain('无成交：bnbUsd1m');
   });
 
-  it('does not fire for a market missing from the facts list', () => {
-    const orphan = snapshot({
-      today: totalsFor('2026-09-03', [marketDay({ name: 'ethUsd10m', slots: 144, materialised: 0 }), live]),
+  it('says nothing extra when no market traded at all — the activity line already did', () => {
+    const allQuiet = snapshot({
+      today: totalsFor('2026-09-03', [marketDay({ slots: 1_440, materialised: 0 })]),
     });
-    expect(evaluateHealth(orphan)).toEqual({ healthy: true, problems: [] });
+    const text = formatReport(allQuiet, { envLabel: 'testnet', offsetMinutes: 480 });
+    expect(text).not.toContain('无成交');
+    expect(text).toContain('🔴 前一自然日没有开出任何回合');
   });
 });
 

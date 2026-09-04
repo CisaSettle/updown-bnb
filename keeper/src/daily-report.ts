@@ -466,23 +466,6 @@ export function evaluateHealth(snapshot: Snapshot): Health {
     if (market.paused) problems.push(`${market.name} is paused`);
     if (!market.genesisStarted) problems.push(`${market.name} has not started`);
   }
-  // One market silent while the others ran is a stuck worker, and worth a red line.
-  //
-  // A board that is silent EVERYWHERE is not: rounds only come into existence when somebody bets
-  // (`_activateBettableRound`), so no rounds means nobody bet, which is an activity fact and not a
-  // fault. Calling it unhealthy would paint the report red every day the demo bot is deliberately
-  // off, and a health line that is always red is a health line nobody reads. That case is already
-  // stated, loudly, at the top of the report.
-  const anyProduced = snapshot.today.markets.some((day) => day.materialised > 0);
-  if (anyProduced) {
-    for (const day of snapshot.today.markets) {
-      const facts = snapshot.markets.find((market) => market.name === day.name);
-      if (!facts || !facts.genesisStarted || facts.paused) continue;
-      if (day.slots > 0 && day.materialised === 0) {
-        problems.push(`${day.name} produced no rounds in ${day.slots} grid slots`);
-      }
-    }
-  }
   if (snapshot.today.outcomes['void-unsettled'] > 0) {
     problems.push(`${snapshot.today.outcomes['void-unsettled']} funded rounds refunded unsettled`);
   }
@@ -704,6 +687,16 @@ export function formatReport(snapshot: Snapshot, cfg: ReportConfig): string {
         `${market.name}：下注 ${usdt(market.upAmount + market.downAmount)} USDT　回合 ${market.materialised}　` +
         `结算 ${market.outcomes.settled}　退款 ${market.outcomes['void-tie'] + market.outcomes['void-one-sided'] + market.outcomes['void-unsettled']}`,
     );
+  // A market with no rounds is named rather than dropped, because an absent row and a market
+  // nobody touched look identical once the row is gone. It is information, not a fault: a round
+  // only comes into existence when somebody bets, so zero rounds is always zero demand — never a
+  // stuck keeper, which would instead show up as a funded round that failed to settle. When NO
+  // market traded there is nothing to contrast it with, and the activity section has already said
+  // so in one line.
+  const idle = today.markets.filter((market) => market.slots > 0 && market.materialised === 0);
+  if (idle.length > 0 && perMarket.length > 0) {
+    perMarket.push(`无成交：${idle.map((market) => market.name).join(' / ')}`);
+  }
   report = pushSection(report, '各市场', perMarket);
 
   // ── 协议收入 ──

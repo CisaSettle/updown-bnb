@@ -567,10 +567,15 @@ the fix is §3.1, not the report — but an owner pause produces the identical s
 the keeper, because pausing suspends locking while the round's clock keeps running, so the line names
 the effect and tells you to check for a pause first when one is in force. Everything else is
 information — a clean day prints ✅ 无未按时结算的退款 in the same section, and 数据健康 re-checks that
-every market still holds at least `outstanding + treasuryAmount`, and that no single market sat out
-a day the others traded — one silent market beside five busy ones is a stuck worker. A board that is
-silent everywhere is not a fault and is not coloured like one: rounds only come into being when
-somebody bets, so nothing anywhere means nobody bet, and the report says that at the top instead.
+every market still holds at least `outstanding + treasuryAmount`.
+
+A market with no rounds is never a fault, however its siblings did. A grid slot only becomes a round
+when somebody bets — that is what `_activateBettableRound` does, and the keeper only settles what a
+bet funded — so zero rounds is always zero demand, and a stuck keeper would surface instead as a
+funded round that failed to settle. This matters in practice: demo liquidity is deliberately
+restricted to the three 10m markets while testnet gas is scarce, so the 1m markets are expected to
+sit empty. They are named on a `无成交` line under 各市场 rather than dropped from it, because a
+missing row and a market nobody touched look identical once the row is gone.
 
 ### The betting bot (testnet demo liquidity)
 

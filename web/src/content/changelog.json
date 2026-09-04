@@ -2,6 +2,30 @@
   "schemaVersion": 1,
   "entries": [
     {
+      "id": "2026-09-04-idle-markets-are-not-a-fault",
+      "releaseId": "web-2026.09.04.2",
+      "releasedAt": "2026-09-04",
+      "status": "released",
+      "title": {
+        "zh": "没有成交的市场不再算故障",
+        "en": "A market with no trades is no longer treated as a fault"
+      },
+      "summary": {
+        "zh": "每日报告原本把「其余市场照常成交、这个市场一个回合都没开出来」判为 keeper 卡住。这个判断是错的：时间格只有在有人下注时才会变成回合，所以回合为零永远等于需求为零。现在它改为在 各市场 下以「无成交」一行列出，健康结论不再因此转红。",
+        "en": "The daily report treated a market that produced no rounds while its siblings traded as a stuck keeper. That inference was wrong: a grid slot only becomes a round once somebody bets, so zero rounds always means zero demand. Such markets are now named on a 无成交 line under 各市场, and the health verdict no longer turns red for them."
+      },
+      "highlights": {
+        "zh": [
+          "回合的诞生取决于下注，不取决于 keeper：`_activateBettableRound` 在第一笔下注时把时间格写成回合，而 keeper 只结算下注撑起来的回合。因此「没有回合」无法区分停摆与无人下注，真正的 keeper 故障会以另一种形式出现——有资金的回合没能按时结算，那一行本来就已经是红的。",
+          "空的市场会被点名而不是从表里删掉：行消失之后，「消失的行」和「没人碰过的市场」看起来完全一样。整块盘口都没有成交时不再重复提示，因为报告最上面已经用一行说过了。"
+        ],
+        "en": [
+          "Round creation is driven by bets, not by the keeper: `_activateBettableRound` turns a grid slot into a round on the first bet, and the keeper only settles rounds a bet funded. So \"no rounds\" cannot separate an outage from an empty order book, while a genuine keeper failure surfaces differently — as a funded round that missed its settlement window, which already has its own red line.",
+          "Empty markets are named rather than dropped from the per-market table, because once the row is gone a missing row and a market nobody touched look identical. When no market traded at all the line is suppressed, since the top of the report has already said so."
+        ]
+      }
+    },
+    {
       "id": "2026-09-04-daily-on-chain-report",
       "releaseId": "web-2026.09.04.1",
       "releasedAt": "2026-09-04",
