@@ -124,6 +124,7 @@ const snapshot = (over: Partial<Snapshot> = {}): Snapshot => ({
 const faucet = (over: Partial<FaucetStatus> = {}): FaucetStatus => ({
   address: '0xE6b9a3895Ab013A1E82909f175f13D35400c6200' as Address,
   url: 'https://www.bnbchain.org/en/testnet-faucet',
+  fallbackUrls: ['https://faucet.quicknode.com/binance-smart-chain', 'https://tokentool.bitbond.com/faucet/bsc-testnet'],
   qualifierWei: parseEther('0.031'),
   qualifierMinimumWei: parseEther('0.002'),
   burnPerDayWei: parseEther('0.026'),
@@ -988,6 +989,43 @@ describe('the claim section', () => {
   it('says so plainly when the burn rate is not yet measurable', () => {
     const text = formatReport(snapshot({ faucet: faucet({ burnPerDayWei: null, runwayDays: null }) }), cfg);
     expect(text).toContain('预计续航：暂无');
+  });
+
+  it('lists the alternative dispensers, because the official one runs dry as well as refusing', () => {
+    // The failure this line exists for is not a rejected address: it is "The faucet has
+    // insufficient funds", the dispenser itself being empty, which no amount of qualifying fixes.
+    const text = formatReport(snapshot(), cfg);
+    expect(text).toContain(
+      '备用水龙头（官方没币时；要求各不相同）：https://faucet.quicknode.com/binance-smart-chain　' +
+        'https://tokentool.bitbond.com/faucet/bsc-testnet',
+    );
+  });
+
+  it('drops the line rather than printing a label with nothing after it', () => {
+    const text = formatReport(snapshot({ faucet: faucet({ fallbackUrls: [] }) }), cfg);
+    expect(text).not.toContain('备用水龙头');
+    // The section itself is unaffected — only the one line goes.
+    expect(text).toContain('水龙头：https://www.bnbchain.org/en/testnet-faucet');
+  });
+
+  it('sits between the 水龙头 line and the 可动用 gas line', () => {
+    // Asserted by position, not just presence: read on a phone this line only means anything
+    // directly under the faucet it is the fallback for, and a future edit could otherwise move it
+    // to the bottom of the section without a single test noticing.
+    const text = formatReport(snapshot(), cfg);
+    const primary = text.indexOf('水龙头：https://www.bnbchain.org/en/testnet-faucet');
+    const fallback = text.indexOf('备用水龙头（官方没币时；要求各不相同）：');
+    const runway = text.indexOf('可动用 gas');
+    expect(primary).toBeGreaterThan(-1);
+    expect(fallback).toBeGreaterThan(primary);
+    expect(runway).toBeGreaterThan(fallback);
+  });
+
+  it('adds no address of its own — the claim target is still the only one in the report', () => {
+    // The fallback URLs are new text in the section that the address rule is about, so it is
+    // re-asserted here rather than left to the formatReport suite alone.
+    const found = formatReport(snapshot(), cfg).match(/0x[0-9a-fA-F]{40}/g) ?? [];
+    expect(found).toEqual(['0xE6b9a3895Ab013A1E82909f175f13D35400c6200']);
   });
 
   it('omits the section entirely when no faucet address is configured', () => {

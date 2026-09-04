@@ -54,6 +54,19 @@ const DEFAULT_DEPLOYMENTS_PATH = '/etc/updown/97.json';
 /** Canonical Multicall3, deployed at the same address on chain 97 as everywhere else. */
 const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11' as const;
 const DEFAULT_FAUCET_URL = 'https://www.bnbchain.org/en/testnet-faucet';
+/**
+ * Where to send the owner when the official dispenser has nothing to give.
+ *
+ * The primary faucet fails two different ways: it refuses an address that misses the mainnet
+ * qualifier, and — as on 2026-09-04 — it answers "The faucet has insufficient funds" because the
+ * dispenser itself is empty. BNB Chain's own page anticipates the second by linking elsewhere, so
+ * the report carries those links rather than making the owner go hunting at the one moment it has
+ * just told them to claim. Both defaults were claimed live that day, and neither demands the
+ * mainnet balance the primary does. QuickNode's path is `/binance-smart-chain`; `/bsc/testnet`
+ * only redirects.
+ */
+const DEFAULT_FAUCET_FALLBACK_URLS =
+  'https://faucet.quicknode.com/binance-smart-chain,https://tokentool.bitbond.com/faucet/bsc-testnet';
 const DEFAULT_MAINNET_RPC = 'https://bsc-dataseed1.bnbchain.org';
 const EXPECTED_MARKETS = ['bnbUsd1m', 'bnbUsd10m', 'btcUsd1m', 'btcUsd10m', 'ethUsd1m', 'ethUsd10m'] as const;
 /** Grid slots per `getRounds` call. Large enough to keep a 1m market to ~15 calls a day. */
@@ -447,6 +460,8 @@ export interface FaucetStatus {
   /** The ONLY address the faucet will serve — see `qualifierWei`. */
   address: Address;
   url: string;
+  /** Alternative dispensers for the day the primary is empty. Empty renders no line at all. */
+  fallbackUrls: string[];
   /** Mainnet balance of that address, or null when it could not be read. */
   qualifierWei: bigint | null;
   /** The mainnet balance the faucet demands of the receiving address. */
@@ -835,6 +850,12 @@ export function formatReport(snapshot: Snapshot, cfg: ReportConfig): string {
           : `（🔴 BSC 主网余额 ${formatEth(faucet.qualifierWei)} BNB，低于门槛 ${formatEth(faucet.qualifierMinimumWei)}，水龙头会拒绝）`;
     claim.push(`领取地址（只有这个地址能领）：${faucet.address}${qualifier}`);
     claim.push(`水龙头：${faucet.url}`);
+    // Directly under the primary, because it is only ever read as "that one was dry, now what".
+    // Dropped rather than rendered empty: a label with nothing after it reads as a broken report,
+    // and the whole point of the section is that the owner never has to go looking.
+    if (faucet.fallbackUrls.length > 0) {
+      claim.push(`备用水龙头（官方没币时；要求各不相同）：${faucet.fallbackUrls.join('　')}`);
+    }
     const runway = formatNonzeroCounts(
       [
         ['可动用 gas', Number(faucet.usableWei), `${formatEth(faucet.usableWei)} tBNB`],
@@ -970,6 +991,7 @@ interface Config {
   healthUrl: string | null;
   faucetAddress: Address | null;
   faucetUrl: string;
+  faucetFallbackUrls: string[];
   mainnetRpcUrl: string | null;
   faucetQualifier: bigint;
   runwayWarnDays: number;
@@ -991,6 +1013,15 @@ function addressList(raw: string | undefined): Address[] {
     .map((value) => value.trim())
     .filter((value) => value !== '')
     .map((value) => getAddress(value));
+}
+
+/** `addressList` without the checksum: a comma-separated env list, trimmed, empties dropped. */
+function stringList(raw: string | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value !== '');
 }
 
 function truthy(value: string | undefined): boolean {
@@ -1037,6 +1068,9 @@ function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     // funder by default, and naming it explicitly is what keeps a manual claim from going astray.
     faucetAddress: env['UPDOWN_FAUCET_ADDRESS']?.trim() ? getAddress(env['UPDOWN_FAUCET_ADDRESS'].trim()) : funderAddress,
     faucetUrl: env['UPDOWN_FAUCET_URL']?.trim() || DEFAULT_FAUCET_URL,
+    // `??`, not `||`: setting the variable to an empty string is how an operator switches the
+    // fallback line off, and `||` would hand them the defaults back instead.
+    faucetFallbackUrls: stringList(env['UPDOWN_FAUCET_FALLBACK_URLS'] ?? DEFAULT_FAUCET_FALLBACK_URLS),
     // Read-only, and optional: without it the report simply cannot say whether the faucet will
     // still accept the address. This process never signs anything, on any chain.
     mainnetRpcUrl: env['UPDOWN_MAINNET_RPC_URL']?.trim() || DEFAULT_MAINNET_RPC,
@@ -1412,6 +1446,7 @@ async function collectSnapshot(
     faucet: config.faucetAddress === null ? null : {
       address: config.faucetAddress,
       url: config.faucetUrl,
+      fallbackUrls: config.faucetFallbackUrls,
       qualifierWei,
       qualifierMinimumWei: config.faucetQualifier,
       burnPerDayWei: burn,

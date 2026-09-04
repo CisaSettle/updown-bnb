@@ -576,6 +576,20 @@ and gas price instead of a constant that was true once. It reads `暂无` until 
 happened, and again after any top-up, because a balance that went up is the absence of a
 measurement rather than a negative burn.
 
+The faucet can also simply be empty, and the section says so before a browser does. The official
+dispenser serves one claim every 24 hours, on top of demanding the 0.002 BNB mainnet qualifier that
+only the funder holds — but on 2026-09-04 it answered `The faucet has insufficient funds` to a
+qualified address that had already cleared the captcha. What it pays is deliberately not written
+down here, for the reason §2 gives below: the amount is external and changes. So a `备用水龙头` line follows the
+official link with whatever `UPDOWN_FAUCET_FALLBACK_URLS` holds: by default QuickNode
+(<https://faucet.quicknode.com/binance-smart-chain>, no mainnet balance and no account, once every
+12 hours) and Bitbond (<https://tokentool.bitbond.com/faucet/bsc-testnet>, a wallet connect and a
+completed profile, once every 24 hours). Set that list empty and the line disappears. It names what
+each one **requires**, never what it gives: amounts and policy are external and can change without
+notice, the same warning the refill loop below already carries for the official faucet. All of them
+pay the same address, so the mainnet qualifier matters only to the faucet that checks it, and
+falling back never moves where the tBNB lands.
+
 The one thing in it that means somebody has to act is 🔴 有资金回合未按时结算、已全额退款 and
 🔴 逾期未处理回合 (overdue unhandled rounds). Both are funded rounds whose boundary price never landed
 inside the buffer: the first has already handed every stake back, the second is still holding

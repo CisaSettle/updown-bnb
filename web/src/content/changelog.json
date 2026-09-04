@@ -2,6 +2,32 @@
   "schemaVersion": 1,
   "entries": [
     {
+      "id": "2026-09-04-fallback-faucets-when-the-official-one-is-dry",
+      "releaseId": "web-2026.09.04.4",
+      "releasedAt": "2026-09-04",
+      "status": "released",
+      "title": {
+        "zh": "官方水龙头没币时，日报给出备用",
+        "en": "The daily report lists fallback faucets for when the official one is dry"
+      },
+      "summary": {
+        "zh": "2026-09-04 官方 BNB Chain 水龙头回了一句「The faucet has insufficient funds」——它并不总是有币。日报的 tBNB 领取一节因此在官方链接下面多加一行备用水龙头，官方枯竭的那天不必再自己去找。",
+        "en": "On 2026-09-04 the official BNB Chain faucet answered \"The faucet has insufficient funds\" — it is not always stocked. The tBNB claim section of the daily report now carries a line of fallback faucets under the official link, so a dry dispenser no longer sends anyone hunting."
+      },
+      "highlights": {
+        "zh": [
+          "两个备用各有各的要求，报告直接写明：QuickNode 不要求主网余额、不需要注册账户，同一地址每 12 小时一次；Bitbond 需要连接钱包并填一份 profile，每 24 小时一次。两者都不要求领取地址先在 BSC 主网持币——官方的那道门槛正是最容易卡住人的地方。",
+          "只写要求，不写发多少：第三方水龙头给出的额度、乃至还发不发，都是它们自己的策略，随时会变；写进报告的数字迟早会变成假的。",
+          "备用列表是配置项 UPDOWN_FAUCET_FALLBACK_URLS，逗号分隔、去空白、空项丢弃，默认就是上面两个。列表为空时整行不出现，官方恢复供应后可以清掉。"
+        ],
+        "en": [
+          "Each fallback asks for something different, and the report says which: QuickNode requires no mainnet balance and no account, once per address every 12 hours; Bitbond requires connecting a wallet and filling in a profile, once every 24 hours. Neither requires the claiming address to hold BNB on BSC mainnet first — the official requirement that is most likely to block a claim.",
+          "The line names requirements, never amounts: how much a third-party faucet hands out, or whether it still hands out anything, is their policy and can change at any time, so a number written into the report would eventually be false.",
+          "The list is configuration — UPDOWN_FAUCET_FALLBACK_URLS, comma-separated, trimmed, empty items dropped — defaulting to those two. An empty list removes the line entirely, so it can be cleared once the official faucet is stocked again."
+        ]
+      }
+    },
+    {
       "id": "2026-09-04-daily-report-names-the-faucet-claim",
       "releaseId": "web-2026.09.04.3",
       "releasedAt": "2026-09-04",
