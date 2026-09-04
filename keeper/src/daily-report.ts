@@ -53,6 +53,8 @@ const DEFAULT_STATE_PATH = '/var/lib/updown-daily-report/state.json';
 const DEFAULT_DEPLOYMENTS_PATH = '/etc/updown/97.json';
 /** Canonical Multicall3, deployed at the same address on chain 97 as everywhere else. */
 const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11' as const;
+const DEFAULT_FAUCET_URL = 'https://www.bnbchain.org/en/testnet-faucet';
+const DEFAULT_MAINNET_RPC = 'https://bsc-dataseed1.bnbchain.org';
 const EXPECTED_MARKETS = ['bnbUsd1m', 'bnbUsd10m', 'btcUsd1m', 'btcUsd10m', 'ethUsd1m', 'ethUsd10m'] as const;
 /** Grid slots per `getRounds` call. Large enough to keep a 1m market to ~15 calls a day. */
 const ROUNDS_BATCH = 120;
@@ -435,13 +437,95 @@ export interface Snapshot {
   assetDecimals: number;
   internalAccounts: number;
   gas: GasAccount[];
+  /** Everything the owner needs to top the board up by hand, because nothing else can. */
+  faucet: FaucetStatus | null;
   keeperHealthy: boolean | null;
   errors: string[];
+}
+
+export interface FaucetStatus {
+  /** The ONLY address the faucet will serve — see `qualifierWei`. */
+  address: Address;
+  url: string;
+  /** Mainnet balance of that address, or null when it could not be read. */
+  qualifierWei: bigint | null;
+  /** The mainnet balance the faucet demands of the receiving address. */
+  qualifierMinimumWei: bigint;
+  burnPerDayWei: bigint | null;
+  usableWei: bigint;
+  runwayDays: number | null;
+  /** Below this many days of runway the report asks for a claim. */
+  warnDays: number;
+}
+
+/**
+ * Whether the owner should go and claim today.
+ *
+ * Deliberately conservative in both directions: an unknown burn rate does not mean "fine", it
+ * means the report cannot say, and an account already under its floor is a yes regardless of what
+ * the runway arithmetic thinks.
+ */
+export function claimNeeded(faucet: FaucetStatus, accounts: readonly GasAccount[]): boolean {
+  if (accounts.some((account) => (account.requireAbove ? account.balance <= account.minimum : account.balance < account.minimum))) {
+    return true;
+  }
+  return faucet.runwayDays !== null && faucet.runwayDays < faucet.warnDays;
 }
 
 export interface Health {
   healthy: boolean;
   problems: string[];
+}
+
+export function totalGas(accounts: readonly GasAccount[]): bigint {
+  return accounts.reduce((sum, account) => sum + account.balance, 0n);
+}
+
+/**
+ * Gas that may actually be spent: what each account holds above the floor it must not go under.
+ *
+ * The floors are not spare fuel. The funder's reserve is what lets it pay for its own transfers,
+ * and an account at its minimum is already at the point the watchdog pages about, so counting
+ * either towards runway would promise days that do not exist.
+ */
+export function usableGas(accounts: readonly GasAccount[]): bigint {
+  return accounts.reduce((sum, account) => {
+    const spare = account.balance - account.minimum;
+    return sum + (spare > 0n ? spare : 0n);
+  }, 0n);
+}
+
+/**
+ * What a day costs, measured from the last run rather than assumed.
+ *
+ * A constant would be wrong the moment the round cadence, the market set or the testnet gas price
+ * changed — all three of which have already changed once. Two totals and the time between them
+ * need no such assumption. Returns null when there is nothing to compare, when the gap is too
+ * short to divide by, or when the balance went UP: a faucet claim or a sweep is not a negative
+ * burn, it is the absence of a measurement.
+ */
+export function burnPerDay(previous: GasSample | undefined, current: GasSample): bigint | null {
+  if (!previous) return null;
+  let previousWei: bigint;
+  try {
+    previousWei = BigInt(previous.totalWei);
+  } catch {
+    return null;
+  }
+  const from = Date.parse(previous.at);
+  const to = Date.parse(current.at);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+  const elapsedMs = to - from;
+  if (elapsedMs < 3_600_000) return null;
+  const spent = previousWei - BigInt(current.totalWei);
+  if (spent <= 0n) return null;
+  return (spent * 86_400_000n) / BigInt(elapsedMs);
+}
+
+/** Days of runway, to one decimal. Null when the burn is unknown or nothing is being spent. */
+export function runwayDays(usable: bigint, burn: bigint | null): number | null {
+  if (burn === null || burn <= 0n) return null;
+  return Number((usable * 100n) / burn) / 100;
 }
 
 /**
@@ -735,6 +819,42 @@ export function formatReport(snapshot: Snapshot, cfg: ReportConfig): string {
   );
   report = pushSection(report, '资金与 Gas（发送时）', gasLines.length > 0 ? [gasLines.join('　')] : []);
 
+  // ── tBNB 领取 ── the one thing in this report only a human can do.
+  //
+  // Printed every day, whether or not it is due, because its whole purpose is to save the owner a
+  // lookup: the faucet is captcha-gated and serves exactly one of the project's addresses, and
+  // going to the wrong one is a wasted trip rather than an error message.
+  const faucet = snapshot.faucet;
+  const claim: string[] = [];
+  if (faucet !== null) {
+    const qualifier =
+      faucet.qualifierWei === null
+        ? ''
+        : faucet.qualifierWei >= faucet.qualifierMinimumWei
+          ? `（BSC 主网余额 ${formatEth(faucet.qualifierWei)} BNB，满足门槛 ${formatEth(faucet.qualifierMinimumWei)}）`
+          : `（🔴 BSC 主网余额 ${formatEth(faucet.qualifierWei)} BNB，低于门槛 ${formatEth(faucet.qualifierMinimumWei)}，水龙头会拒绝）`;
+    claim.push(`领取地址（只有这个地址能领）：${faucet.address}${qualifier}`);
+    claim.push(`水龙头：${faucet.url}`);
+    const runway = formatNonzeroCounts(
+      [
+        ['可动用 gas', Number(faucet.usableWei), `${formatEth(faucet.usableWei)} tBNB`],
+        ['实测日耗', Number(faucet.burnPerDayWei ?? 0n), `${formatEth(faucet.burnPerDayWei ?? 0n)} tBNB`],
+      ],
+      '　',
+    );
+    const runwayText =
+      faucet.runwayDays === null
+        ? '预计续航：暂无（还没有两次读数可比，或期间刚补过币）'
+        : `预计续航：${faucet.runwayDays.toFixed(1)} 天`;
+    claim.push(runway === '' ? runwayText : `${runway}　${runwayText}`);
+    claim.push(
+      claimNeeded(faucet, snapshot.gas)
+        ? `🔴 今天去领一次（低于 ${faucet.warnDays} 天续航，或已有账户跌破下限）`
+        : '✅ 今天不用领',
+    );
+  }
+  report = pushSection(report, 'tBNB 领取（人工，发送时）', claim);
+
   // ── 数据健康 ── the only section that always renders.
   const healthLines = [health.healthy ? '✅ 正常' : '🔴 异常'];
   // Bounded on the way out: a problem string carries whatever an RPC error said, and one long
@@ -780,6 +900,16 @@ export interface ReportState {
   lastSentDate?: string;
   /** Dates whose delivery failed and have not since succeeded, oldest first. */
   pending?: string[];
+  /** The previous run's total operational gas, so this run can measure what a day actually costs. */
+  gasSample?: GasSample;
+}
+
+/** Total tBNB across the operational accounts at one instant. */
+export interface GasSample {
+  /** ISO-8601. */
+  at: string;
+  /** Total balance in wei, as a string because JSON has no bigint. */
+  totalWei: string;
 }
 
 /** How many failed days are remembered before the oldest is abandoned. */
@@ -838,6 +968,11 @@ interface Config {
   keeperMin: bigint;
   funderReserve: bigint;
   healthUrl: string | null;
+  faucetAddress: Address | null;
+  faucetUrl: string;
+  mainnetRpcUrl: string | null;
+  faucetQualifier: bigint;
+  runwayWarnDays: number;
   reportDate: string | null;
   dryRun: boolean;
   comparePreviousDay: boolean;
@@ -872,6 +1007,10 @@ function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error('UPDOWN_REPORT_DATE must be YYYY-MM-DD');
   }
   const dryRun = truthy(env['UPDOWN_REPORT_DRY_RUN']);
+  const runwayWarnDays = Number(env['UPDOWN_GAS_RUNWAY_WARN_DAYS']?.trim() || '3');
+  if (!Number.isFinite(runwayWarnDays) || runwayWarnDays <= 0) {
+    throw new Error('UPDOWN_GAS_RUNWAY_WARN_DAYS must be a positive number');
+  }
   const botAddresses = addressList(env['BOT_ADDRESSES']);
   const funderRaw = env['FUNDER_ADDRESS']?.trim();
   const funderAddress = funderRaw ? getAddress(funderRaw) : null;
@@ -894,6 +1033,15 @@ function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     keeperMin: parseEther(env['KEEPER_MIN_GAS_BNB']?.trim() || '0.05'),
     funderReserve: parseEther(env['FUNDER_RESERVE_BNB']?.trim() || '0.01'),
     healthUrl: env['KEEPER_HEALTH_URL']?.trim() || null,
+    // The faucet serves exactly one address: the one holding the mainnet qualifier. That is the
+    // funder by default, and naming it explicitly is what keeps a manual claim from going astray.
+    faucetAddress: env['UPDOWN_FAUCET_ADDRESS']?.trim() ? getAddress(env['UPDOWN_FAUCET_ADDRESS'].trim()) : funderAddress,
+    faucetUrl: env['UPDOWN_FAUCET_URL']?.trim() || DEFAULT_FAUCET_URL,
+    // Read-only, and optional: without it the report simply cannot say whether the faucet will
+    // still accept the address. This process never signs anything, on any chain.
+    mainnetRpcUrl: env['UPDOWN_MAINNET_RPC_URL']?.trim() || DEFAULT_MAINNET_RPC,
+    faucetQualifier: parseEther(env['UPDOWN_FAUCET_QUALIFIER_BNB']?.trim() || '0.002'),
+    runwayWarnDays: runwayWarnDays,
     reportDate,
     dryRun,
     comparePreviousDay: !truthy(env['UPDOWN_REPORT_SKIP_COMPARISON']),
@@ -1132,6 +1280,7 @@ async function collectSnapshot(
   window: DayWindow,
   checkedAt: Date,
   logger: ReturnType<typeof createLogger>,
+  previousGasSample?: GasSample,
 ): Promise<Snapshot> {
   const client = createPublicClient({ transport: http(config.rpcUrl, { timeout: 30_000, retryCount: 3 }) });
   const errors: string[] = [];
@@ -1233,6 +1382,23 @@ async function collectSnapshot(
     }
   }
 
+  const currentSample: GasSample = { at: checkedAt.toISOString(), totalWei: totalGas(gas).toString() };
+  const usableWei = usableGas(gas);
+  const burn = burnPerDay(previousGasSample, currentSample);
+  let qualifierWei: bigint | null = null;
+  if (config.faucetAddress && config.mainnetRpcUrl) {
+    try {
+      const mainnet = createPublicClient({ transport: http(config.mainnetRpcUrl, { timeout: 15_000, retryCount: 2 }) });
+      const mainnetChain = await mainnet.getChainId();
+      // Reading a testnet balance and calling it the mainnet qualifier would state the exact
+      // opposite of the truth about whether a claim can succeed.
+      if (mainnetChain !== 56) throw new Error(`mainnet RPC answers chain ${mainnetChain}, expected 56`);
+      qualifierWei = await mainnet.getBalance({ address: config.faucetAddress });
+    } catch (error) {
+      errors.push(`faucet qualifier unreadable: ${safeError(error)}`);
+    }
+  }
+
   return {
     checkedAt,
     chainId,
@@ -1243,6 +1409,16 @@ async function collectSnapshot(
     assetDecimals: markets[0]?.assetDecimals ?? 18,
     internalAccounts: internal.length,
     gas,
+    faucet: config.faucetAddress === null ? null : {
+      address: config.faucetAddress,
+      url: config.faucetUrl,
+      qualifierWei,
+      qualifierMinimumWei: config.faucetQualifier,
+      burnPerDayWei: burn,
+      usableWei,
+      runwayDays: runwayDays(usableWei, burn),
+      warnDays: config.runwayWarnDays,
+    },
     keeperHealthy,
     errors,
   };
@@ -1285,14 +1461,27 @@ async function sendTelegram(config: Config, text: string): Promise<void> {
 }
 
 /** Render and deliver one day. Returns whether it reached Telegram. */
-async function deliver(config: Config, window: DayWindow, checkedAt: Date, logger: ReturnType<typeof createLogger>): Promise<boolean> {
+interface Delivery {
+  delivered: boolean;
+  /** The gas reading this run took, carried back so the next run can measure a day's burn. */
+  gasSample?: GasSample;
+}
+
+async function deliver(
+  config: Config,
+  window: DayWindow,
+  checkedAt: Date,
+  logger: ReturnType<typeof createLogger>,
+  previousGasSample?: GasSample,
+): Promise<Delivery> {
   let snapshot: Snapshot;
   try {
-    snapshot = await collectSnapshot(config, window, checkedAt, logger);
+    snapshot = await collectSnapshot(config, window, checkedAt, logger, previousGasSample);
   } catch (error) {
     logger.error('daily report snapshot failed', { error, reportDate: window.date });
-    return false;
+    return { delivered: false };
   }
+  const gasSample: GasSample = { at: checkedAt.toISOString(), totalWei: totalGas(snapshot.gas).toString() };
 
   const text = formatReport(snapshot, { envLabel: config.envLabel, offsetMinutes: config.offsetMinutes });
   if (config.dryRun) {
@@ -1300,7 +1489,7 @@ async function deliver(config: Config, window: DayWindow, checkedAt: Date, logge
     // report body is the one string in this process that the log scrubber never sees on its own.
     process.stdout.write(`${scrubSecrets(text)}\n`);
     logger.info('daily report rendered (dry run)', { reportDate: window.date, characters: text.length });
-    return true;
+    return { delivered: true, gasSample };
   }
 
   try {
@@ -1309,7 +1498,9 @@ async function deliver(config: Config, window: DayWindow, checkedAt: Date, logge
     // WARN, not ERROR: a Telegram outage is not an UpDown incident. The day is carried in the state
     // file and retried by the next run, which is what makes that true.
     logger.warn('daily report delivery failed', { error, reportDate: window.date });
-    return false;
+    // The reading is still good even though the send was not, and a day of burn data is not worth
+    // losing to a Telegram outage.
+    return { delivered: false, gasSample };
   }
   logger.info('daily report sent', {
     reportDate: window.date,
@@ -1317,8 +1508,9 @@ async function deliver(config: Config, window: DayWindow, checkedAt: Date, logge
     totalAmount: formatAmount(snapshot.today.totalAmount, snapshot.assetDecimals, 2),
     settled: snapshot.today.outcomes.settled,
     unsettledRefunds: snapshot.today.outcomes['void-unsettled'],
+    runwayDays: snapshot.faucet?.runwayDays ?? null,
   });
-  return true;
+  return { delivered: true, gasSample };
 }
 
 async function main(): Promise<void> {
@@ -1335,21 +1527,26 @@ async function main(): Promise<void> {
 
   const checkedAt = new Date();
 
-  // An explicit date is a deliberate re-run: it neither consults nor rewrites the state file, so a
-  // backfill can never mark today as sent and a re-read is always possible.
+  // An explicit date is a deliberate re-run. It reads the state file — the gas sample is the
+  // report's only measurement of what a day costs, and a backfill should still be able to quote it
+  // — but never writes it, so a backfill can neither mark a day as sent nor disturb the burn
+  // series the scheduled runs are building.
   if (config.reportDate) {
     const window = windowForDate(config.reportDate, config.offsetMinutes);
-    if (!(await deliver(config, window, checkedAt, logger))) process.exitCode = 1;
+    const state = readState(config.statePath);
+    if (!(await deliver(config, window, checkedAt, logger, state.gasSample)).delivered) process.exitCode = 1;
     return;
   }
 
   const scheduled = previousLocalDay(checkedAt.getTime(), config.offsetMinutes);
   if (config.dryRun) {
-    if (!(await deliver(config, scheduled, checkedAt, logger))) process.exitCode = 1;
+    const state = readState(config.statePath);
+    if (!(await deliver(config, scheduled, checkedAt, logger, state.gasSample)).delivered) process.exitCode = 1;
     return;
   }
 
   let state = readState(config.statePath);
+  const previousGasSample = state.gasSample;
   const due = datesToReport(state, scheduled.date);
   if (due.length === 0) {
     logger.info('daily report already delivered', { reportDate: scheduled.date });
@@ -1361,9 +1558,13 @@ async function main(): Promise<void> {
   let failed = false;
   for (const date of due) {
     const window = date === scheduled.date ? scheduled : windowForDate(date, config.offsetMinutes);
-    const delivered = await deliver(config, window, checkedAt, logger);
+    const outcome = await deliver(config, window, checkedAt, logger, previousGasSample);
+    const delivered = outcome.delivered;
     if (!delivered) failed = true;
     state = stateAfterAttempt(state, date, delivered);
+    // One reading per run, not per date: every date in a run reads the same live balances, so a
+    // backlog day must not overwrite the sample with a duplicate timestamp and flatten the burn.
+    if (outcome.gasSample) state = { ...state, gasSample: outcome.gasSample };
     try {
       writeState(config.statePath, state);
     } catch (error) {

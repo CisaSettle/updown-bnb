@@ -559,6 +559,23 @@ report states the definition in its own header line so the figure cannot be misr
 For 2026-09-03 it reported 21,977.75 USDT staked over 1,845 rounds with 0.00 from real users, which
 is exactly what a board carried entirely by demo liquidity is supposed to look like.
 
+The report also carries the one job it cannot do for you. `【tBNB 领取（人工，发送时）】`
+names the claim address, the faucet link, what is spendable, the measured daily burn and the runway
+in days, and ends with either `✅ 今天不用领` or `🔴 今天去领一次`. It prints every morning whether or
+not a claim is due, because the point is to save a lookup rather than to raise an alarm.
+
+Two details in it are load-bearing. The address is the **funder**, and it is the only one that
+works: the faucet serves an address that already holds BNB on BSC mainnet, and of the project's five
+operational accounts only the funder does (0.031 BNB against a 0.002 requirement, checked live by a
+single read-only `eth_getBalance` — this process signs nothing, on any chain). If that balance ever
+falls under the bar the line turns red and says the faucet will refuse, which is the failure that
+would otherwise look like an unexplained rejection in a browser. And the burn rate is **measured,
+not assumed**: every run records the total operational balance in its state file and the next one
+divides the difference by the elapsed time, so the runway follows the real round cadence, market set
+and gas price instead of a constant that was true once. It reads `暂无` until two runs have
+happened, and again after any top-up, because a balance that went up is the absence of a
+measurement rather than a negative burn.
+
 The one thing in it that means somebody has to act is 🔴 有资金回合未按时结算、已全额退款 and
 🔴 逾期未处理回合 (overdue unhandled rounds). Both are funded rounds whose boundary price never landed
 inside the buffer: the first has already handed every stake back, the second is still holding

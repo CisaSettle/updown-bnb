@@ -19,6 +19,12 @@ import {
   formatNonzeroCounts,
   formatOffset,
   formatReport,
+  burnPerDay,
+  claimNeeded,
+  runwayDays,
+  totalGas,
+  usableGas,
+  type FaucetStatus,
   formatPct,
   growthPct,
   precedingDay,
@@ -110,7 +116,20 @@ const snapshot = (over: Partial<Snapshot> = {}): Snapshot => ({
     { label: 'gas 加注账户', balance: parseEther('0.02'), minimum: parseEther('0.01'), requireAbove: true },
   ],
   keeperHealthy: true,
+  faucet: faucet(),
   errors: [],
+  ...over,
+});
+
+const faucet = (over: Partial<FaucetStatus> = {}): FaucetStatus => ({
+  address: '0xE6b9a3895Ab013A1E82909f175f13D35400c6200' as Address,
+  url: 'https://www.bnbchain.org/en/testnet-faucet',
+  qualifierWei: parseEther('0.031'),
+  qualifierMinimumWei: parseEther('0.002'),
+  burnPerDayWei: parseEther('0.026'),
+  usableWei: parseEther('0.22'),
+  runwayDays: 8.4,
+  warnDays: 3,
   ...over,
 });
 
@@ -830,7 +849,148 @@ describe('formatReport', () => {
     expect(formatReport(dead, cfg)).toContain('🔴 前一自然日没有开出任何回合（时间格 1440 个，全部落空）');
   });
 
-  it('never prints an address of any kind', () => {
-    expect(formatReport(snapshot(), cfg)).not.toContain('0x');
+  it('prints exactly one address, and it is the faucet target — never a bettor', () => {
+    // The report is aggregate-only: MarketFacts and GasAccount both carry real addresses that
+    // formatReport must not touch. The single deliberate exception is the faucet line, which
+    // exists precisely so the owner does not have to look the address up.
+    const found = formatReport(snapshot(), cfg).match(/0x[0-9a-fA-F]{40}/g) ?? [];
+    expect(found).toEqual(['0xE6b9a3895Ab013A1E82909f175f13D35400c6200']);
+    // With no faucet configured there is no reason for any address to appear at all.
+    expect(formatReport(snapshot({ faucet: null }), cfg)).not.toContain('0x');
+  });
+
+  it('carries an error line into the health section without letting it smuggle in hex', () => {
+    // The one route by which arbitrary text reaches the report body is `errors`, which carries
+    // whatever an RPC said. A 40-char address would be caught above; this covers the shorter
+    // 0x-prefixed fragments — raw revert data, a truncated hash — that the address matcher alone
+    // would miss, and that a bettor address could be trimmed into by the 300-char clip.
+    const noisy = snapshot({
+      faucet: null,
+      errors: ['btcUsd1m read failed: execution reverted 0xdeadbeef 0x4e487b71'],
+    });
+    const text = formatReport(noisy, cfg);
+    expect(text).toContain('🔴 异常');
+    expect(text).toContain('btcUsd1m read failed');
+    // Nothing else in the report may introduce hex of its own.
+    expect(text.match(/0x[0-9a-fA-F]+/g)).toEqual(['0xdeadbeef', '0x4e487b71']);
+  });
+});
+
+describe('gas runway', () => {
+  const accounts = [
+    { label: 'keeper', balance: parseEther('0.17'), minimum: parseEther('0.05') },
+    { label: 'bot A', balance: parseEther('0.05'), minimum: parseEther('0.01') },
+    { label: 'funder', balance: parseEther('0.02'), minimum: parseEther('0.01'), requireAbove: true },
+  ];
+
+  it('totals every account but only counts what is above the floor as spendable', () => {
+    expect(totalGas(accounts)).toBe(parseEther('0.24'));
+    // Floors are not spare fuel: 0.12 + 0.04 + 0.01.
+    expect(usableGas(accounts)).toBe(parseEther('0.17'));
+  });
+
+  it('never counts an account below its floor as negative fuel', () => {
+    expect(usableGas([{ label: 'dry', balance: parseEther('0.001'), minimum: parseEther('0.05') }])).toBe(0n);
+  });
+
+  it('measures a day of burn from two readings', () => {
+    const burn = burnPerDay(
+      { at: '2026-09-03T00:00:00.000Z', totalWei: parseEther('0.30').toString() },
+      { at: '2026-09-04T00:00:00.000Z', totalWei: parseEther('0.24').toString() },
+    );
+    expect(burn).toBe(parseEther('0.06'));
+  });
+
+  it('scales a partial day up to a daily rate', () => {
+    const burn = burnPerDay(
+      { at: '2026-09-03T00:00:00.000Z', totalWei: parseEther('0.30').toString() },
+      { at: '2026-09-03T12:00:00.000Z', totalWei: parseEther('0.27').toString() },
+    );
+    expect(burn).toBe(parseEther('0.06'));
+  });
+
+  it('refuses to call a top-up a negative burn', () => {
+    // A faucet claim or a sweep between two readings is the absence of a measurement, not a gain.
+    expect(
+      burnPerDay(
+        { at: '2026-09-03T00:00:00.000Z', totalWei: parseEther('0.10').toString() },
+        { at: '2026-09-04T00:00:00.000Z', totalWei: parseEther('0.30').toString() },
+      ),
+    ).toBeNull();
+  });
+
+  it('returns null with nothing to compare, an unusable sample, or too short a gap', () => {
+    const now = { at: '2026-09-04T00:00:00.000Z', totalWei: parseEther('0.24').toString() };
+    expect(burnPerDay(undefined, now)).toBeNull();
+    expect(burnPerDay({ at: '2026-09-03T00:00:00.000Z', totalWei: 'not a number' }, now)).toBeNull();
+    expect(burnPerDay({ at: 'never', totalWei: '1' }, now)).toBeNull();
+    expect(burnPerDay({ at: '2026-09-03T23:30:00.000Z', totalWei: parseEther('0.30').toString() }, now)).toBeNull();
+  });
+
+  it('turns usable gas and burn into days, and says nothing when it cannot', () => {
+    expect(runwayDays(parseEther('0.24'), parseEther('0.06'))).toBe(4);
+    expect(runwayDays(parseEther('0.17'), parseEther('0.026'))).toBeCloseTo(6.53, 2);
+    expect(runwayDays(parseEther('0.24'), null)).toBeNull();
+    expect(runwayDays(parseEther('0.24'), 0n)).toBeNull();
+  });
+});
+
+describe('claimNeeded', () => {
+  const healthy = [{ label: 'keeper', balance: parseEther('0.17'), minimum: parseEther('0.05') }];
+
+  it('is quiet while there is runway and every account is above its floor', () => {
+    expect(claimNeeded(faucet({ runwayDays: 8.4 }), healthy)).toBe(false);
+  });
+
+  it('asks once the runway drops under the warning threshold', () => {
+    expect(claimNeeded(faucet({ runwayDays: 2.9, warnDays: 3 }), healthy)).toBe(true);
+    expect(claimNeeded(faucet({ runwayDays: 3 }), healthy)).toBe(false);
+  });
+
+  it('asks whenever an account is already under its floor, whatever the runway says', () => {
+    const dry = [{ label: 'keeper', balance: parseEther('0.04'), minimum: parseEther('0.05') }];
+    expect(claimNeeded(faucet({ runwayDays: 99 }), dry)).toBe(true);
+    // The funder must stay strictly above its reserve, so sitting exactly on it counts as dry.
+    const onReserve = [{ label: 'funder', balance: parseEther('0.01'), minimum: parseEther('0.01'), requireAbove: true }];
+    expect(claimNeeded(faucet({ runwayDays: 99 }), onReserve)).toBe(true);
+  });
+
+  it('does not treat an unknown runway as fine', () => {
+    // Unknown is unknown; it only stays quiet because nothing is under its floor.
+    expect(claimNeeded(faucet({ runwayDays: null }), healthy)).toBe(false);
+    const dry = [{ label: 'bot A', balance: 0n, minimum: parseEther('0.01') }];
+    expect(claimNeeded(faucet({ runwayDays: null }), dry)).toBe(true);
+  });
+});
+
+describe('the claim section', () => {
+  const cfg = { envLabel: 'testnet', offsetMinutes: 480 };
+
+  it('names the one address that can claim, every day, due or not', () => {
+    const text = formatReport(snapshot(), cfg);
+    expect(text).toContain('【tBNB 领取（人工，发送时）】');
+    expect(text).toContain('领取地址（只有这个地址能领）：0xE6b9a3895Ab013A1E82909f175f13D35400c6200');
+    expect(text).toContain('水龙头：https://www.bnbchain.org/en/testnet-faucet');
+    expect(text).toContain('✅ 今天不用领');
+  });
+
+  it('asks for a claim when the runway is short', () => {
+    const text = formatReport(snapshot({ faucet: faucet({ runwayDays: 1.2 }) }), cfg);
+    expect(text).toContain('🔴 今天去领一次');
+  });
+
+  it('warns when the address no longer meets the mainnet qualifier, because the faucet will refuse', () => {
+    const text = formatReport(snapshot({ faucet: faucet({ qualifierWei: parseEther('0.0001') }) }), cfg);
+    expect(text).toContain('低于门槛');
+    expect(text).toContain('水龙头会拒绝');
+  });
+
+  it('says so plainly when the burn rate is not yet measurable', () => {
+    const text = formatReport(snapshot({ faucet: faucet({ burnPerDayWei: null, runwayDays: null }) }), cfg);
+    expect(text).toContain('预计续航：暂无');
+  });
+
+  it('omits the section entirely when no faucet address is configured', () => {
+    expect(formatReport(snapshot({ faucet: null }), cfg)).not.toContain('tBNB 领取');
   });
 });

@@ -2,6 +2,32 @@
   "schemaVersion": 1,
   "entries": [
     {
+      "id": "2026-09-04-daily-report-names-the-faucet-claim",
+      "releaseId": "web-2026.09.04.3",
+      "releasedAt": "2026-09-04",
+      "status": "released",
+      "title": {
+        "zh": "日报直接给出要领 tBNB 的地址",
+        "en": "The daily report now names the tBNB claim address"
+      },
+      "summary": {
+        "zh": "水龙头有验证码，只有人能过，而且只服务在 BSC 主网上持币的那一个地址。日报因此每天列出领取地址、水龙头链接、可动用余额、实测日耗与预计续航，并直接给出今天要不要去领。",
+        "en": "The faucet is captcha-gated, so only a person can work it, and it serves only the one address that already holds BNB on BSC mainnet. The report now prints that address, the faucet link, spendable balance, measured daily burn and runway every morning, and says outright whether today is a day to claim."
+      },
+      "highlights": {
+        "zh": [
+          "领取地址是 gas 加注账户，也是五个运营账户里唯一满足水龙头主网门槛的那个。报告用一次只读的主网余额查询现场核对；一旦跌破门槛就转红并说明水龙头会拒绝，免得在浏览器里撞上一句没有解释的拒绝。这个进程在任何链上都不签名。",
+          "日耗是测出来的：每次运行记录运营账户总余额，下一次用差值除以间隔时间，因此续航跟随真实的回合节奏与 gas 价格，而不是一个会过期的常数。跑满两次之前、以及刚补过币之后显示「暂无」——余额变多是没测到，不是负消耗。",
+          "任何账户跌破下限都会直接要求领取，不管续航算出来是多少；续航未知也不当作没事。"
+        ],
+        "en": [
+          "The claim address is the gas funder, the only one of the five operational accounts that meets the faucet's mainnet requirement. The report verifies this live with a single read-only balance read and turns the line red if it ever falls short, so the faucet refusing a claim is never an unexplained surprise in a browser. This process signs nothing, on any chain.",
+          "The burn rate is measured rather than assumed: each run records the total operational balance and the next divides the difference by the elapsed time, so runway follows the real round cadence and gas price instead of a constant that goes stale. It reads as unavailable until two runs exist, and again after any top-up, because a rising balance is a missing measurement rather than a negative burn.",
+          "Any account below its floor asks for a claim outright, whatever the runway arithmetic says, and an unknown runway is never treated as fine."
+        ]
+      }
+    },
+    {
       "id": "2026-09-04-idle-markets-are-not-a-fault",
       "releaseId": "web-2026.09.04.2",
       "releasedAt": "2026-09-04",
