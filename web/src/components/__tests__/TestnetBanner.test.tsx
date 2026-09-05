@@ -37,19 +37,13 @@ describe('TestnetBanner', () => {
     expect(html).toContain('先连接钱包')
   })
 
-  it('points a regular wallet straight at the official faucet', () => {
-    // The USDT faucet is itself a transaction: with zero tBNB the funnel dead-ends on
-    // "insufficient funds" at step one, and nothing else on the page says where gas comes from.
+  it.each([undefined, 'injected', 'updown-demo-wallet'])('opens the address-entry faucet for connector %s', (id) => {
+    connectorId = id
     const html = renderIn('zh', <TestnetBanner />)
-    expect(html).toContain('https://www.bnbchain.org/en/testnet-faucet')
-    expect(html).toContain('去官方水龙头领 tBNB')
-  })
-
-  it('keeps the disposable demo wallet on the no-mainnet-funds route', () => {
-    connectorId = 'updown-demo-wallet'
-    const html = renderIn('en', <TestnetBanner />)
-    expect(html).toContain('https://docs.bnbchain.org/bnb-smart-chain/developers/faucet/')
-    expect(html).toContain('Gas options (tBNB)')
-    expect(html).not.toContain('https://www.bnbchain.org/en/testnet-faucet')
+    expect(html).toContain('href="https://faucet.quicknode.com/binance-smart-chain/bnb-testnet"')
+    expect(html).toContain('领取 tBNB')
+    expect(html).not.toContain('docs.bnbchain.org')
+    expect(html).not.toContain('t.me/')
+    expect(html).not.toContain('href="#faq')
   })
 })

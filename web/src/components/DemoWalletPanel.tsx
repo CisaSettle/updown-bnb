@@ -5,6 +5,7 @@ import { useAccount, useBalance, useConnect, useReadContract } from 'wagmi'
 import { testUSDTAbi } from '../abi'
 import { activeChain } from '../config/chains'
 import { deployment } from '../config/deployment'
+import { GAS_FAUCET_URL } from '../config/faucet'
 import * as ui from '../content/ui'
 import { useTxRunner } from '../hooks/useTxRunner'
 import { DEMO_WALLET_CONNECTOR_ID, demoWalletAddress } from '../lib/demoWallet'
@@ -12,9 +13,6 @@ import { humanizeError } from '../lib/errors'
 import { formatAmount, shortAddress } from '../lib/format'
 import { t, useLang } from '../lib/i18n'
 import { pushToast } from '../lib/toast'
-
-const GAS_SUPPORT_BOT_URL = 'https://t.me/bnbchain_official_bot'
-const GAS_OPTIONS_URL = 'https://docs.bnbchain.org/bnb-smart-chain/developers/faucet/'
 
 export function DemoWalletPanel() {
   const lang = useLang()
@@ -53,14 +51,6 @@ export function DemoWalletPanel() {
   function copyAddress() {
     if (!address) return
     void navigator.clipboard?.writeText(address).then(() => setCopied(true)).catch(() => undefined)
-  }
-
-  function copyGasRequest() {
-    // The website faucet requires this brand-new address to already hold real mainnet BNB, which
-    // directly contradicts the account's safety boundary. BNB Chain's own docs offer this support
-    // bot as the no-mainnet-funds route. Copy the complete request, not just an unexplained address.
-    if (!address) return
-    void navigator.clipboard?.writeText(`I would like to get tBNB to my wallet ${address}`).then(() => setCopied(true)).catch(() => undefined)
   }
 
   function createDemo() {
@@ -143,18 +133,15 @@ export function DemoWalletPanel() {
                 ) : (
                   <>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">{t(lang, ui.demoWallet.gasBody)}</p>
-                    <div className="mt-2 flex flex-wrap items-center gap-3">
+                    <div className="mt-2">
                       <a
                         className="btn-secondary"
-                        href={GAS_SUPPORT_BOT_URL}
+                        href={GAS_FAUCET_URL}
                         target="_blank"
                         rel="noreferrer"
-                        onClick={copyGasRequest}
+                        onClick={copyAddress}
                       >
                         {t(lang, ui.demoWallet.copyAndGas)}
-                      </a>
-                      <a className="link text-xs" href={GAS_OPTIONS_URL} target="_blank" rel="noreferrer">
-                        {t(lang, ui.demoWallet.otherGasOptions)}
                       </a>
                     </div>
                   </>
