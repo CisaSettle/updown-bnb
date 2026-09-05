@@ -631,6 +631,21 @@ market is roughly the protocol fee on the losing pool. It drips its own TestUSDT
 A_KEY=$BOT_A_KEY B_KEY=$BOT_B_KEY node scripts/bet-bot.mjs
 ```
 
+**It runs on the keeper host under systemd, as `updown-betbot.service`** — install instructions are
+in the unit's own header, and its settings are `/etc/updown/betbot.env` (mode 0600, owner `updown`;
+template `keeper/betbot.env.example`). `Restart=always` is the supervision.
+
+It used to run on the laptop under macOS launchd, and that is why it is here. Between 2026-09-01 and
+2026-09-05 it stopped three times and stayed stopped for 20.8 h, 11.0 h and 20.7 h. It had not
+crashed: macOS Background Task Management holds every *legacy agent* at disposition
+`[enabled, disallowed, notified]`, so launchd never imports the plist, and neither `RunAtLoad` nor
+`KeepAlive` has a job to act on. Nothing says so — `plutil -lint` passes, `launchctl print-disabled`
+does not list it, and `launchctl print` reports it exactly as it reports a plist that was never
+written. Do not put it back on a workstation.
+
+`DEPLOYMENTS_PATH` points at the manifest; on the keeper host that is `/etc/updown/97.json`, the
+same file the keeper and the watchdog read, so all three agree or none do.
+
 Env: `RPC_URL`; `MARKETS` (csv of deployment keys, default all six); `BET_MIN`/`BET_MAX` (USDT,
 default 3/12); `MIN_GAS_BNB` (default 0.01) below which it tops up `GAS_TOPUP_BNB` (default 0.05)
 of BNB from an optional `FUNDER_KEY`; and `GAS_REFILL_MAX_AGE_HOURS` (default 24), which tops the
@@ -730,6 +745,33 @@ Users lose nothing; they lose the round.
 un-expire a round that has already expired (each round uses its own snapshot), and pausing does not
 help: `executeRound` is not pausable, so a pause neither stops the crank nor rescues a round that
 has already run out of time. All it adds is a refund for the round that had not locked yet.
+
+### 3.1b Betting bot down — *no user funds at risk, but the book stops moving*
+
+The board stops producing volume and the markets go quiet. No user money is at risk — the bot only
+ever stakes its own — but every round after it stops is a round nobody made.
+
+You will hear about it within the hour: the watchdog reads the newest internal stake on any market
+straight off the chain and pages when the whole board has been silent past
+`UPDOWN_MARKET_MAKING_MAX_IDLE_SECONDS` (default 3600). The next daily report also carries
+`做市覆盖` and `最长静默`, and turns 数据健康 red.
+
+That check is board-wide on purpose. The bot is routinely narrowed to one market to stretch testnet
+gas, so five silent markets are the designed steady state; only total silence means the process is
+gone.
+
+```bash
+ssh <keeper-host> systemctl status updown-betbot
+ssh <keeper-host> journalctl -u updown-betbot -n 50 --no-pager
+ssh <keeper-host> sudo systemctl restart updown-betbot
+```
+
+Never run a second bot anywhere while that one is up. Both use the same two signing keys, and two
+senders on one account race each other's nonces — the same hazard the bot refuses keeper and owner
+keys over.
+
+If it is dry rather than dead, the log says `FAUCET_REQUIRED` and §2 "Keeping the testnet in gas"
+has the claim loop.
 
 ### 3.2 Oracle stale or dead
 

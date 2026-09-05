@@ -18,6 +18,7 @@
  *
  * Env:
  *   RPC_URL       BSC testnet RPC              (default: the public endpoint)
+ *   DEPLOYMENTS_PATH the chain-97 manifest     (default: contracts/deployments/97.json in the repo)
  *   MARKETS       csv of deployment keys       (default: all six markets)
  *   BET_MIN/MAX   stake range in USDT          (default: 3 / 12)
  *   FUNDER_KEY    optional key that tops the bot accounts up with gas when they run low
@@ -48,8 +49,36 @@ import { privateKeyToAccount } from '../keeper/node_modules/viem/_esm/accounts/i
 import { allocateGasRefills, selectGasRefills } from './lib/gas-refill.mjs'
 import { firstBetMinLeadReader, hasPlanningRunway, readBettableRound } from './lib/bet-window.mjs'
 
+/**
+ * Exit code for a configuration error that restarting cannot fix (sysexits.h EX_CONFIG).
+ *
+ * The bot runs under `Restart=always`, because staying down is the failure that costs every round
+ * after it. But a bad key or an impossible gas floor is not transient, and a supervisor retrying
+ * it every 30 seconds for ever buries the one line that says why. `RestartPreventExitStatus=78`
+ * turns exactly those into a stopped unit with the reason on the last journal line. Anything that
+ * depends on the network keeps exit 1 and keeps being retried.
+ */
+const EX_CONFIG = 78
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const dep = JSON.parse(readFileSync(join(ROOT, 'contracts/deployments', '97.json'), 'utf8'))
+/**
+ * The manifest, from a checkout in development and from `/etc/updown/97.json` on the keeper host.
+ *
+ * Overridable because the bot now runs beside the keeper, where the manifest is deployed state
+ * rather than a file in a clone — and where a second copy carried along with the scripts is a copy
+ * that can drift from the one the keeper serves. Same variable name the keeper and the watchdog
+ * already use, pointed at the same file, so all three read one source of truth or none.
+ */
+const DEPLOYMENTS_PATH = process.env.DEPLOYMENTS_PATH ?? join(ROOT, 'contracts/deployments', '97.json')
+let dep
+try {
+  dep = JSON.parse(readFileSync(DEPLOYMENTS_PATH, 'utf8'))
+} catch (err) {
+  // Deployed state, written atomically by `install`, so a failure here is a wrong path or a
+  // corrupt file — never a torn read worth retrying every 30 seconds for ever.
+  console.error(`Cannot read the deployment manifest at ${DEPLOYMENTS_PATH}: ${err.message}`)
+  process.exit(EX_CONFIG)
+}
 const RPC = process.env.RPC_URL ?? 'https://data-seed-prebsc-1-s1.bnbchain.org:8545'
 /** The canonical Multicall3, same address on every chain including BSC testnet. */
 const MULTICALL = '0xcA11bde05977b3631167028862bE2a173976CA11'
@@ -62,7 +91,10 @@ const MARKET_KEYS = (process.env.MARKETS ?? ALL_MARKETS.join(','))
   .map((k) => k.trim())
   .filter(Boolean)
 const markets = MARKET_KEYS.map((key) => {
-  if (!dep[key]) throw new Error(`deployment has no market named ${key}`)
+  if (!dep[key]) {
+    console.error(`MARKETS names ${key}, which the deployment manifest does not contain.`)
+    process.exit(EX_CONFIG)
+  }
   return { key, address: getAddress(dep[key]) }
 })
 const asset = getAddress(dep.usdt)
@@ -71,7 +103,7 @@ const BET_MIN = Number(process.env.BET_MIN ?? '3')
 const BET_MAX = Number(process.env.BET_MAX ?? '12')
 if (!Number.isFinite(BET_MIN) || !Number.isFinite(BET_MAX) || BET_MIN <= 0 || BET_MAX < BET_MIN) {
   console.error(`BET_MIN/BET_MAX make no sense: ${process.env.BET_MIN} / ${process.env.BET_MAX}`)
-  process.exit(1)
+  process.exit(EX_CONFIG)
 }
 const MIN_GAS = parseEther(process.env.MIN_GAS_BNB ?? '0.01')
 const GAS_TOPUP = parseEther(process.env.GAS_TOPUP_BNB ?? '0.05')
@@ -86,11 +118,11 @@ const GAS_FAUCET_URL = 'https://www.bnbchain.org/en/testnet-faucet'
 const GAS_TRANSFER_DUST = parseEther('0.0001')
 if (GAS_TOPUP <= MIN_GAS || KEEPER_TARGET_GAS <= KEEPER_MIN_GAS) {
   console.error('Gas targets must stay above their trigger floors.')
-  process.exit(1)
+  process.exit(EX_CONFIG)
 }
 if (!Number.isFinite(GAS_REFILL_MAX_AGE_HOURS) || GAS_REFILL_MAX_AGE_HOURS <= 0) {
   console.error('GAS_REFILL_MAX_AGE_HOURS must be a positive number.')
-  process.exit(1)
+  process.exit(EX_CONFIG)
 }
 /** How the book varies: mostly two-sided, sometimes one-sided. A completely empty synthetic book
  * is indistinguishable from a dead market to a visitor, so the bot never deliberately skips one. */
@@ -124,13 +156,22 @@ const pub = createPublicClient({ transport: http(RPC) })
 for (const name of ['A_KEY', 'B_KEY']) {
   if (!process.env[name]) {
     console.error(`${name} is required — two funded testnet accounts (see the header comment).`)
-    process.exit(1)
+    process.exit(EX_CONFIG)
   }
 }
 const key = (k) => (k.startsWith('0x') ? k : `0x${k}`)
-const A = privateKeyToAccount(key(process.env.A_KEY))
-const B = privateKeyToAccount(key(process.env.B_KEY))
-const FUNDER = process.env.FUNDER_KEY ? privateKeyToAccount(key(process.env.FUNDER_KEY)) : undefined
+/** A malformed key is a typo in the env file, not a blip: name the variable, never the value. */
+const account = (name, raw) => {
+  try {
+    return privateKeyToAccount(key(raw))
+  } catch {
+    console.error(`${name} is not a valid private key.`)
+    process.exit(EX_CONFIG)
+  }
+}
+const A = account('A_KEY', process.env.A_KEY)
+const B = account('B_KEY', process.env.B_KEY)
+const FUNDER = process.env.FUNDER_KEY ? account('FUNDER_KEY', process.env.FUNDER_KEY) : undefined
 const wallet = (a) => createWalletClient({ account: a, transport: http(RPC) })
 
 // A kill must not land between a broadcast and its receipt: finish in-flight sends, then leave.
@@ -512,12 +553,12 @@ for (const [name, acct] of roles) {
   const clash = reserved.get(getAddress(acct.address))
   if (clash) {
     console.error(`${name} is the deployment's ${clash} account (${acct.address}). Use a dedicated key.`)
-    process.exit(1)
+    process.exit(EX_CONFIG)
   }
 }
 if (A.address === B.address || FUNDER?.address === A.address || FUNDER?.address === B.address) {
   console.error('A_KEY, B_KEY and FUNDER_KEY must be three different accounts.')
-  process.exit(1)
+  process.exit(EX_CONFIG)
 }
 
 log(`bet bot on chain 97 · ${markets.map((m) => m.key).join(', ')}`)

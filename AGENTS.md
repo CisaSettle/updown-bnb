@@ -80,7 +80,7 @@ these hooks are what make it real, and the writing is still yours to judge.
 | Web app | GitHub Pages → `updown.bluffking.ai` | `pages.yml` deploys on push to `web/**`, `contracts/deployments/**`, `packages/abi/**` **or the workflow itself** — a deployment address or ABI edit ships to production as surely as a UI change |
 | Contracts | BSC **testnet** (chain 97) | six USDT markets; `contracts/deployments/97.json` is the source of truth |
 | Keeper | **texas-h5 prod machine** — not this laptop | it is why market state advances; you cannot restart it from here |
-| Betting bot | this laptop, launchd `ai.bluffking.updown-betbot` | `scripts/bet-bot.mjs`, keys in `scripts/.env.bot`, log `~/bluffking-evidence/bet-bot.log` |
+| Betting bot | **texas-h5 prod machine**, systemd `updown-betbot.service` | `scripts/bet-bot.mjs` deployed to `/opt/updown-betbot`, config `/etc/updown/betbot.env`, log `journalctl -u updown-betbot`. It ran on this laptop until 2026-09-05 and stopped three times in five days — macOS BTM holds every legacy agent at `disallowed`, so launchd never imports the plist. Do not move it back |
 
 Testnet gas is the standing constraint: the board burns ≈0.10 tBNB/day and only the chain's faucet
 can mint it, behind a captcha a human must clear. `scripts/fund-gas.mjs` spreads a claim; RUNBOOK

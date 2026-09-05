@@ -2,6 +2,32 @@
   "schemaVersion": 1,
   "entries": [
     {
+      "id": "2026-09-05-the-bot-moves-off-the-laptop",
+      "releaseId": "web-2026.09.05.2",
+      "releasedAt": "2026-09-05",
+      "status": "released",
+      "title": {
+        "zh": "做市机器人搬到生产机",
+        "en": "The market-making bot moves onto the keeper host"
+      },
+      "summary": {
+        "zh": "做市机器人一直跑在一台笔记本上，五天里停了三次，分别停了 20.8、11.0 和 20.7 小时。它并没有崩溃：macOS 的后台任务管理把每个 legacy agent 都标成 disallowed，launchd 因此根本不导入那份 plist，RunAtLoad 和 KeepAlive 都无从生效——而 plutil 校验通过、launchctl 的 disabled 列表里也找不到它。现在它跟 keeper 一起跑在生产机上，由 systemd 托管。",
+        "en": "The market-making bot ran on a laptop, where it stopped three times in five days for 20.8, 11.0 and 20.7 hours. It was not crashing: macOS Background Task Management holds every legacy agent at disallowed, so launchd never imports the plist and neither RunAtLoad nor KeepAlive has a job to act on — while plutil passes and the launchd disabled list does not mention it. It now runs beside the keeper under systemd."
+      },
+      "highlights": {
+        "zh": [
+          "机器人本身从笔记本搬到了 keeper 主机，用 systemd 托管。它此前并没有崩溃——macOS 的后台任务管理把每个 legacy agent 都标成 disallowed，launchd 因此根本不导入这份 plist，RunAtLoad 与 KeepAlive 都无从生效，而 plutil、launchctl print-disabled 全都看不出问题。",
+          "配置错误不再无限重启：清单读不出、MARKETS 指向不存在的市场、私钥格式错误，都以 exit 78 结束，systemd 的 RestartPreventExitStatus 让它停下并把原因留在最后一行日志里；网络类错误仍然一直重试。",
+          "部署清单改为读 DEPLOYMENTS_PATH，在生产机上就是 /etc/updown/97.json —— 跟 keeper 和看门狗同一份文件，不会各带一份副本漂移。"
+        ],
+        "en": [
+          "The bot itself moved off the laptop onto the keeper host under systemd. It had never been crashing: macOS Background Task Management holds every legacy agent at disallowed, so launchd never imports the plist and neither RunAtLoad nor KeepAlive has a job to act on — while plutil and launchctl print-disabled both report nothing wrong.",
+          "A bad configuration no longer restarts for ever: an unreadable manifest, a MARKETS entry the deployment does not contain, and a malformed key all exit 78, and RestartPreventExitStatus stops the unit with the reason on its last journal line. Network failures still retry indefinitely.",
+          "The manifest now comes from DEPLOYMENTS_PATH — /etc/updown/97.json on the keeper host, the same file the keeper and the watchdog read, rather than a second copy carried along with the scripts."
+        ]
+      }
+    },
+    {
       "id": "2026-09-05-watch-the-bot-that-makes-the-book",
       "releaseId": "web-2026.09.05.1",
       "releasedAt": "2026-09-05",

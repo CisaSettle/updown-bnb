@@ -338,6 +338,9 @@ UPDOWN_REPORT_DRY_RUN=1 UPDOWN_REPORT_DATE=2026-09-03 node /opt/updown-keeper/di
 <h3 id="the-betting-bot-testnet-demo-liquidity">The betting bot (testnet demo liquidity)</h3>
 <p><code>scripts/bet-bot.mjs</code> keeps every market showing a real, moving book: each round it stakes varying amounts from two dedicated accounts — usually both sides, sometimes deliberately one-sided, occasionally sitting a round out — and collects what earlier rounds owe, so the standing cost per market is roughly the protocol fee on the losing pool. It drips its own TestUSDT from the faucet (1,000 per hour per address) and refuses to start on any chain but 97.</p>
 <pre data-lang="bash"><code>A_KEY=$BOT_A_KEY B_KEY=$BOT_B_KEY node scripts/bet-bot.mjs</code></pre>
+<p><strong>It runs on the keeper host under systemd, as <code>updown-betbot.service</code></strong> — install instructions are in the unit's own header, and its settings are <code>/etc/updown/betbot.env</code> (mode 0600, owner <code>updown</code>; template <code>keeper/betbot.env.example</code>). <code>Restart=always</code> is the supervision.</p>
+<p>It used to run on the laptop under macOS launchd, and that is why it is here. Between 2026-09-01 and 2026-09-05 it stopped three times and stayed stopped for 20.8 h, 11.0 h and 20.7 h. It had not crashed: macOS Background Task Management holds every <em>legacy agent</em> at disposition <code>[enabled, disallowed, notified]</code>, so launchd never imports the plist, and neither <code>RunAtLoad</code> nor <code>KeepAlive</code> has a job to act on. Nothing says so — <code>plutil -lint</code> passes, <code>launchctl print-disabled</code> does not list it, and <code>launchctl print</code> reports it exactly as it reports a plist that was never written. Do not put it back on a workstation.</p>
+<p><code>DEPLOYMENTS_PATH</code> points at the manifest; on the keeper host that is <code>/etc/updown/97.json</code>, the same file the keeper and the watchdog read, so all three agree or none do.</p>
 <p>Env: <code>RPC_URL</code>; <code>MARKETS</code> (csv of deployment keys, default all six); <code>BET_MIN</code>/<code>BET_MAX</code> (USDT, default 3/12); <code>MIN_GAS_BNB</code> (default 0.01) below which it tops up <code>GAS_TOPUP_BNB</code> (default 0.05) of BNB from an optional <code>FUNDER_KEY</code>; and <code>GAS_REFILL_MAX_AGE_HOURS</code> (default 24), which tops the accounts up proactively even when they have not yet crossed the floor. A partial funding balance is split proportionally, so account A can no longer drain the source and strand account B. Use dedicated keys for all three of <code>A_KEY</code>, <code>B_KEY</code> and <code>FUNDER_KEY</code> — none of them may be the keeper or owner key, because a second sender on those accounts races their nonces, and the bot refuses to start on such a clash.</p>
 <p>When the source cannot cover a due refill, the bot emits <code>FAUCET_REQUIRED</code> with the funding address and <a href="https://www.bnbchain.org/en/testnet-faucet" target="_blank" rel="noreferrer">https://www.bnbchain.org/en/testnet-faucet</a>. <code>OPEN_FAUCET_ON_DUE=1</code> opens that official link at most once per 24-hour refill window on macOS. It cannot complete the claim: BNB Chain requires a human captcha, so any claim of fully unattended replenishment would be false.</p>
 <h3 id="keeping-the-testnet-in-gas">Keeping the testnet in gas</h3>
@@ -366,6 +369,15 @@ UPDOWN_REPORT_DRY_RUN=1 UPDOWN_REPORT_DATE=2026-09-03 node /opt/updown-keeper/di
 <li>Afterwards, confirm affected epochs show <code>voided == true</code> and tell users refunds are claimable via the normal claim flow.</li>
 </ol>
 <p><strong>Do not</strong> try to "catch up" by pausing, or by changing <code>bufferSeconds</code> — a widened buffer cannot un-expire a round that has already expired (each round uses its own snapshot), and pausing does not help: <code>executeRound</code> is not pausable, so a pause neither stops the crank nor rescues a round that has already run out of time. All it adds is a refund for the round that had not locked yet.</p>
+<h3 id="3-1b-betting-bot-down-no-user-funds-at-risk-but-the-book-stops-moving">3.1b Betting bot down — <em>no user funds at risk, but the book stops moving</em></h3>
+<p>The board stops producing volume and the markets go quiet. No user money is at risk — the bot only ever stakes its own — but every round after it stops is a round nobody made.</p>
+<p>You will hear about it within the hour: the watchdog reads the newest internal stake on any market straight off the chain and pages when the whole board has been silent past <code>UPDOWN_MARKET_MAKING_MAX_IDLE_SECONDS</code> (default 3600). The next daily report also carries <code>做市覆盖</code> and <code>最长静默</code>, and turns 数据健康 red.</p>
+<p>That check is board-wide on purpose. The bot is routinely narrowed to one market to stretch testnet gas, so five silent markets are the designed steady state; only total silence means the process is gone.</p>
+<pre data-lang="bash"><code>ssh &lt;keeper-host&gt; systemctl status updown-betbot
+ssh &lt;keeper-host&gt; journalctl -u updown-betbot -n 50 --no-pager
+ssh &lt;keeper-host&gt; sudo systemctl restart updown-betbot</code></pre>
+<p>Never run a second bot anywhere while that one is up. Both use the same two signing keys, and two senders on one account race each other's nonces — the same hazard the bot refuses keeper and owner keys over.</p>
+<p>If it is dry rather than dead, the log says <code>FAUCET_REQUIRED</code> and §2 "Keeping the testnet in gas" has the claim loop.</p>
 <h3 id="3-2-oracle-stale-or-dead">3.2 Oracle stale or dead</h3>
 <p><strong>Symptom.</strong> <code>executeRound</code> reverting <code>InvalidBoundaryProof</code> however the boundary round id is resolved, followed by <code>RoundVoided</code> with reason <code>5</code> (settlement window elapsed) once each round runs out of time; rounds voiding despite a healthy keeper. Note the shape: an unusable print does <strong>not</strong> void a round directly, it makes the round unprovable, and the void arrives later on the timer.</p>
 <p><strong>Diagnose.</strong></p>
@@ -721,6 +733,9 @@ UPDOWN_REPORT_DRY_RUN=1 UPDOWN_REPORT_DATE=2026-09-03 node /opt/updown-keeper/di
 <h3 id="下注机器人-测试网演示流动性">下注机器人（测试网演示流动性）</h3>
 <p><code>scripts/bet-bot.mjs</code> 让每个市场都展示一个真实、会动的盘口：每一轮它用两个专用账户押入不等的金额——通常两边都押，偶尔故意只押一边，偶尔整轮不押——并领取此前轮次欠它的钱，所以每个市场的持续成本大致就是输的那一边池子上的协议手续费。它自己从水龙头补给 TestUSDT（每地址每小时 1,000），并且在链 id 不是 97 时拒绝启动。</p>
 <pre data-lang="bash"><code>A_KEY=$BOT_A_KEY B_KEY=$BOT_B_KEY node scripts/bet-bot.mjs</code></pre>
+<p><strong>它跑在 keeper 主机上，由 systemd 的 <code>updown-betbot.service</code> 托管</strong> —— 安装步骤写在 unit 自己的头部注释里， 配置在 <code>/etc/updown/betbot.env</code>（权限 0600，属主 <code>updown</code>；模板 <code>keeper/betbot.env.example</code>）。 <code>Restart=always</code> 就是它的全部守护逻辑。</p>
+<p>它以前跑在笔记本的 macOS launchd 上，这也正是它现在搬过来的原因。2026-09-01 到 2026-09-05 之间它停了三次， 分别停了 20.8 小时、11.0 小时、20.7 小时。它并没有崩溃：macOS 的后台任务管理（BTM）把每一个 <em>legacy agent</em> 都置于 <code>[enabled, disallowed, notified]</code> 状态，于是 launchd 根本不会导入这份 plist，<code>RunAtLoad</code> 和 <code>KeepAlive</code> 也就没有任何作业可以作用。而且没有任何地方会告诉你——<code>plutil -lint</code> 通过，<code>launchctl print-disabled</code> 不列它， <code>launchctl print</code> 的报错和「plist 根本不存在」一模一样。不要再把它放回工作机上。</p>
+<p><code>DEPLOYMENTS_PATH</code> 指向部署清单；在 keeper 主机上就是 <code>/etc/updown/97.json</code>，与 keeper 和看门狗读的是同一份文件， 要么三者一致，要么三者都不一致。</p>
 <p>环境变量：<code>RPC_URL</code>；<code>MARKETS</code>（部署文件里的市场键名，逗号分隔，默认全部六个）；<code>BET_MIN</code>/<code>BET_MAX</code> （USDT，默认 3/12）；<code>MIN_GAS_BNB</code>（默认 0.01），低于它就从可选的 <code>FUNDER_KEY</code> 补 <code>GAS_TOPUP_BNB</code>（默认 0.05）的 gas；以及 <code>GAS_REFILL_MAX_AGE_HOURS</code>（默认 24），即使尚未跌破阈值，满 24 小时也会主动补齐。资金不足时会按缺口比例分配，账户 A 不会再先耗尽资金、让账户 B 断气。<code>A_KEY</code>、<code>B_KEY</code>、<code>FUNDER_KEY</code> 三者都要用专门的私钥，谁都不能是 keeper 或 owner 的私钥：同一账户出现第二个发送方就会和它的 nonce 打架，机器人在启动时检测到这种冲突会直接拒绝。gas 来源不足时，机器人会打印 <code>FAUCET_REQUIRED</code>、出资地址和 <a href="https://www.bnbchain.org/en/testnet-faucet" target="_blank" rel="noreferrer">https://www.bnbchain.org/en/testnet-faucet</a>；macOS 上设置 <code>OPEN_FAUCET_ON_DUE=1</code> 后，每个 24 小时补充窗口最多自动打开一次官方链接。它不能替人完成领取：BNB Chain 强制要求人工验证码，所以声称可以完全无人值守补币是不真实的。</p>
 <h3 id="让测试网不断气">让测试网不断气</h3>
 <p>演示流动性机器人每轮都下注时，按当前 1 分钟节奏，整盘每天大约烧掉 <strong>0.25–0.30 tBNB</strong>；实际数字会随 BSC 测试网 gas 价格和机器人领取历史仓位的次数波动。没有下注时，空轮次是虚拟的，keeper/中继的持续 gas 成本为零。 tBNB 只有链自己的水龙头能铸，所以只要启用演示流动性或存在真实资金仓位，它仍是运行依赖。</p>
@@ -748,6 +763,15 @@ UPDOWN_REPORT_DRY_RUN=1 UPDOWN_REPORT_DATE=2026-09-03 node /opt/updown-keeper/di
 <li>事后确认受影响的 epoch 显示 <code>voided == true</code>，并告知用户退款可通过正常领取流程取回。</li>
 </ol>
 <p><strong>不要</strong>试图用暂停来「追赶」，也不要去改 <code>bufferSeconds</code> —— 加宽的缓冲区没法让一个已经过期的轮次不过期 （每一轮用的是它自己的快照），而暂停也帮不上忙：<code>executeRound</code> 不受暂停影响，所以暂停既不会停下曲柄，也救不回 一个已经耗尽时间的轮次。它带来的唯一变化，是让那个还没锁定的轮次得到退款。</p>
+<h3 id="3-1b-下注机器人挂了-用户资金没有风险-但盘口不再动了">3.1b 下注机器人挂了 —— <em>用户资金没有风险，但盘口不再动了</em></h3>
+<p>盘面不再产生成交量，各个市场安静下来。用户的钱没有风险——机器人只押它自己的钱——但它停掉之后的每一轮， 都是没有人做市的一轮。</p>
+<p>一小时之内你就会知道：看门狗直接从链上读「任一市场上最近一笔内部下注」的时间，当整个盘面的沉默超过 <code>UPDOWN_MARKET_MAKING_MAX_IDLE_SECONDS</code>（默认 3600 秒）时告警。次日的日报也会带上 <code>做市覆盖</code> 与 <code>最长静默</code>， 并把「数据健康」转红。</p>
+<p>这个检查刻意是<strong>全盘面</strong>的。为了省测试网 gas，机器人经常被收窄到只做一个市场，所以五个市场安静是设计中的常态； 只有全部同时沉默才说明进程没了。</p>
+<pre data-lang="bash"><code>ssh &lt;keeper-host&gt; systemctl status updown-betbot
+ssh &lt;keeper-host&gt; journalctl -u updown-betbot -n 50 --no-pager
+ssh &lt;keeper-host&gt; sudo systemctl restart updown-betbot</code></pre>
+<p>那一个在跑的时候，绝不要在别处再跑第二个。两者用同一对签名私钥，同一个账户上的两个发送方会互相抢 nonce —— 这正是机器人拒绝使用 keeper 和 owner 私钥所要防的同一件事。</p>
+<p>如果它是没钱而不是没跑，日志里会是 <code>FAUCET_REQUIRED</code>，领取流程见第 2 节「让测试网不断气」。</p>
 <h3 id="3-2-预言机陈旧或死亡">3.2 预言机陈旧或死亡</h3>
 <p><strong>症状。</strong> 无论怎样解析边界轮次编号，<code>executeRound</code> 都回滚 <code>InvalidBoundaryProof</code>；随后每一轮耗尽时间时出现 理由码为 <code>5</code>（结算窗口已过）的 <code>RoundVoided</code>；keeper 明明健康，轮次却在作废。注意这个形状：一笔不可用的报价 <strong>并不会</strong>直接作废一轮，它让这一轮变得无法证明，作废是稍后由计时器带来的。</p>
 <p><strong>诊断。</strong></p>

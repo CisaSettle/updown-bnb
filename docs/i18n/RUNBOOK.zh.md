@@ -541,6 +541,19 @@ BSC 主网上持有 0.002 BNB——项目里只有 gas 加注账户满足；但 
 A_KEY=$BOT_A_KEY B_KEY=$BOT_B_KEY node scripts/bet-bot.mjs
 ```
 
+**它跑在 keeper 主机上，由 systemd 的 `updown-betbot.service` 托管** —— 安装步骤写在 unit 自己的头部注释里，
+配置在 `/etc/updown/betbot.env`（权限 0600，属主 `updown`；模板 `keeper/betbot.env.example`）。
+`Restart=always` 就是它的全部守护逻辑。
+
+它以前跑在笔记本的 macOS launchd 上，这也正是它现在搬过来的原因。2026-09-01 到 2026-09-05 之间它停了三次，
+分别停了 20.8 小时、11.0 小时、20.7 小时。它并没有崩溃：macOS 的后台任务管理（BTM）把每一个 *legacy agent*
+都置于 `[enabled, disallowed, notified]` 状态，于是 launchd 根本不会导入这份 plist，`RunAtLoad` 和 `KeepAlive`
+也就没有任何作业可以作用。而且没有任何地方会告诉你——`plutil -lint` 通过，`launchctl print-disabled` 不列它，
+`launchctl print` 的报错和「plist 根本不存在」一模一样。不要再把它放回工作机上。
+
+`DEPLOYMENTS_PATH` 指向部署清单；在 keeper 主机上就是 `/etc/updown/97.json`，与 keeper 和看门狗读的是同一份文件，
+要么三者一致，要么三者都不一致。
+
 环境变量：`RPC_URL`；`MARKETS`（部署文件里的市场键名，逗号分隔，默认全部六个）；`BET_MIN`/`BET_MAX`
 （USDT，默认 3/12）；`MIN_GAS_BNB`（默认 0.01），低于它就从可选的 `FUNDER_KEY` 补
 `GAS_TOPUP_BNB`（默认 0.05）的 gas；以及 `GAS_REFILL_MAX_AGE_HOURS`（默认 24），即使尚未跌破阈值，满 24 小时也会主动补齐。资金不足时会按缺口比例分配，账户 A 不会再先耗尽资金、让账户 B 断气。`A_KEY`、`B_KEY`、`FUNDER_KEY` 三者都要用专门的私钥，谁都不能是 keeper 或 owner
@@ -612,6 +625,29 @@ SRC_KEY=0x… BOT_ADDRESSES=<botA>,<botB> node scripts/fund-gas.mjs --dry   # �
 **不要**试图用暂停来「追赶」，也不要去改 `bufferSeconds` —— 加宽的缓冲区没法让一个已经过期的轮次不过期
 （每一轮用的是它自己的快照），而暂停也帮不上忙：`executeRound` 不受暂停影响，所以暂停既不会停下曲柄，也救不回
 一个已经耗尽时间的轮次。它带来的唯一变化，是让那个还没锁定的轮次得到退款。
+
+### 3.1b 下注机器人挂了 —— *用户资金没有风险，但盘口不再动了*
+
+盘面不再产生成交量，各个市场安静下来。用户的钱没有风险——机器人只押它自己的钱——但它停掉之后的每一轮，
+都是没有人做市的一轮。
+
+一小时之内你就会知道：看门狗直接从链上读「任一市场上最近一笔内部下注」的时间，当整个盘面的沉默超过
+`UPDOWN_MARKET_MAKING_MAX_IDLE_SECONDS`（默认 3600 秒）时告警。次日的日报也会带上 `做市覆盖` 与 `最长静默`，
+并把「数据健康」转红。
+
+这个检查刻意是**全盘面**的。为了省测试网 gas，机器人经常被收窄到只做一个市场，所以五个市场安静是设计中的常态；
+只有全部同时沉默才说明进程没了。
+
+```bash
+ssh <keeper-host> systemctl status updown-betbot
+ssh <keeper-host> journalctl -u updown-betbot -n 50 --no-pager
+ssh <keeper-host> sudo systemctl restart updown-betbot
+```
+
+那一个在跑的时候，绝不要在别处再跑第二个。两者用同一对签名私钥，同一个账户上的两个发送方会互相抢 nonce ——
+这正是机器人拒绝使用 keeper 和 owner 私钥所要防的同一件事。
+
+如果它是没钱而不是没跑，日志里会是 `FAUCET_REQUIRED`，领取流程见第 2 节「让测试网不断气」。
 
 ### 3.2 预言机陈旧或死亡
 

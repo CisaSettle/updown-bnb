@@ -1,0 +1,85 @@
+[Unit]
+# The testnet market-making bot, moved off the laptop it used to run on.
+#
+# It lived under macOS launchd until 2026-09-05, where it stopped three times in five days and
+# stayed stopped for 20.8 h, 11.0 h and 20.7 h — not because it crashed, but because macOS
+# Background Task Management holds every "legacy agent" at disposition
+# [enabled, disallowed, notified], so launchd never imports the plist and neither RunAtLoad nor
+# KeepAlive has a job to act on. Nothing surfaces that: the plist lints clean, the launchd
+# disabled list does not mention it, and `launchctl print` reports it the same way it reports a
+# plist that was never written. Here Restart=always is the whole supervision story.
+#
+# Install beside updown-keeper.service:
+#   sudo install -d -o updown -g updown /opt/updown-betbot/scripts/lib
+#   # NO trailing slash on scripts/lib: `rsync -a src/lib/ dest/` copies lib's CONTENTS into dest,
+#   # which lands bet-window.mjs beside bet-bot.mjs and breaks its `./lib/...` import.
+#   sudo rsync -a scripts/bet-bot.mjs /opt/updown-betbot/scripts/
+#   sudo rsync -a scripts/lib /opt/updown-betbot/scripts/
+#   # bet-bot.mjs resolves viem as ../keeper/node_modules/viem because the repo root has no
+#   # package.json, so scripts/*.mjs cannot resolve a bare specifier. The symlink reproduces that
+#   # one relationship instead of putting a second copy of node_modules on the box.
+#   sudo ln -sfn /opt/updown-keeper /opt/updown-betbot/keeper
+#   sudo install -m 0600 -o updown -g updown betbot.env.example /etc/updown/betbot.env
+#   sudoedit /etc/updown/betbot.env      # FILL IN A_KEY and B_KEY — the template ships them empty,
+#                                        # and the bot exits 78 rather than starting without them
+#   sudo install -m 0644 updown-betbot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now updown-betbot
+#
+# STOP THE LAPTOP BOT FIRST. Both use the same two signing keys, and two senders on one account
+# race each other's nonces — the exact hazard scripts/bet-bot.mjs refuses keeper and owner keys
+# over. On the laptop: launchctl bootout gui/501/ai.bluffking.updown-betbot
+Description=UpDown testnet market-making bot
+Documentation=https://github.com/updown-protocol/updown
+After=network-online.target updown-keeper.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=updown
+Group=updown
+WorkingDirectory=/opt/updown-betbot
+EnvironmentFile=/etc/updown/betbot.env
+Environment=NODE_ENV=production
+Environment=DEPLOYMENTS_PATH=/etc/updown/97.json
+Environment=GAS_STATE_PATH=/var/lib/updown-betbot/gas-state.json
+ExecStart=/usr/bin/node /opt/updown-betbot/scripts/bet-bot.mjs
+# The bot holds no user funds and every round is independent, so a crash costs at most the rounds
+# it was mid-way through. Staying down costs every round after that, which is the failure this
+# unit exists to end.
+Restart=always
+RestartSec=30s
+# A missing key or an impossible gas floor is not transient, and retrying it every 30 seconds for
+# ever buries the one journal line that says why. bet-bot.mjs exits 78 (EX_CONFIG) for exactly
+# those, and only those — anything network-dependent still exits 1 and is still retried for ever.
+RestartPreventExitStatus=78
+StateDirectory=updown-betbot
+StateDirectoryMode=0700
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=updown-betbot
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=false
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
