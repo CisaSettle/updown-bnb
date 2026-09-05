@@ -13,7 +13,6 @@ export const FEED = '0x0000000000000000000000000000000000000005' as const
 
 export const usdt: SettlementToken = {
   address: '0x0000000000000000000000000000000000000007',
-  isNative: false,
   symbol: 'USDT',
   decimals: 18,
   balance: 1_000n * ONE,

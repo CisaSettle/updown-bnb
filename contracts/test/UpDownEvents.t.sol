@@ -5,7 +5,6 @@ import {Vm} from "forge-std/Vm.sol";
 import {UpDownBaseTest} from "./UpDownBase.t.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
-import {UpDownMarketNative} from "../src/UpDownMarketNative.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 
@@ -306,58 +305,5 @@ contract UpDownEventsTest is UpDownBaseTest {
         emit UpDownMarketBase.TokenRecovered(address(stray), treasury, 4e18);
         vm.prank(owner);
         market.recoverToken(address(stray), treasury, 4e18);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // The native market emits the same stream
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /// @notice The BNB market is a separate deployment with its own payout path, and the indexer
-    ///         reads the same event shapes off it.
-    function test_theNativeMarketEmitsTheSameSettlementStream() public {
-        UpDownMarketNative bnb = new UpDownMarketNative(
-            owner, address(feed), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
-        );
-        vm.deal(alice, 100e18);
-        vm.deal(bob, 100e18);
-        vm.prank(owner);
-        bnb.genesisStart();
-        vm.warp(bnb.anchorTs());
-
-        vm.expectEmit(true, true, true, true, address(bnb));
-        emit UpDownMarketBase.BetPlaced(alice, 1, true, 1e18);
-        vm.prank(alice);
-        bnb.betUp{value: 1e18}(1);
-        vm.prank(bob);
-        bnb.betDown{value: 3e18}(1);
-
-        UpDownMarketBase.Round memory r1 = bnb.getRound(1);
-        vm.warp(r1.lockTs);
-        uint80 lockRid = feed.setAnswer(P0);
-        vm.warp(uint256(r1.lockTs) + 1);
-        vm.expectEmit(true, false, false, true, address(bnb));
-        emit UpDownMarketBase.RoundLocked(1, P0, lockRid);
-        vm.prank(keeper);
-        bnb.executeRound(lockRid);
-
-        vm.warp(r1.closeTs);
-        uint80 closeRid = feed.setAnswer(81_000e8);
-        vm.warp(uint256(r1.closeTs) + 1);
-        vm.expectEmit(true, false, false, true, address(bnb));
-        emit UpDownMarketBase.RoundSettled(1, 81_000e8, closeRid, 1e18, 3.91e18, 0.09e18);
-        vm.prank(keeper);
-        bnb.executeRound(closeRid);
-
-        uint256[] memory e = new uint256[](1);
-        e[0] = 1;
-        vm.expectEmit(true, true, false, true, address(bnb));
-        emit UpDownMarketBase.Claimed(alice, 1, alice, 3.91e18, false);
-        vm.prank(alice);
-        bnb.claim(e);
-
-        vm.expectEmit(true, false, false, true, address(bnb));
-        emit UpDownMarketBase.TreasuryClaimed(treasury, 0.09e18);
-        vm.prank(owner);
-        bnb.claimTreasury(treasury);
     }
 }

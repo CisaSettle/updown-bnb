@@ -1,17 +1,12 @@
 import { erc20Abi, type Abi } from 'viem'
 import { upDownMarketERC20Abi } from './UpDownMarketERC20'
-import { upDownMarketNativeAbi } from './UpDownMarketNative'
 import { upDownRegistryAbi } from './UpDownRegistry'
 import { testUSDTAbi } from './TestUSDT'
 import { relayAggregatorAbi } from './RelayAggregator'
 
-export { upDownMarketERC20Abi, upDownMarketNativeAbi, upDownRegistryAbi, testUSDTAbi, relayAggregatorAbi, erc20Abi }
+export { upDownMarketERC20Abi, upDownRegistryAbi, testUSDTAbi, relayAggregatorAbi, erc20Abi }
 
-/**
- * Every read-only view on a market is byte-identical across the ERC20 and native implementations
- * (they share `UpDownMarketBase`), so one ABI drives every read. Only `betUp` / `betDown` differ,
- * and those pick the concrete ABI at call time.
- */
+/** Shared views for the USDT markets. */
 export const marketViewAbi = upDownMarketERC20Abi
 
 /** Minimal Chainlink AggregatorV3 surface — the live price shown next to the strike. */
@@ -71,7 +66,6 @@ export const allErrorsAbi: Abi = (() => {
   const out: AbiErrorItem[] = []
   for (const abi of [
     upDownMarketERC20Abi,
-    upDownMarketNativeAbi,
     upDownRegistryAbi,
     testUSDTAbi,
     relayAggregatorAbi,

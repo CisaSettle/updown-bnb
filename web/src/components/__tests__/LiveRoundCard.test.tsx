@@ -15,7 +15,6 @@ const config: MarketConfig = {
   maxBet: 5_000n * ONE,
   maxSide: 100_000n * ONE,
   settlementAsset: '0x0000000000000000000000000000000000000007',
-  isNative: false,
   paused: false,
   genesisStarted: true,
   materializedEpoch: 42n,

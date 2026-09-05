@@ -6,7 +6,6 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
-import {UpDownMarketNative} from "../src/UpDownMarketNative.sol";
 import {UpDownRegistry} from "../src/UpDownRegistry.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
@@ -32,7 +31,6 @@ contract UpDownOwnershipTest is Test {
     MockAggregator feed;
     MockERC20 usdt;
     UpDownMarketERC20 erc20;
-    UpDownMarketNative nativeMarket;
     UpDownRegistry registry;
 
     function setUp() public {
@@ -51,9 +49,6 @@ contract UpDownOwnershipTest is Test {
             5_000e18,
             100_000e18
         );
-        nativeMarket = new UpDownMarketNative(
-            owner, address(feed), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, 1e18, 5_000e18, 100_000e18
-        );
         registry = new UpDownRegistry(owner);
     }
 
@@ -63,10 +58,6 @@ contract UpDownOwnershipTest is Test {
 
     function test_renounceOwnershipIsDisabledOnErc20Market() public {
         _assertRenounceIsDisabled(Ownable2Step(address(erc20)));
-    }
-
-    function test_renounceOwnershipIsDisabledOnNativeMarket() public {
-        _assertRenounceIsDisabled(Ownable2Step(address(nativeMarket)));
     }
 
     function test_renounceOwnershipIsDisabledOnRegistry() public {
@@ -97,13 +88,6 @@ contract UpDownOwnershipTest is Test {
             Ownable2Step(address(erc20)), abi.encodeCall(UpDownMarketBase.setParams, (400, BUFFER))
         );
         assertEq(erc20.feeBps(), 400, "the accepted owner's call did not take effect");
-    }
-
-    function test_ownershipTransferIsTwoStepsOnNativeMarket() public {
-        _assertTwoStepHandover(
-            Ownable2Step(address(nativeMarket)), abi.encodeCall(UpDownMarketBase.setParams, (400, BUFFER))
-        );
-        assertEq(nativeMarket.feeBps(), 400, "the accepted owner's call did not take effect");
     }
 
     function test_ownershipTransferIsTwoStepsOnRegistry() public {

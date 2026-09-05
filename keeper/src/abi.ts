@@ -1,7 +1,7 @@
 /**
  * Minimal, hand-pinned ABI fragments for the contracts the keeper touches.
  *
- * Inlined (rather than imported from `packages/abi/*.json`) so the keeper builds and ships as a
+ * Inlined so the keeper builds and ships as a
  * standalone container, and so viem infers exact return types from the `as const` literals.
  *
  * Transcribed from the current compiler output of `contracts/src/UpDownMarketBase.sol`,
@@ -375,30 +375,6 @@ export const relayAggregatorAbi = [
   { type: 'error', name: 'NotUpdater', inputs: [] },
   { type: 'error', name: 'BadAnswer', inputs: [] },
   { type: 'error', name: 'NoData', inputs: [] },
-] as const;
-
-export const registryAbi = [
-  {
-    type: 'function',
-    name: 'allMarkets',
-    inputs: [],
-    outputs: [
-      {
-        name: '',
-        type: 'tuple[]',
-        internalType: 'struct UpDownRegistry.MarketInfo[]',
-        components: [
-          { name: 'market', type: 'address', internalType: 'address' },
-          { name: 'asset', type: 'address', internalType: 'address' },
-          { name: 'oracle', type: 'address', internalType: 'address' },
-          { name: 'interval', type: 'uint64', internalType: 'uint64' },
-          { name: 'enabled', type: 'bool', internalType: 'bool' },
-          { name: 'label', type: 'string', internalType: 'string' },
-        ],
-      },
-    ],
-    stateMutability: 'view',
-  },
 ] as const;
 
 /** Void reason codes emitted in `RoundVoided(epoch, reason)`. */

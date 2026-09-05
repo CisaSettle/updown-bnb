@@ -43,10 +43,7 @@ contract Deploy is Script {
     uint256 constant USDT_MIN = 1e18;
     uint256 constant USDT_MAX = 5_000e18;
     uint256 constant USDT_SIDE = 100_000e18;
-    // `UpDownMarketNative` is deliberately not deployed here any more: every market settles in
-    // USDT. The contract stays in the tree, built and tested, because the choice is a deployment
-    // decision rather than a change of what the protocol supports — but dead limits and a dead
-    // import in the deploy script would suggest a native market is one env var away, and it is not.
+    // All deployed markets settle in USDT.
 
     // Chainlink AggregatorV3 feeds on BSC mainnet. Each was read live on 2026-08-26 —
     // `description()`, `decimals()` and a fresh `latestRoundData()` — before being written here.

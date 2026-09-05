@@ -4,20 +4,10 @@ pragma solidity 0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
-import {UpDownMarketNative} from "../src/UpDownMarketNative.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 
-/**
- * @dev Shared fixture: a 5-minute BTC/USD market on an 8-decimal feed, **parameterised over the
- *      settlement asset** so one suite body can be run against both concrete markets. The live BNB
- *      market pays out through a raw `call{value:}` rather than an ERC20 transfer, so a property
- *      only ever evaluated against `UpDownMarketERC20` has never been evaluated against the code
- *      path that actually moves BNB.
- *
- *      Everything that is not asset plumbing lives here. The two fixtures below supply only the
- *      handful of hooks that genuinely differ; deriving suites never mention an asset type.
- */
+/// @dev Shared ERC20 market fixture.
 abstract contract UpDownFixture is Test {
     uint256 internal constant INTERVAL = 300;
     uint16 internal constant FEE_BPS = 300;
@@ -26,8 +16,7 @@ abstract contract UpDownFixture is Test {
     uint256 internal constant MIN_BET = 1e18;
     uint256 internal constant MAX_BET = 5_000e18;
     uint256 internal constant MAX_SIDE = 100_000e18;
-    /// @dev Opening balance handed to every actor, in the settlement asset's own units. BSC USDT
-    ///      and BNB are both 18 decimals, so one figure serves both markets.
+    /// @dev Opening USDT balance handed to every actor, in base units.
     uint256 internal constant START_BALANCE = 1_000_000e18;
     int256 internal constant P0 = 80_000e8;
 
@@ -56,12 +45,12 @@ abstract contract UpDownFixture is Test {
         vm.warp(market.anchorTs()); // betting on epoch 1 is now open
     }
 
-    // ── asset plumbing: the only thing that differs between the two markets ──
+    // ── ERC20 fixture hooks ──
 
     function _deployMarket() internal virtual returns (UpDownMarketBase);
     /// @dev Deploy another market of this fixture's asset type against an arbitrary price feed,
     ///      with the fixture's parameters. Lets a suite test what the *constructor* does with a
-    ///      feed, on both concrete markets, without a second copy of the argument list.
+    ///      feed without a second copy of the argument list.
     function _deployOnFeed(address feed_) internal virtual returns (UpDownMarketBase);
     /// @dev Point every helper in this fixture at `m` — and give the actors whatever standing
     ///      permission that market needs — so a suite can drive a second market through the same
@@ -179,56 +168,6 @@ abstract contract UpDownErc20Fixture is UpDownFixture {
 
     function _assetLabel() internal pure override returns (string memory) {
         return "ERC20";
-    }
-}
-
-/// @dev The native half of the fixture. `vm.prank` moves the value from the pranked account, so
-///      per-actor BNB balances mean exactly what they mean in the ERC20 fixture.
-abstract contract UpDownNativeFixture is UpDownFixture {
-    /// @dev The same contract as `market`, typed so the payable `betUp`/`betDown` are reachable.
-    UpDownMarketNative internal nativeMarket;
-
-    function _deployMarket() internal override returns (UpDownMarketBase) {
-        nativeMarket = new UpDownMarketNative(
-            owner, address(feed), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
-        );
-        return nativeMarket;
-    }
-
-    function _deployOnFeed(address feed_) internal override returns (UpDownMarketBase) {
-        return
-            new UpDownMarketNative(
-                owner, feed_, INTERVAL, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
-            );
-    }
-
-    function _useMarket(UpDownMarketBase m) internal override {
-        nativeMarket = UpDownMarketNative(address(m));
-        market = m; // native betting needs no standing permission: the value rides with the call
-    }
-
-    function _fund(address user) internal override {
-        vm.deal(user, START_BALANCE);
-    }
-
-    function _betUp(address who, uint256 amount) internal override {
-        uint256 e = market.currentEpoch();
-        vm.prank(who);
-        nativeMarket.betUp{value: amount}(e);
-    }
-
-    function _betDown(address who, uint256 amount) internal override {
-        uint256 e = market.currentEpoch();
-        vm.prank(who);
-        nativeMarket.betDown{value: amount}(e);
-    }
-
-    function _balance(address who) internal view override returns (uint256) {
-        return who.balance;
-    }
-
-    function _assetLabel() internal pure override returns (string memory) {
-        return "native";
     }
 }
 

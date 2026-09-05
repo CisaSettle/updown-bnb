@@ -27,5 +27,5 @@ echo "── web ──"
 
 echo
 echo "Done. Next:"
-echo "  cd contracts && forge test          # the full suite"
-echo "  cat docs/RUNBOOK.md                 # deploy and operations"
+echo "  cd web && npm run dev               # local development"
+echo "  open docs/RUNBOOK.html              # setup and operations"

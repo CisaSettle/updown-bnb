@@ -191,12 +191,6 @@ export function parseAmountInput(input: string, decimals: number): AmountParse {
   }
 }
 
-/** Parse user input to base units. Returns `null` for anything that is not a usable amount. */
-export function parseAmount(input: string, decimals: number): bigint | null {
-  const parsed = parseAmountInput(input, decimals)
-  return parsed.status === 'ok' ? parsed.value : null
-}
-
 /** Trim a bigint amount to a plain decimal string suitable for an <input value>. */
 export function toInputValue(value: bigint, decimals: number, maxFrac = 6): string {
   const s = formatUnits(value, decimals)

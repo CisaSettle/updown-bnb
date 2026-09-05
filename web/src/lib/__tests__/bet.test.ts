@@ -16,11 +16,11 @@ function state(overrides: Partial<BetInputState> = {}): BetInputState {
     wrongChain: false,
     chainName: 'BNB Smart Chain Testnet',
     tokenReady: true,
-    isNative: false,
+
     decimals: 18,
     symbol: 'USDT',
     balance: 10_000n * ONE,
-    spendable: 10_000n * ONE,
+
     genesisStarted: true,
     paused: false,
     minBet: ONE,
@@ -47,16 +47,16 @@ describe('validateBetInput — the comma stake', () => {
     expect(v.amount).not.toBe(250n * ONE)
   })
 
-  it('stakes 0.005 BNB for "0,005", not 5 BNB', () => {
+  it('stakes 0.005 USDT for "0,005", not 5 USDT', () => {
     const v = validateBetInput(
       state({
         input: '0,005',
-        isNative: true,
-        symbol: 'BNB',
+
+        symbol: 'USDT',
         minBet: 5_000_000_000_000_000n,
         maxBet: 10n * ONE,
         balance: 20n * ONE,
-        spendable: 20n * ONE,
+
       }),
     )
     expect(v.ok).toBe(true)
@@ -121,7 +121,7 @@ describe('validateBetInput — amount problems', () => {
     expect(why({ input: '0.5' }, 'zh')).toBe('最小下注额是 1 USDT。')
     expect(why({ input: '5001' }, 'zh')).toBe('最大下注额是 5,000 USDT。')
     expect(why({ input: '1.1234567', decimals: 6 }, 'zh')).toBe('USDT 的金额最多 6 位小数。')
-    // Numerals stay numerals and the ticker stays Latin — see GLOSSARY.md.
+    // Numerals stay numerals and the ticker stays Latin.
     expect(why({ input: '5001' }, 'zh')).not.toContain('五千')
   })
 
@@ -136,27 +136,15 @@ describe('validateBetInput — amount problems', () => {
     expect(why({ input: '100', sideRemaining: 0n })).toContain('hit its 100,000 USDT cap')
     expect(why({ input: '100', sideRemaining: 50n * ONE })).toContain('Only 50 USDT of room left on the up side')
     expect(why({ input: '100', side: 'down', sideRemaining: 50n * ONE })).toContain('down side')
-    expect(why({ input: '100', balance: 10n * ONE, spendable: 10n * ONE })).toContain('Not enough USDT. You hold 10')
+    expect(why({ input: '100', balance: 10n * ONE })).toContain('Not enough USDT. You hold 10')
   })
 
   it('keeps UP and DOWN in Latin when it names a side in 中文', () => {
     expect(why({ input: '100', sideRemaining: 0n }, 'zh')).toBe('本轮 UP 这一边已经打满 100,000 USDT 的单边上限。')
     expect(why({ input: '100', side: 'down', sideRemaining: 50n * ONE }, 'zh')).toContain('DOWN 这一边只剩 50 USDT')
-    expect(why({ input: '100', balance: 10n * ONE, spendable: 10n * ONE }, 'zh')).toBe('USDT 不够。你手上有 10。')
+    expect(why({ input: '100', balance: 10n * ONE }, 'zh')).toBe('USDT 不够。你手上有 10。')
   })
 
-  it('keeps a native gas reserve', () => {
-    const native = state({
-      input: '10',
-      isNative: true,
-      symbol: 'BNB',
-      balance: 10n * ONE,
-      spendable: 10n * ONE - 2_000_000_000_000_000n,
-      maxBet: 100n * ONE,
-    })
-    expect(validateBetInput(native).reason?.en).toBe('Leave a little BNB behind for gas.')
-    expect(validateBetInput(native).reason?.zh).toBe('留一点 BNB 付 gas。')
-  })
 })
 
 describe('validateBetInput — when a bet cannot be placed at all', () => {

@@ -10,7 +10,7 @@
  * runtime. Copy that depends on a number takes it as an argument and returns a `Text`, so the two
  * languages can put the number where their own grammar wants it instead of sharing one word order.
  *
- * Register (see `GLOSSARY.md`): 你, never 您. No exclamation marks. Buttons are verbs. Where the
+ * Register: 你, never 您. No exclamation marks. Buttons are verbs. Where the
  * English admits it does not know something, the 中文 admits it too — 还不知道 is a legitimate
  * thing for this product to say and 处理中 would be a lie.
  */
@@ -778,10 +778,6 @@ export function showingRounds(shown: number, total: bigint): Text {
 
 export function claimRoundTx(epoch: bigint, lang: Lang): Text {
   return { en: `Claim round #${epoch.toString()}`, zh: `领取${roundNo(epoch, lang)}` }
-}
-
-export function txFailedTitle(title: string): Text {
-  return { en: `${title} failed`, zh: `${title} · 失败` }
 }
 
 /** The Claim-all button's `title`, which is where the batching is explained. */

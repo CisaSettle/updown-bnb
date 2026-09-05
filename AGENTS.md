@@ -1,122 +1,51 @@
-# Working in this repository
+# UpDown working agreement
 
-Read by both vendors — Codex reads `AGENTS.md`, Claude Code reads `CLAUDE.md`, which points here so
-the two can never drift. Loong's global working agreement (autonomy, targeted verification,
-bilingual deliverables, the Desktop inbox, the cross-vendor gate) applies and is not restated here.
-This file carries only what is specific to UpDown and not derivable from the code.
+## Finish the requested task
 
-## Start and end every session at the ledger
+- Owner ruling, 2026-09-05: these rules replace the earlier mandatory cross-vendor
+  review, quota fallback, document-generation and session-hook requirements here.
+- Small tasks: state the intended outcome briefly, edit immediately, verify, finish.
+  Do not create plans, audit reports or decision files unless requested or essential.
+- Scope is the requested behavior and defects that prevent it from working. Record
+  unrelated findings briefly in the reply; do not turn them into another workstream.
+- Done means the requested behavior works and its targeted checks pass. Stop there.
+  Do not add refactors, extra features or repeated verification after that point.
+- No mandatory model reviewer. If the owner explicitly requests one, make one bounded
+  pass over the diff and report all supported findings together. A follow-up covers
+  fixes and affected dependencies only. Quota/error: report once; no retry/fallback
+  loop, and no claim of approval. Review availability does not block ordinary work.
+- Fix confirmed in-scope defects directly. External publication, money movement and
+  destructive operations still require authorization for that action.
+- Check `git status` before editing and preserve others' work. Coordinate overlapping
+  live operations with the active session; no mandatory ledger, hooks or receipts.
 
-```bash
-node scripts/agent-ledger.mjs preflight                                   # FIRST, before anything
-node scripts/agent-ledger.mjs claim --agent <you> --topic <workstream> --summary "..."   # taking it
-node scripts/agent-ledger.mjs add --agent <you> --topic <workstream> --status <s> --summary "..."
-```
+## Verify only the affected behavior
 
-Use `claim`, not `add --status in-progress`, when you are taking a workstream. Preflight and add
-are two steps, and in the gap between them another session can claim the same topic and win by
-being later; `claim` re-reads under a lock and refuses if someone already holds it. Set
-`AGENT_SESSION` to something stable per session so two sessions of the same vendor are told apart.
+- Web: `cd web && npm run build` (includes typecheck), plus covering Vitest specs.
+  Copy changes need the affected content tests; UI changes need the affected view
+  checked at 390px and desktop width. `check:controls` is available for panel geometry.
+- Keeper: `cd keeper && npm run build`, plus covering specs via `npx vitest run <spec>`.
+- Contracts: use `$HOME/.foundry/bin/forge`; run `fmt --check`, `build --deny warnings`
+  and the covering test contract. Full regression, fuzz/invariant campaigns and live
+  RPC checks are opt-in, never a routine task gate.
+- Do not write tests for formatting, historical review records or duplicated prose.
+  Keep tests of payouts, refunds, signing, oracle proofs and runtime recovery.
+- User-facing changes may update the public changelog when useful; an entry is not
+  required for every commit. No document-parity or changelog release gate.
 
-Your private memory (`~/.claude/…/memory`, `~/.codex`) is invisible to the other vendor, and git
-history only records what got committed — never a running process, a registered third-party
-account, a moved balance, or something the owner still owes. Those live in the ledger or they are
-lost, and the next session re-derives them or acts on state that has already moved.
+## Runtime facts and safety
 
-Record anything another agent would otherwise have to rediscover, and record it when it becomes
-true, not at the end of the day. `in-progress` claims a workstream; an open `blocked` /
-`owner-blocked` / `in-progress` entry on your topic must be reconciled — reused, finished, or
-explicitly closed — before you start overlapping work. `owner-blocked` requires `--owner-action`,
-and when the ask also has a Desktop card, bind it with `--decision-file`.
-
-The ledger is machine-local by design (git-common-dir, never committed): it is live coordination,
-not project history. Anything a *different machine* needs belongs in a commit or the RUNBOOK.
-
-A read-only session cannot write it, and that is fine — `add` and `claim` exit 3 saying so rather
-than failing obscurely. A review or inspection session that changes nothing has nothing to record
-anyway; if such a session does learn something the next one needs, put it in the final message so
-the owner or the next session can enter it. The obligation is on sessions that change things.
-
-## Reviewer quota fallback
-
-Run `node scripts/review-change.mjs` for the final review of a
-substantive local change. It snapshots tracked and untracked bytes into an immutable Git tree,
-binds the review to its patch digest, and rechecks that the worktree did not move before accepting
-the verdict. The author vendor is derived from the live signed controller process ancestry; a
-caller-supplied vendor cannot select the route or label the receipt.
-
-The opposite vendor is always first. Only a provider-structured terminal `quota_exhausted` event
-may activate the pinned same-vendor independent reviewer under owner policy
-`reviewer-quota-auto-auth-2026-07-24`. Generic errors, timeouts, prose-only quota messages,
-findings, and missing verdicts never select a fallback on their own. A fallback must return
-`APPROVED` with `findings=[]` and `open=[]`; recursive fallback is forbidden. Its receipt must
-state `cross_vendor=false`, `fallback_reason=quota_exhausted`, and the policy id. This degraded
-approval allows the normal commit/push path without waiting for a per-run owner confirmation, but
-it must never be described as cross-vendor consensus.
-
-The one path past a prose-only refusal is an explicit owner ruling given in the current session,
-passed verbatim as `--owner-fallback="<the ruling>"`. Under it a usage-limit message from the
-opposite vendor (and nothing else — a generic error still blocks) proceeds to the same-vendor
-reviewer, Fable 5.1 (`claude-fable-5-1`) for Claude-authored work (owner ruling 2026-09-05:
-用 fable5.1 作为 reviewer, superseding the 2026-09-02 Opus 5 ruling), and the receipt says `owner_override=true`,
-`automatic_owner_policy=false`, `fallback_reason=owner_ruled_usage_limit` — never
-`quota_exhausted`, which is the standing policy's word for its own typed evidence — and carries the
-refusal verbatim. On that degraded route the reviewer session must report a model for itself, and
-it must equal the pinned id or its dated build, or the verdict is refused rather than relabelled. Never pass the flag on your own
-initiative, and never widen `structuredCodexQuota` / `structuredClaudeQuota` to make a prose
-refusal look typed: the controller-identification bug fixed on 2026-09-02 (`ps -o comm=` naming
-`claude` without a path) was safe to fix unilaterally; the evidence bar is not.
-
-You do not have to remember the preflight: both vendors' `SessionStart` hooks run it for you and
-put anything open in front of you, and a `Stop` hook says so when a commit lands after the last
-ledger write. Both call the same two scripts in `scripts/hooks/` — one copy, so the vendors cannot
-drift. A protocol that depends on an agent remembering a command is a protocol that gets skipped;
-these hooks are what make it real, and the writing is still yours to judge.
-
-## Where the moving parts actually run
-
-| Piece | Where | Notes |
-|---|---|---|
-| Web app | GitHub Pages → `updown.bluffking.ai` | `pages.yml` deploys on push to `web/**`, `contracts/deployments/**`, `packages/abi/**` **or the workflow itself** — a deployment address or ABI edit ships to production as surely as a UI change |
-| Contracts | BSC **testnet** (chain 97) | six USDT markets; `contracts/deployments/97.json` is the source of truth |
-| Keeper | **texas-h5 prod machine** — not this laptop | it is why market state advances; you cannot restart it from here |
-| Betting bot | **texas-h5 prod machine**, systemd `updown-betbot.service` | `scripts/bet-bot.mjs` deployed to `/opt/updown-betbot`, config `/etc/updown/betbot.env`, log `journalctl -u updown-betbot`. It ran on this laptop until 2026-09-05 and stopped three times in five days — macOS BTM holds every legacy agent at `disallowed`, so launchd never imports the plist. Do not move it back |
-
-Testnet gas is the standing constraint: the board burns ≈0.10 tBNB/day and only the chain's faucet
-can mint it, behind a captcha a human must clear. `scripts/fund-gas.mjs` spreads a claim; RUNBOOK
-§2 "Keeping the testnet in gas" has the loop. Never let the keeper run dry — a dry keeper voids
-locked rounds into refunds, which is the only failure mode that reaches users.
-
-## What verification means here
-
-Targeted, and matched to the surface you touched:
-
-- Contracts — the test that covers what you changed, e.g.
-  `cd contracts && forge test --match-contract UpDownSurfaceTest`. The full suite is a broad gate:
-  run it only when Loong asks for one, however fast it happens to be. CI additionally gates on
-  `forge fmt --check` and `forge build --deny warnings`; run both before pushing contract changes.
-  **Foundry is installed but not on `PATH`** — prefix with
-  `export PATH="$HOME/.foundry/bin:$PATH"`, or `forge` and `cast` read as missing and send you
-  down a wrong path. `contracts/lib/` is gitignored, so a fresh clone needs the two `forge install`
-  lines from `.github/workflows/ci.yml` first.
-- Web — `cd web && npm run typecheck` and `npx vitest run <the covering specs>`. Content and copy
-  changes must pass `src/content/__tests__` and `zhSweep`, which catch an untranslated string
-  reaching the screen.
-- Docs — Markdown is canonical; run `node scripts/build-bilingual-docs.mjs` and commit the
-  regenerated HTML. Never hand-edit `docs/*.html`; the parity gate fails if one language lags.
-- Anything user-visible — real-width browser evidence to `~/bluffking-evidence/<date>/`, at 390px
-  and a desktop width. A claim about the UI without a screenshot is an assumption.
-- Anything that opens a panel — `npm run build && npx vite preview --port 4173 &` then
-  `npm run check:controls`. It activates every `aria-controls` at both widths and fails if what
-  opens is not on screen. It exists because the Verify button once opened its proof three screens
-  below the click and read as dead, which every static-render test passed straight through: a
-  control's result landing where nobody is looking is a bug only geometry can see.
-
-## Rails that exist for a reason
-
-- The bot refuses any chain but 97 and any key that collides with the keeper or owner. Both guards
-  are load-bearing — a second sender on those accounts races their nonces.
-- `scripts/fund-gas.mjs` re-checks the chain id before signing: its funding key controls real BNB
-  on mainnet at the same address, so a wrong RPC there spends actual money.
-- Deployment addresses come from `contracts/deployments/`, never from a literal in code.
-- Secrets belong in gitignored `.env*` files. Never print a private key, and never commit one.
+- Web: GitHub Pages, `updown.bluffking.ai`. Pushing a Pages-triggering path to `main`
+  deploys it; do not treat a push as local-only work.
+- Contracts: BSC testnet, chain 97, six USDT markets. Addresses come from
+  `contracts/deployments/97.json`; never hard-code replacements.
+- Keeper and betting bot run on the texas-h5 production host under systemd,
+  `updown-keeper.service` and `updown-betbot.service`. Do not start a duplicate signer
+  on this laptop or move the services back to launchd.
+- Preserve chain-id checks, key separation, nonce coordination, deployment validation,
+  payout/refund logic and the gas watchdog. Secrets stay in ignored env files.
+- Operations and recovery: `docs/RUNBOOK.html`. Runtime configuration is documented
+  in the env examples and service units; do not copy it into more documents.
+- Requested reader-facing documents are concise bilingual HTML, 中文 default with
+  an English toggle. Review files and screenshots go directly on `~/Desktop`;
+  non-visual logs stay off Desktop. Do not generate a report just to finish a task.

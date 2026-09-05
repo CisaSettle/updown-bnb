@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useRef, useState } from 'react'
-import { erc20Abi, parseEther } from 'viem'
-import { upDownMarketERC20Abi, upDownMarketNativeAbi } from '../abi'
+import { erc20Abi } from 'viem'
+import { upDownMarketERC20Abi } from '../abi'
 import * as ui from '../content/ui'
 import { activeChain, chainLabel } from '../config/chains'
 import type { Address } from '../config/deployment'
@@ -14,9 +14,6 @@ import { formatAmount, formatAmountWithSymbol, formatMultiple, toInputValue } fr
 import { t, useLang, type Text } from '../lib/i18n'
 import { quotePayout, roundPhase, type Round } from '../lib/market'
 import { pushToast } from '../lib/toast'
-
-/** Leave a little native balance behind so the user can still pay for gas. */
-const NATIVE_GAS_BUFFER = parseEther('0.002')
 
 /**
  * Stop taking new bets a few seconds before `lockTs`. The contract rejects anything mined at or
@@ -85,10 +82,7 @@ export function BetPanel({
   const sideTotal = side === 'up' ? upAmount : downAmount
   const sideRemaining = config.maxSide > sideTotal ? config.maxSide - sideTotal : 0n
 
-  const spendable = useMemo(() => {
-    if (!token.isNative) return token.balance
-    return token.balance > NATIVE_GAS_BUFFER ? token.balance - NATIVE_GAS_BUFFER : 0n
-  }, [token.isNative, token.balance])
+  const spendable = token.balance
 
   // The smallest of every cap that applies — including a cap that is *zero*. Filtering zeroes out
   // would make "Max" propose an amount the wallet cannot fund or the contract would reject with
@@ -112,11 +106,9 @@ export function BetPanel({
         wrongChain,
         chainName: chainLabel(lang),
         tokenReady: token.ready,
-        isNative: token.isNative,
         decimals: token.decimals,
         symbol: token.symbol,
         balance: token.balance,
-        spendable,
         genesisStarted: config.genesisStarted,
         paused: config.paused,
         minBet: config.minBet,
@@ -134,11 +126,9 @@ export function BetPanel({
       wrongChain,
       lang,
       token.ready,
-      token.isNative,
       token.decimals,
       token.symbol,
       token.balance,
-      spendable,
       config.genesisStarted,
       config.paused,
       config.minBet,
@@ -156,7 +146,7 @@ export function BetPanel({
     [amount, side, upAmount, downAmount, feeBps],
   )
 
-  const needsApproval = !token.isNative && amount !== null && amount > 0n && token.allowance < amount
+  const needsApproval = amount !== null && amount > 0n && token.allowance < amount
 
   const hint: Text | undefined = validation.ok && quote?.refundOnly ? ui.bet.firstIn : undefined
 
@@ -189,16 +179,7 @@ export function BetPanel({
       'bet',
       ui.betTxTitle(side),
       () =>
-        token.isNative
-          ? writeContractAsync({
-              chainId: activeChain.id,
-              address: market,
-              abi: upDownMarketNativeAbi,
-              functionName: side === 'up' ? 'betUp' : 'betDown',
-              args: [epoch],
-              value: amount,
-            })
-          : writeContractAsync({
+        writeContractAsync({
               chainId: activeChain.id,
               address: market,
               abi: upDownMarketERC20Abi,

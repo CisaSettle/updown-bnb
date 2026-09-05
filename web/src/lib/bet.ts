@@ -40,13 +40,10 @@ export interface BetInputState {
   wrongChain: boolean
   chainName: string
   tokenReady: boolean
-  isNative: boolean
   decimals: number
   symbol: string
   /** Wallet balance in base units. */
   balance: bigint
-  /** Balance minus the native gas reserve; equal to `balance` for an ERC20. */
-  spendable: bigint
   genesisStarted: boolean
   paused: boolean
   /**
@@ -77,7 +74,7 @@ export interface BetValidation {
   reason?: Text
 }
 
-/** UP / DOWN stay Latin in 中文 — see `GLOSSARY.md`. */
+/** UP / DOWN stay Latin in 中文. */
 function side(s: Side): string {
   return s === 'up' ? 'UP' : 'DOWN'
 }
@@ -209,9 +206,6 @@ export function validateBetInput(s: BetInputState): BetValidation {
       { en: `Not enough ${s.symbol}. You hold ${held}.`, zh: `${s.symbol} 不够。你手上有 ${held}。` },
       amount,
     )
-  }
-  if (s.isNative && amount > s.spendable) {
-    return fail({ en: `Leave a little ${s.symbol} behind for gas.`, zh: `留一点 ${s.symbol} 付 gas。` }, amount)
   }
 
   return { ok: true, amount }

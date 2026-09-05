@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  bettableEpochAt,
   clampRelayLead,
   computeNextWake,
   computeRelayLeadMs,
@@ -364,24 +363,6 @@ describe('isPastSettlementWindow', () => {
   it('matches the contract boundary exactly', () => {
     expect(isPastSettlementWindow(LOCK_TS + 50, round)).toBe(false);
     expect(isPastSettlementWindow(LOCK_TS + 51, round)).toBe(true);
-  });
-});
-
-describe('bettableEpochAt', () => {
-  it('mirrors _bettableEpochAt on the interval grid', () => {
-    const anchorTs = 1_800_000_000;
-    expect(bettableEpochAt(anchorTs, anchorTs, 1n, 300)).toBe(1n);
-    expect(bettableEpochAt(anchorTs + 299, anchorTs, 1n, 300)).toBe(1n);
-    expect(bettableEpochAt(anchorTs + 300, anchorTs, 1n, 300)).toBe(2n);
-    expect(bettableEpochAt(anchorTs + 3_000, anchorTs, 1n, 300)).toBe(11n);
-  });
-
-  it('clamps to the anchor before the grid starts', () => {
-    expect(bettableEpochAt(1_000, 1_800_000_000, 4n, 300)).toBe(4n);
-  });
-
-  it('rejects a non-positive interval', () => {
-    expect(() => bettableEpochAt(1, 0, 1n, 0)).toThrow(RangeError);
   });
 });
 

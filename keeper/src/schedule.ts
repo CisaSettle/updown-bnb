@@ -127,16 +127,6 @@ export interface WakeOptions {
   minTimerMs: number;
 }
 
-export const DEFAULT_WAKE_OPTIONS: WakeOptions = {
-  executeLeadMs: 2_000,
-  relayLeadMs: DEFAULT_RELAY_LEAD_MS,
-  relaySlots: 1,
-  relayEnabled: false,
-  relayTickMs: 0,
-  maxTimerMs: 15 * 60_000,
-  minTimerMs: 0,
-};
-
 /**
  * Quiet margin around anything a settlement depends on, inside which a density tick is never
  * planned, never queued and never broadcast.
@@ -454,16 +444,6 @@ export function secondsUntilLockable(chainNowSec: number, lockTs: number): numbe
 /** Has the settlement window closed, so that `executeRound` could only void? */
 export function isPastSettlementWindow(nowSec: number, round: RoundTiming): boolean {
   return nowSec > round.lockTs + round.bufferSeconds;
-}
-
-/**
- * The epoch that should be accepting bets at `ts`, from the immutable grid.
- * Mirrors `_bettableEpochAt` on-chain; used to detect how many epochs an outage skipped.
- */
-export function bettableEpochAt(ts: number, anchorTs: number, epochAnchor: bigint, interval: number): bigint {
-  if (interval <= 0) throw new RangeError('interval must be positive');
-  if (ts < anchorTs) return epochAnchor;
-  return epochAnchor + BigInt(Math.floor((ts - anchorTs) / interval));
 }
 
 /** How many round boundaries were missed while the keeper was down. 0 when on schedule. */

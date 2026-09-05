@@ -69,7 +69,7 @@ function readable(html: string): string[] {
 
 const config: MarketConfig = {
   interval: 300, feeBps: 300, bufferSeconds: 120, minBet: ONE, maxBet: 5_000n * ONE,
-  maxSide: 100_000n * ONE, settlementAsset: usdt.address, isNative: false, paused: false,
+  maxSide: 100_000n * ONE, settlementAsset: usdt.address, paused: false,
   genesisStarted: true, materializedEpoch: 42n, currentEpoch: 42n, oracle: FEEDADDR,
 }
 const oracle = { answer: 100_000_000_000n, decimals: 8, updatedAt: START, ageSeconds: 1, isLoading: false, refetch: () => {} } as unknown as OraclePrice

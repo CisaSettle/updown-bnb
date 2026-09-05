@@ -5,7 +5,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { isAddress, getAddress, type Address, type Hex } from 'viem';
+import { type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { ConfigError, defaultDeploymentsPath, loadDeployment, type DeploymentFile } from './deployments.js';
 import { isLogLevel, type LogLevel } from './logger.js';
@@ -585,10 +585,4 @@ export function redactUrl(raw: string): string {
   } catch {
     return '<unparseable-url>';
   }
-}
-
-/** Checksum an address or explain why it is not one. */
-export function requireAddress(value: string, label: string): Address {
-  if (!isAddress(value, { strict: false })) throw new ConfigError(`${label} is not a valid address: ${value}`);
-  return getAddress(value);
 }

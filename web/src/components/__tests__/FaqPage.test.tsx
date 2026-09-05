@@ -15,7 +15,6 @@ const facts: MarketFact[] = [
     feeBps: 300,
     bufferSeconds: 45,
     oracleMaxAge: 60,
-    isNative: false,
     partial: false,
   },
   {
@@ -26,7 +25,6 @@ const facts: MarketFact[] = [
     feeBps: 300,
     bufferSeconds: 45,
     oracleMaxAge: 60,
-    isNative: false,
     partial: false,
   },
 ]

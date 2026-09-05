@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {UpDownErc20Fixture, UpDownFixture, UpDownNativeFixture} from "./UpDownBase.t.sol";
+import {UpDownErc20Fixture, UpDownFixture} from "./UpDownBase.t.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
 
 /**
@@ -341,9 +341,6 @@ abstract contract UpDownAdminLeverTests is UpDownFixture {
      *         while paused; a round that never took a strike — nobody could know its outcome —
      *         refunds on its own timer, and no new round opens.
      *
-     *         Asserted here on *both* markets: the payout that has to survive a pause leaves the
-     *         native market through a raw `call{value:}`, which is not the path the ERC20 test
-     *         exercises.
      */
     function test_pauseCannotCancelALockedRoundAndCannotOpenANewOne() public {
         _betUp(alice, 1_000e18);
@@ -390,5 +387,3 @@ abstract contract UpDownAdminLeverTests is UpDownFixture {
 }
 
 contract UpDownAdminLeverErc20Test is UpDownAdminLeverTests, UpDownErc20Fixture {}
-
-contract UpDownAdminLeverNativeTest is UpDownAdminLeverTests, UpDownNativeFixture {}

@@ -74,14 +74,6 @@ export function phaseOf(roundId: bigint): bigint {
   return roundId >> PHASE_SHIFT;
 }
 
-export function aggregatorRoundOf(roundId: bigint): bigint {
-  return roundId & AGGREGATOR_ROUND_MASK;
-}
-
-export function firstRoundOfPhase(phase: bigint): bigint {
-  return (phase << PHASE_SHIFT) | 1n;
-}
-
 /**
  * Mirror of the contract's `_tryRound`: a print the market would refuse to look at does not exist
  * as far as settlement is concerned, and treating it as existing is what makes an off-chain mirror
@@ -218,18 +210,4 @@ export function verifyBoundaryRound(proof: BoundaryProof): BoundaryVerdict {
     };
   }
   return { usable: true, roundId: candidate.roundId, answer: candidate.answer, ageSec };
-}
-
-/**
- * Will a relay published now still qualify for `targetTs`?
- * The print's `updatedAt` becomes the block timestamp it lands in, so it must land in
- * `[targetTs - oracleMaxAge, targetTs]`.
- */
-export function relayLandingWindow(targetTs: number, oracleMaxAge: number): { earliest: number; latest: number } {
-  return { earliest: Math.max(0, targetTs - oracleMaxAge), latest: targetTs };
-}
-
-export function isRelayUsefulNow(chainNowSec: number, targetTs: number, oracleMaxAge: number): boolean {
-  const { earliest, latest } = relayLandingWindow(targetTs, oracleMaxAge);
-  return chainNowSec >= earliest && chainNowSec <= latest;
 }

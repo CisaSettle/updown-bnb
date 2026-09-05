@@ -43,10 +43,6 @@ export const ERROR_COPY: Record<string, Text> = {
     en: 'This market has not opened its first round yet.',
     zh: '这个市场还没有开出第一轮。',
   },
-  ValueMismatch: {
-    en: 'The amount sent did not match the amount requested. Try again.',
-    zh: '实际发送的金额和请求的金额对不上。重试一次。',
-  },
   UnsupportedAsset: {
     en: 'This market cannot accept that token (it takes a fee on transfer or rebases).',
     zh: '这个市场不能收这种代币（它转账抽税，或者会 rebase）。',
@@ -365,15 +361,6 @@ function looksLikeRejection(err: unknown): boolean {
   if (typeof anyErr?.name === 'string' && anyErr.name === 'UserRejectedRequestError') return true
   const msg = typeof anyErr?.message === 'string' ? anyErr.message.toLowerCase() : ''
   return msg.includes('user rejected') || msg.includes('user denied')
-}
-
-/** Best-effort name of the custom error behind a failure, or `undefined`. */
-export function errorName(err: unknown): string | undefined {
-  if (!(err instanceof BaseError)) return undefined
-  const reverted = err.walk((e) => e instanceof ContractFunctionRevertedError)
-  if (!(reverted instanceof ContractFunctionRevertedError)) return undefined
-  if (reverted.data?.errorName) return reverted.data.errorName
-  return decodeRaw(reverted.raw)?.name
 }
 
 /**

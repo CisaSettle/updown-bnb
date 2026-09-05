@@ -61,7 +61,6 @@ describe('static zh sweep', () => {
       ['positionsCaption', ui.positionsCaption(5, '20')],
       ['showingRounds', ui.showingRounds(5, 20n)],
       ['claimRoundTx', ui.claimRoundTx(41n, 'zh')],
-      ['txFailedTitle', ui.txFailedTitle('押 UP')],
       ['txConfirmed', ui.txConfirmed('押 UP')],
       ['txFailed', ui.txFailed('全部领取')],
       ['txStillPending', ui.txStillPending('全部领取')],

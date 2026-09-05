@@ -14,7 +14,6 @@ export interface MarketConfig {
   maxBet: bigint
   maxSide: bigint
   settlementAsset: Address
-  isNative: boolean
   paused: boolean
   genesisStarted: boolean
   /** Last round written to storage; history and the live settlement lane key off this. */
@@ -67,7 +66,6 @@ export function useMarketConfig(market: Address | undefined) {
       maxBet: asBigInt(pick(data, 4)) ?? 0n,
       maxSide: asBigInt(pick(data, 5)) ?? 0n,
       settlementAsset,
-      isNative: settlementAsset.toLowerCase() === zeroAddress,
       paused: asBool(pick(data, 7)) ?? false,
       genesisStarted: asBool(pick(data, 8)) ?? false,
       materializedEpoch,

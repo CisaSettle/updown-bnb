@@ -1,15 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {UpDownFixture, UpDownErc20Fixture, UpDownNativeFixture} from "./UpDownBase.t.sol";
+import {UpDownFixture, UpDownErc20Fixture} from "./UpDownBase.t.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
 
-/**
- * @dev The fuzz properties, written once against the asset-agnostic fixture and instantiated at the
- *      bottom of this file against BOTH concrete markets. The native market moves money with a raw
- *      `call{value:}` instead of an ERC20 transfer, so running the same properties there is not a
- *      formality: it is the only way these properties ever see that payout path.
- */
+/// @dev Fuzz properties for the deployed ERC20 market.
 abstract contract UpDownFuzzTests is UpDownFixture {
     /// @notice A winner is never paid less than their own principal, for any book and any fee.
     function testFuzz_winnerNeverBelowPrincipal(uint256 upA, uint256 upB, uint256 down, uint16 fee) public {
@@ -166,5 +161,3 @@ abstract contract UpDownFuzzTests is UpDownFixture {
 }
 
 contract UpDownFuzzErc20Test is UpDownFuzzTests, UpDownErc20Fixture {}
-
-contract UpDownFuzzNativeTest is UpDownFuzzTests, UpDownNativeFixture {}

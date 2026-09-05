@@ -4,7 +4,6 @@ pragma solidity 0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
-import {UpDownMarketNative} from "../src/UpDownMarketNative.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 
@@ -14,9 +13,7 @@ import {MockERC20} from "./mocks/MockERC20.sol";
  *      is the part that matters — **admin parameter changes mid-flight**, which is exactly the
  *      shape of bug that a handler without them cannot reach.
  *
- *      The handler is asset-agnostic: only placing a bet and reading a balance differ between the
- *      ERC20 and native markets, so those three operations are hooks and everything else — the
- *      whole round engine, the claim logic, the admin churn — is driven identically for both.
+ *      The concrete ERC20 handler supplies the token transfers and balance reads.
  */
 abstract contract UpDownHandler is Test {
     UpDownMarketBase public market;
@@ -283,49 +280,7 @@ contract UpDownErc20Handler is UpDownHandler {
     }
 }
 
-contract UpDownNativeHandler is UpDownHandler {
-    UpDownMarketNative private _native;
-
-    constructor(
-        UpDownMarketNative m,
-        MockAggregator f,
-        address own,
-        address tre,
-        address[] memory acts,
-        int256 p0
-    ) UpDownHandler(m, f, own, tre, acts, p0) {
-        _native = m;
-    }
-
-    function _tryBetUp(address a, uint256 epoch, uint256 amount) internal override returns (bool) {
-        vm.prank(a);
-        try _native.betUp{value: amount}(epoch) {
-            return true;
-        } catch {
-            return false;
-        }
-    }
-
-    function _tryBetDown(address a, uint256 epoch, uint256 amount) internal override returns (bool) {
-        vm.prank(a);
-        try _native.betDown{value: amount}(epoch) {
-            return true;
-        } catch {
-            return false;
-        }
-    }
-
-    function _balanceOf(address a) internal view override returns (uint256) {
-        return a.balance;
-    }
-}
-
-/**
- * @dev The invariants themselves, written once and instantiated against both concrete markets at
- *      the bottom of this file. `invariant_neverUnderCollateralised` is the property the README
- *      calls the one that matters most; before this it had only ever been evaluated against the
- *      ERC20 market, never against the raw `call{value:}` payout path the live BNB market uses.
- */
+/// @dev Invariants for the deployed ERC20 market.
 abstract contract UpDownInvariantTests is Test {
     uint256 constant INTERVAL = 300;
     uint16 constant FEE_BPS = 300;
@@ -505,28 +460,5 @@ contract UpDownInvariantErc20Test is UpDownInvariantTests {
 
     function _assetLabel() internal pure override returns (string memory) {
         return "ERC20";
-    }
-}
-
-contract UpDownInvariantNativeTest is UpDownInvariantTests {
-    UpDownMarketNative nativeMarket;
-
-    function _deployMarket() internal override returns (UpDownMarketBase) {
-        nativeMarket = new UpDownMarketNative(
-            owner, address(feed), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, 1e18, 5_000e18, 100_000e18
-        );
-        return nativeMarket;
-    }
-
-    function _fund(address actor) internal override {
-        vm.deal(actor, ACTOR_BALANCE);
-    }
-
-    function _newHandler(address[] memory acts) internal override returns (UpDownHandler) {
-        return new UpDownNativeHandler(nativeMarket, feed, owner, treasury, acts, P0);
-    }
-
-    function _assetLabel() internal pure override returns (string memory) {
-        return "native";
     }
 }

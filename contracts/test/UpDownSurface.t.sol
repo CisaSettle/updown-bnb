@@ -4,7 +4,6 @@ pragma solidity 0.8.28;
 import {UpDownBaseTest} from "./UpDownBase.t.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
-import {UpDownMarketNative} from "../src/UpDownMarketNative.sol";
 import {UpDownRegistry} from "../src/UpDownRegistry.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -23,9 +22,7 @@ contract UpDownSurfaceTest is UpDownBaseTest {
     // claimTo on an ERC20 market
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// @notice `claimTo` is only covered in the native suite, yet it is on the ERC20 market too —
-    ///         a contract account that can hold a position but is not on the token's allow-list
-    ///         needs exactly this door.
+    /// @notice An ERC20 holder can redirect a claim to an allowed recipient.
     function test_claimToPaysAThirdPartyOnAnErc20Market() public {
         _betUp(alice, 1_000e18);
         _betDown(bob, 3_000e18);
@@ -169,33 +166,6 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         assertEq(market.minBetAmount(), MIN_BET);
         assertFalse(market.paused());
         assertEq(market.currentEpoch(), 1);
-    }
-
-    function test_everyOwnerOnlyEntryPointRejectsAStrangerOnTheNativeMarket() public {
-        UpDownMarketNative nativeMarket = new UpDownMarketNative(
-            owner, address(feed), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
-        );
-        bytes memory denied = abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, carol);
-        MockERC20 stray = new MockERC20("Stray", "STR", 18);
-
-        vm.startPrank(carol);
-        vm.expectRevert(denied);
-        nativeMarket.setParams(100, BUFFER);
-        vm.expectRevert(denied);
-        nativeMarket.setLimits(1e18, 2e18, 3e18);
-        vm.expectRevert(denied);
-        nativeMarket.genesisStart();
-        vm.expectRevert(denied);
-        nativeMarket.claimTreasury(carol);
-        vm.expectRevert(denied);
-        nativeMarket.recoverToken(address(stray), carol, 1);
-        vm.expectRevert(denied);
-        nativeMarket.pause();
-        vm.expectRevert(denied);
-        nativeMarket.unpause();
-        vm.stopPrank();
-
-        assertFalse(nativeMarket.genesisStarted(), "a stranger opened the market");
     }
 
     function test_everyOwnerOnlyEntryPointRejectsAStrangerOnTheRegistry() public {
@@ -412,37 +382,6 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         (epochs, total) = market.userEpochs(alice, 0, 10);
         assertEq(total, 2, "a new round really is recorded");
         assertEq(epochs[1], 2);
-    }
-
-    /**
-     * @notice `UpDownMarketNative._pullFunds` reverts `ValueMismatch` when the credited amount is
-     *         not the value actually attached. That error is **unreachable through the shipped
-     *         ABI**: `betUp`/`betDown` are the only callers and they pass `msg.value` itself, with
-     *         `_bet` forwarding `msg.sender` — so both halves of the condition are identities.
-     * @dev The same class as `VOID_NOT_LOCKED` and `VOID_ORACLE` (see `UpDownEvents.t.sol`): a
-     *      defensive branch with no path to it. What is testable is the accounting identity the
-     *      branch exists to defend, so that is what is pinned here — every wei attached is credited
-     *      to the sender's own side of the named epoch, and to nothing else.
-     */
-    function test_theNativeMarketCreditsExactlyTheValueAttached() public {
-        UpDownMarketNative bnb = new UpDownMarketNative(
-            owner, address(feed), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
-        );
-        vm.prank(owner);
-        bnb.genesisStart();
-        vm.warp(bnb.anchorTs());
-
-        vm.deal(alice, 10e18);
-        vm.prank(alice);
-        bnb.betUp{value: 7e18}(1);
-
-        (uint256 up, uint256 down,) = bnb.ledger(1, alice);
-        assertEq(up, 7e18, "the ledger must credit exactly the value attached");
-        assertEq(down, 0, "the other side must not move");
-        assertEq(bnb.getRound(1).upAmount, 7e18, "the round must pool exactly the value attached");
-        assertEq(address(bnb).balance, 7e18, "the market must custody exactly the value attached");
-        assertEq(bnb.outstanding(), 7e18, "the liability must equal the value attached");
-        assertEq(alice.balance, 3e18, "the bettor must be debited exactly the value attached");
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -695,10 +634,6 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         new UpDownMarketERC20(
             owner, address(feed), address(0), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
         );
-        vm.expectRevert(UpDownMarketBase.ZeroAddress.selector);
-        new UpDownMarketNative(
-            owner, address(0), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
-        );
 
         // A zero `initialOwner` is caught one level lower: `Ownable(initialOwner)` is a base
         // constructor, so it runs before either contract's own body and reverts first. The
@@ -718,10 +653,6 @@ contract UpDownSurfaceTest is UpDownBaseTest {
             MIN_BET,
             MAX_BET,
             MAX_SIDE
-        );
-        vm.expectRevert(invalidOwner);
-        new UpDownMarketNative(
-            address(0), address(feed), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
         );
         vm.expectRevert(invalidOwner);
         new UpDownRegistry(address(0));

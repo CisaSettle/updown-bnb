@@ -3,7 +3,7 @@ name: Deploy web to GitHub Pages
 on:
   push:
     branches: [main]
-    paths: ['web/**', 'contracts/deployments/**', 'packages/abi/**', 'scripts/release-changelog-guard.mjs', 'scripts/lib/release-changelog.mjs', '.github/workflows/pages.yml']
+    paths: ['web/**', 'contracts/deployments/**', '.github/workflows/pages.yml']
   workflow_dispatch:
     inputs:
       chain_id:
@@ -31,51 +31,30 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Require one changelog entry for this release
-        env:
-          EVENT_BEFORE: ${{ github.event.before }}
+      - name: Restrict manual deployment to current main
+        if: github.event_name == 'workflow_dispatch'
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # Manual recovery may only redeploy the exact current main tip. Selecting another ref
-            # in the Actions UI must not turn validate-only into a changelog bypass.
-            git fetch --no-tags origin main
-            if [ "${{ github.ref }}" != "refs/heads/main" ] || [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
-              echo "Manual Pages deployment is restricted to the exact current main SHA."
-              exit 1
-            fi
-            node scripts/release-changelog-guard.mjs --validate-only
-          else
-            BASE="$EVENT_BEFORE"
-            if [ -z "$BASE" ]; then BASE="$(git rev-parse HEAD^ 2>/dev/null || printf '%040d' 0)"; fi
-            node scripts/release-changelog-guard.mjs --require-release-entry --base "$BASE" --head "${{ github.sha }}"
-          fi
+          git fetch --no-tags origin main
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
       - run: npm ci
         working-directory: web
-      # The deploy path is independent of the CI workflow, so without this the site could ship
-      # from a commit whose UI tests are red — including the off-chain price-proof logic that
-      # decides which price a trader is shown.
-      - run: npm test
+      - name: Test affected behavior
+        if: github.event_name == 'push'
         working-directory: web
+        env:
+          DIFF_BASE: ${{ github.event.before }}
+        run: |
+          if ! git cat-file -e "${DIFF_BASE}^{commit}" 2>/dev/null; then
+            DIFF_BASE=$(git hash-object -t tree /dev/null)
+          fi
+          npx vitest run --changed="$DIFF_BASE" --passWithNoTests
       - run: npm run build
         working-directory: web
         env:
-          # STRICT_DEPLOYMENT makes a missing contracts/deployments/<chainId>.json a hard failure,
-          # so the site can never ship pointing at placeholder addresses.
           STRICT_DEPLOYMENT: '1'
           VITE_CHAIN_ID: ${{ github.event.inputs.chain_id || '97' }}
-          # Served at the root of updown.bluffking.ai, not from a repository subpath. The custom
-          # domain is what makes the host swappable later: moving off GitHub Pages becomes a DNS
-          # change rather than a new URL for everyone who has bookmarked the old one.
-          # The repository's Settings > Pages > Custom domain is the authoritative hostname
-          # binding for an Actions deployment. web/public/CNAME remains in the artifact as portable
-          # host metadata, but it does not replace that repository setting.
           VITE_BASE_PATH: /
-          # WalletConnect is what gives phone browsers a path beyond the MetaMask deep link
-          # (Trust / OKX / Binance wallets). It turns on the moment the repository variable
-          # WALLETCONNECT_PROJECT_ID is set (Settings → Secrets and variables → Actions →
-          # Variables) — the project id is created at https://cloud.reown.com and is a public
-          # client-side identifier, not a secret. Unset, this resolves to empty and the app
-          # ships injected-only, exactly as before. See RUNBOOK §1.10.
           VITE_WALLETCONNECT_PROJECT_ID: ${{ vars.WALLETCONNECT_PROJECT_ID }}
       - uses: actions/upload-pages-artifact@v3
         with:

@@ -5,7 +5,7 @@ import { ERROR_COPY, ERROR_TEXT } from '../../lib/errors'
 /**
  * The glossary's term table, mechanically.
  *
- * `GLOSSARY.md` fixes one 中文 rendering per term and says to use it everywhere — the point being
+ * The product uses one 中文 rendering per term — the point being
  * that the same concept must not arrive as 行权价 in one panel and 开仓价 in the next. Spot-checking
  * a handful of entries by hand does not enforce that; this walks every en/zh pair the app can show
  * and fails when an English term appears without the rendering the table fixes for it.

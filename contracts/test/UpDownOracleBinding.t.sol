@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {UpDownErc20Fixture, UpDownFixture, UpDownNativeFixture} from "./UpDownBase.t.sol";
+import {UpDownErc20Fixture, UpDownFixture} from "./UpDownBase.t.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
 import {IAggregatorV3} from "../src/IAggregatorV3.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
@@ -382,5 +382,3 @@ abstract contract UpDownOracleBindingTests is UpDownFixture {
 }
 
 contract UpDownOracleBindingErc20Test is UpDownOracleBindingTests, UpDownErc20Fixture {}
-
-contract UpDownOracleBindingNativeTest is UpDownOracleBindingTests, UpDownNativeFixture {}

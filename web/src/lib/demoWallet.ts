@@ -18,16 +18,6 @@ export function assertDemoWalletChain(buildChainId: number, requestedChainId: nu
   }
 }
 
-export type DemoWalletStage = 'create' | 'gas' | 'usdt' | 'ready'
-
-/** Pure state machine behind the three visible onboarding steps. */
-export function demoWalletStage(connected: boolean, gasBalance: bigint, tokenBalance: bigint): DemoWalletStage {
-  if (!connected) return 'create'
-  if (gasBalance === 0n) return 'gas'
-  if (tokenBalance === 0n) return 'usdt'
-  return 'ready'
-}
-
 interface StoredDemoWallet {
   chainId: typeof DEMO_WALLET_CHAIN_ID
   privateKey: Hex

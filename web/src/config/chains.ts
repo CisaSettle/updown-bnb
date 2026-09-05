@@ -17,8 +17,6 @@ export const explorerUrl =
   import.meta.env.VITE_EXPLORER_URL ||
   (isTestnet ? 'https://testnet.bscscan.com' : 'https://bscscan.com')
 
-export const nativeSymbol = activeChain.nativeCurrency.symbol
-
 /**
  * The chain's name as a reader says it. wagmi ships the English one; 中文 has its own settled name
  * for this chain — the FAQ already calls it BNB 智能链 — and leaving it in Latin inside a Chinese

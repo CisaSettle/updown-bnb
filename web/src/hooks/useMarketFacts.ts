@@ -1,5 +1,4 @@
 import { useMemo } from 'react'
-import { zeroAddress } from 'viem'
 import { useReadContracts } from 'wagmi'
 import { marketViewAbi } from '../abi'
 import { CHAIN_ID } from '../config/chains'
@@ -17,12 +16,11 @@ export interface MarketFact {
   feeBps: number
   bufferSeconds: number
   oracleMaxAge: number
-  isNative: boolean
   /** True when a per-market read did not come back, so a missing number is not read as a zero. */
   partial: boolean
 }
 
-const PER_MARKET = ['interval', 'feeBps', 'bufferSeconds', 'oracleMaxAge', 'oracle', 'settlementAsset'] as const
+const PER_MARKET = ['interval', 'feeBps', 'bufferSeconds', 'oracleMaxAge', 'oracle'] as const
 
 /**
  * Every number the FAQ quotes, read from the chain instead of written down twice.
@@ -58,7 +56,6 @@ export function useMarketFacts() {
       const bufferSeconds = asNumber(pick(data, base + 2))
       const oracleMaxAge = asNumber(pick(data, base + 3))
       const oracle = asAddress(pick(data, base + 4))
-      const settlementAsset = asAddress(pick(data, base + 5))
       return {
         address: m.address,
         label: m.label,
@@ -69,7 +66,6 @@ export function useMarketFacts() {
         feeBps: feeBps ?? -1,
         bufferSeconds: bufferSeconds ?? -1,
         oracleMaxAge: oracleMaxAge ?? -1,
-        isNative: settlementAsset ? settlementAsset.toLowerCase() === zeroAddress : m.isNative,
         partial:
           interval === undefined ||
           feeBps === undefined ||

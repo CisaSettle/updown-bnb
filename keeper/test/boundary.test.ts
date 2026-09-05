@@ -1,11 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   findLastRoundOfPhase,
-  firstRoundOfPhase,
-  isRelayUsefulNow,
   isUsablePrint,
   phaseOf,
-  relayLandingWindow,
   successorId,
   UINT80_MAX,
   verifyBoundaryRound,
@@ -158,29 +155,9 @@ describe('verifyBoundaryRound and the pinned aggregator phase', () => {
   });
 });
 
-describe('relayLandingWindow', () => {
-  it('is the staleness budget ending at the boundary', () => {
-    expect(relayLandingWindow(BOUNDARY, MAX_AGE)).toEqual({ earliest: BOUNDARY - 150, latest: BOUNDARY });
-  });
-
-  it('never goes negative', () => {
-    expect(relayLandingWindow(10, 150).earliest).toBe(0);
-  });
-});
-
-describe('isRelayUsefulNow', () => {
-  it('is true inside the window and false on either side', () => {
-    expect(isRelayUsefulNow(BOUNDARY - 15, BOUNDARY, MAX_AGE)).toBe(true);
-    expect(isRelayUsefulNow(BOUNDARY, BOUNDARY, MAX_AGE)).toBe(true);
-    expect(isRelayUsefulNow(BOUNDARY + 1, BOUNDARY, MAX_AGE)).toBe(false);
-    expect(isRelayUsefulNow(BOUNDARY - MAX_AGE - 1, BOUNDARY, MAX_AGE)).toBe(false);
-  });
-});
-
 describe('phase arithmetic', () => {
-  it('splits a proxy round id into its phase and aggregator round', () => {
+  it('extracts the phase from a proxy round id', () => {
     expect(phaseOf(round(3n, 17n))).toBe(3n);
-    expect(firstRoundOfPhase(3n)).toBe(round(3n, 1n));
   });
 
   it('treats a bare aggregator id (no proxy) as phase 0', () => {

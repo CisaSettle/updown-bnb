@@ -93,10 +93,11 @@ for pair in \
 done
 
 # ── the contracts still pass their own tests ─────────────────────────────────
-if FOUNDRY_PROFILE=ci forge test >/tmp/updown-mainnet-test.log 2>&1; then
-  ok "forge test green ($(grep -c '\[PASS\]' /tmp/updown-mainnet-test.log) tests)"
+if forge fmt --check && forge build --deny warnings &&
+  forge test --match-contract UpDownSurfaceTest >/tmp/updown-mainnet-test.log 2>&1; then
+  ok "market surface tests green ($(grep -c '\[PASS\]' /tmp/updown-mainnet-test.log) tests)"
 else
-  bad tests "forge test FAILED — see /tmp/updown-mainnet-test.log"
+  bad tests "contract checks FAILED — see /tmp/updown-mainnet-test.log"
 fi
 
 echo

@@ -3,7 +3,6 @@ import {
   DEMO_WALLET_CHAIN_ID,
   DEMO_WALLET_STORAGE_KEY,
   assertDemoWalletChain,
-  demoWalletStage,
   demoWalletAddress,
   ensureDemoAccount,
   forgetDemoWallet,
@@ -58,10 +57,4 @@ describe('demo wallet storage', () => {
     expect(() => assertDemoWalletChain(97, 97)).not.toThrow()
   })
 
-  it('models every onboarding gate in order', () => {
-    expect(demoWalletStage(false, 0n, 0n)).toBe('create')
-    expect(demoWalletStage(true, 0n, 0n)).toBe('gas')
-    expect(demoWalletStage(true, 1n, 0n)).toBe('usdt')
-    expect(demoWalletStage(true, 1n, 1n)).toBe('ready')
-  })
 })

@@ -14,13 +14,17 @@ import {
   formatPriceDelta,
   formatTime,
   overroundPoints,
-  parseAmount,
   parseAmountInput,
   sharePercent,
   shortAddress,
   toInputValue,
 } from '../format'
 import { computeOdds } from '../market'
+
+function parseAmount(input: string, decimals: number): bigint | null {
+  const parsed = parseAmountInput(input, decimals)
+  return parsed.status === 'ok' ? parsed.value : null
+}
 
 const USDT = 18
 const ONE = 10n ** 18n
