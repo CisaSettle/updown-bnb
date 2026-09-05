@@ -57,8 +57,8 @@ it must never be described as cross-vendor consensus.
 The one path past a prose-only refusal is an explicit owner ruling given in the current session,
 passed verbatim as `--owner-fallback="<the ruling>"`. Under it a usage-limit message from the
 opposite vendor (and nothing else — a generic error still blocks) proceeds to the same-vendor
-reviewer, Opus 5 (`claude-opus-5`) for Claude-authored work (owner ruling 2026-09-02:
-用同厂商 Opus 5 来 review，如果 Codex 没额度了), and the receipt says `owner_override=true`,
+reviewer, Fable 5.1 (`claude-fable-5-1`) for Claude-authored work (owner ruling 2026-09-05:
+用 fable5.1 作为 reviewer, superseding the 2026-09-02 Opus 5 ruling), and the receipt says `owner_override=true`,
 `automatic_owner_policy=false`, `fallback_reason=owner_ruled_usage_limit` — never
 `quota_exhausted`, which is the standing policy's word for its own typed evidence — and carries the
 refusal verbatim. On that degraded route the reviewer session must report a model for itself, and

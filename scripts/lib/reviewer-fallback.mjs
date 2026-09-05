@@ -2,8 +2,11 @@ import crypto from 'node:crypto'
 
 export const REVIEW_POLICY_ID = 'reviewer-quota-auto-auth-2026-07-24'
 export const CODEX_FALLBACK_MODEL = 'gpt-5.6-terra'
-/** Owner ruling 2026-09-02: a Claude-authored change whose Codex reviewer is out of quota is reviewed by Opus 5. */
-export const CLAUDE_FALLBACK_MODEL = 'claude-opus-5'
+/**
+ * Owner ruling 2026-09-05, superseding the 2026-09-02 Opus 5 ruling: a Claude-authored change
+ * whose Codex reviewer is out of quota is reviewed by Fable 5.1 ("用fable5.1作为reviewer").
+ */
+export const CLAUDE_FALLBACK_MODEL = 'claude-fable-5-1'
 
 export const REVIEW_SCHEMA = {
   type: 'object',

@@ -22,7 +22,7 @@ test('OpenAI-authored changes route Claude first and pinned Terra on quota', () 
 
 test('Anthropic-authored changes route Codex first and Claude on quota', () => {
   assert.deepEqual(reviewRoute('anthropic'), { vendor: 'openai', model: 'gpt-5.6-terra', crossVendor: true })
-  assert.deepEqual(reviewRoute('anthropic', true), { vendor: 'anthropic', model: 'claude-opus-5', crossVendor: false })
+  assert.deepEqual(reviewRoute('anthropic', true), { vendor: 'anthropic', model: 'claude-fable-5-1', crossVendor: false })
 })
 
 test('controller provenance requires exactly one signed vendor claim', () => {
@@ -170,8 +170,8 @@ test('an owner-ruled fallback receipt names the ruling and disclaims the standin
     scope,
     verdict,
     transcript: 'transcript',
-    ownerRuling: '用同厂商opus 5来review 如果 codex没额度了',
-    reportedModel: 'claude-opus-5',
+    ownerRuling: '用fable5.1作为reviewer',
+    reportedModel: 'claude-fable-5-1',
   })
   assert.equal(receipt.cross_vendor, false)
   // Never `quota_exhausted`: that value belongs to the standing policy, and this fallback rests on
@@ -180,9 +180,9 @@ test('an owner-ruled fallback receipt names the ruling and disclaims the standin
   assert.equal(receipt.automatic_owner_policy, false)
   assert.equal(receipt.owner_policy_id, null)
   assert.equal(receipt.owner_override, true)
-  assert.equal(receipt.owner_ruling, '用同厂商opus 5来review 如果 codex没额度了')
-  assert.equal(receipt.model, 'claude-opus-5')
-  assert.equal(receipt.reviewer_model_reported, 'claude-opus-5')
+  assert.equal(receipt.owner_ruling, '用fable5.1作为reviewer')
+  assert.equal(receipt.model, 'claude-fable-5-1')
+  assert.equal(receipt.reviewer_model_reported, 'claude-fable-5-1')
   assert.equal(receipt.quota_evidence.classification, 'prose_only_usage_limit')
   assert.throws(() => buildReviewReceipt({
     authorVendor: 'anthropic',
@@ -200,18 +200,21 @@ test('an owner-ruled fallback receipt names the ruling and disclaims the standin
 
 test('a fallback verdict is refused when the session reports a model other than the pinned one', () => {
   const fallback = reviewRoute('anthropic', true)
-  assert.doesNotThrow(() => assertReviewerModel(fallback, 'claude-opus-5'))
-  assert.doesNotThrow(() => assertReviewerModel(fallback, 'claude-opus-5-20261001'))
+  assert.doesNotThrow(() => assertReviewerModel(fallback, 'claude-fable-5-1'))
+  assert.doesNotThrow(() => assertReviewerModel(fallback, 'claude-fable-5-1-20261001'))
   // Fails closed on the degraded route: the receipt stamps the pin next to owner_override=true, so
   // a session that never identified itself must not fill that slot.
   assert.throws(() => assertReviewerModel(fallback, null), /reported no model on the degraded route/)
   assert.throws(() => assertReviewerModel(fallback, undefined), /reported no model on the degraded route/)
   assert.doesNotThrow(() => assertReviewerModel(reviewRoute('openai'), null))
-  // A different model that merely starts with the pin must not satisfy a receipt claiming the pin.
-  assert.throws(() => assertReviewerModel(fallback, 'claude-opus-5-1'), /route pinned claude-opus-5/)
-  assert.throws(() => assertReviewerModel(fallback, 'claude-opus-5-1-20261001'), /route pinned claude-opus-5/)
-  assert.throws(() => assertReviewerModel(fallback, 'claude-sonnet-5'), /reported model claude-sonnet-5, route pinned claude-opus-5/)
-  assert.throws(() => assertReviewerModel(fallback, 'claude-opus-4-8'), /route pinned claude-opus-5/)
+  // The pin is a POINT RELEASE, so the near misses run both ways: the 5.0 family model the pin is
+  // derived from is a different reviewer, and so is a further-suffixed id. Neither may satisfy a
+  // receipt claiming Fable 5.1.
+  assert.throws(() => assertReviewerModel(fallback, 'claude-fable-5'), /route pinned claude-fable-5-1/)
+  assert.throws(() => assertReviewerModel(fallback, 'claude-fable-5-20261001'), /route pinned claude-fable-5-1/)
+  assert.throws(() => assertReviewerModel(fallback, 'claude-fable-5-1-1'), /route pinned claude-fable-5-1/)
+  assert.throws(() => assertReviewerModel(fallback, 'claude-opus-5'), /reported model claude-opus-5, route pinned claude-fable-5-1/)
+  assert.throws(() => assertReviewerModel(fallback, 'claude-sonnet-5'), /reported model claude-sonnet-5, route pinned claude-fable-5-1/)
   const primary = reviewRoute('openai')
   assert.doesNotThrow(() => assertReviewerModel(primary, 'claude-opus-5'))
   assert.throws(() => assertReviewerModel(primary, 'claude-haiku-4-5'), /route pinned opus/)
