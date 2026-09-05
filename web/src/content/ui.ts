@@ -117,11 +117,11 @@ export const testnet = {
     zh: '水龙头会把 1,000 测试 USDT 直接铸到你连上的地址。先点右上角的"连接钱包"（还没有钱包的话，那里显示的是"安装钱包"），再回来点一次这个按钮。',
   },
   // Every transaction here — the USDT faucet included — needs a little testnet BNB for gas, and a
-  // fresh test wallet has none. This is the one link that unblocks step one of the funnel.
-  gasFaucet: { en: 'Get tBNB ↗', zh: '领取 tBNB ↗' },
+  // fresh test wallet has none. The official bot accepts requests for a supplied address.
+  gasFaucet: { en: 'Request tBNB via Telegram ↗', zh: '通过 Telegram 申请 tBNB ↗' },
   gasFaucetTitle: {
-    en: 'Open QuickNode’s BSC testnet faucet and enter your wallet address to request tBNB.',
-    zh: '打开 QuickNode 的 BSC 测试网领取页面，输入钱包地址申请 tBNB。',
+    en: 'Open the official BNB Chain Telegram bot, press Start, and send a tBNB request with your BSC testnet wallet address.',
+    zh: '打开 BNB Chain 官方 Telegram 机器人，点击 Start，发送 tBNB 领取请求和你的 BSC 测试网钱包地址。',
   },
   faucetBusy: { en: 'Minting…', zh: '铸造中…' },
   faucet: { en: 'Get 1,000 test USDT', zh: '领 1,000 测试 USDT' },
@@ -141,8 +141,8 @@ export const demoWallet = {
   recommended: { en: 'Recommended for first-time visitors', zh: '首次体验推荐' },
   title: { en: 'Try it without connecting your own wallet', zh: '不用连接自己的钱包，也能直接体验' },
   body: {
-    en: 'Create a separate test account in this browser, get free test funds, and place a bet. Your everyday wallet never sees this site.',
-    zh: '在这个浏览器里创建一个独立的测试账号，领取免费测试币后就能下注。你平时使用的钱包完全不用连接本站。',
+    en: 'Create a separate test account in this browser. Once it receives tBNB, you can mint test USDT and place a bet. Request tBNB through the official Telegram bot, or transfer tBNB from another testnet wallet.',
+    zh: '在这个浏览器里创建一个独立的测试账号，收到 tBNB 后就能领取测试 USDT 并下注。可通过官方 Telegram 机器人申请 tBNB，或从其他测试网钱包转入 tBNB。',
   },
   safety: {
     en: 'Testnet only. The private key stays in this browser, is not backed up, and is not safe for real assets. Never send BNB, USDT, or anything valuable to this address.',
@@ -169,10 +169,10 @@ export const demoWallet = {
   copied: { en: 'Copied', zh: '已复制' },
   stepGas: { en: 'Get a little tBNB for gas', zh: '领取一点 tBNB 作为 gas' },
   gasBody: {
-    en: 'Copy your wallet address and open QuickNode’s faucet. Paste it into the wallet address field and complete the verification to request tBNB; this page detects the deposit automatically.',
-    zh: '复制钱包地址并打开 QuickNode 领取页面，将地址粘贴到钱包地址输入框，完成验证后申请 tBNB；到账后本页会自动检测。',
+    en: 'QuickNode can reject new wallets with an ETH mainnet balance check. Use the official BNB Chain Telegram bot: sign in to Telegram, press Start, then send the request below. Follow its verification instructions; this page detects tBNB when it arrives. You can also transfer tBNB from another BSC testnet wallet. Do not fund this test account with real ETH or BNB to qualify for a faucet.',
+    zh: 'QuickNode 的 ETH 主网余额检查可能拒绝新钱包。请改用 BNB Chain 官方机器人：登录 Telegram，点击 Start，再发送下方请求，按提示完成验证；tBNB 到账后本页会自动检测。也可以从其他 BSC 测试网钱包转入 tBNB。不要为了满足水龙头门槛给这个测试账号充值真实 ETH 或 BNB。',
   },
-  copyAndGas: { en: 'Copy address & get tBNB ↗', zh: '复制地址并领取 tBNB ↗' },
+  copyAndGas: { en: 'Copy address & open Telegram ↗', zh: '复制地址并打开 Telegram ↗' },
   gasReady: { en: 'Gas received:', zh: 'gas 已到账：' },
   stepUsdt: { en: 'Get 1,000 test USDT', zh: '领取 1,000 测试 USDT' },
   claim: { en: 'Get 1,000 test USDT', zh: '领取 1,000 测试 USDT' },

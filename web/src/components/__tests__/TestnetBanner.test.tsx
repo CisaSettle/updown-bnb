@@ -37,13 +37,13 @@ describe('TestnetBanner', () => {
     expect(html).toContain('先连接钱包')
   })
 
-  it.each([undefined, 'injected', 'updown-demo-wallet'])('opens the address-entry faucet for connector %s', (id) => {
+  it.each([undefined, 'injected', 'updown-demo-wallet'])('opens the official bot for connector %s', (id) => {
     connectorId = id
     const html = renderIn('zh', <TestnetBanner />)
-    expect(html).toContain('href="https://faucet.quicknode.com/binance-smart-chain/bnb-testnet"')
-    expect(html).toContain('领取 tBNB')
+    expect(html).toContain('href="https://t.me/bnbchain_official_bot"')
+    expect(html).toContain('通过 Telegram 申请 tBNB')
     expect(html).not.toContain('docs.bnbchain.org')
-    expect(html).not.toContain('t.me/')
+    expect(html).not.toContain('href="https://faucet.quicknode.com')
     expect(html).not.toContain('href="#faq')
   })
 })

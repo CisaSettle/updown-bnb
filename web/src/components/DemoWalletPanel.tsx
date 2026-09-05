@@ -133,6 +133,9 @@ export function DemoWalletPanel() {
                 ) : (
                   <>
                     <p className="mt-1 text-xs leading-relaxed text-slate-500 dark:text-slate-400">{t(lang, ui.demoWallet.gasBody)}</p>
+                    <p className="mt-2 break-all rounded-lg bg-slate-100 p-2 text-xs dark:bg-slate-800">
+                      <code>I would like to get tBNB to my wallet {address}</code>
+                    </p>
                     <div className="mt-2">
                       <a
                         className="btn-secondary"

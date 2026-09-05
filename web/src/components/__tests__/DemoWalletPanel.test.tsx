@@ -53,12 +53,14 @@ describe('DemoWalletPanel', () => {
     expect(html).not.toContain('Generate a blockchain wallet (account)')
   })
 
-  it.each(['en', 'zh'] as const)('opens the address-entry faucet directly in %s', (lang) => {
+  it.each(['en', 'zh'] as const)('offers the official bot and the connected address request in %s', (lang) => {
     connected = true
     const html = renderIn(lang, <DemoWalletPanel />)
-    expect(html).toContain('href="https://faucet.quicknode.com/binance-smart-chain/bnb-testnet"')
-    expect(html).toContain(lang === 'en' ? 'Copy address &amp; get tBNB' : '复制地址并领取 tBNB')
-    expect(html).not.toContain('t.me/')
+    expect(html).toContain('href="https://t.me/bnbchain_official_bot"')
+    expect(html).toContain(lang === 'en' ? 'Copy address &amp; open Telegram' : '复制地址并打开 Telegram')
+    expect(html).toContain(`I would like to get tBNB to my wallet ${ADDRESS}`)
+    expect(html).toContain(lang === 'en' ? 'ETH mainnet balance check' : 'ETH 主网余额检查')
+    expect(html).not.toContain('href="https://faucet.quicknode.com')
     expect(html).not.toContain('docs.bnbchain.org')
     expect(html).not.toContain('href="#faq')
     expect(html).not.toContain('www.bnbchain.org/en/testnet-faucet')
@@ -70,7 +72,7 @@ describe('DemoWalletPanel', () => {
     gasBalance = 1n
     let html = renderIn('en', <DemoWalletPanel />)
     expect(html).toContain('Get 1,000 test USDT</button>')
-    expect(html).not.toContain('Copy address &amp; get tBNB')
+    expect(html).not.toContain('Copy address &amp; open Telegram')
 
     tokenBalance = 1_000n * 10n ** 18n
     html = renderIn('en', <DemoWalletPanel />)
