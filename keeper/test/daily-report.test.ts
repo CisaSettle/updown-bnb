@@ -3,6 +3,8 @@ import { parseEther, type Address } from 'viem';
 import { registerSecret } from '../src/logger.js';
 import {
   EMPTY_OUTCOMES,
+  formatHours,
+  longestSilenceSec,
   MAX_DATES_PER_RUN,
   MAX_PENDING_DAYS,
   clip,
@@ -98,6 +100,7 @@ const marketDay = (over: Partial<MarketDay> = {}): MarketDay => ({
   settledPool: 0n,
   upWins: 0,
   downWins: 0,
+  internalStakeTimes: [],
   ...over,
 });
 
@@ -116,6 +119,7 @@ const snapshot = (over: Partial<Snapshot> = {}): Snapshot => ({
     { label: 'gas 加注账户', balance: parseEther('0.02'), minimum: parseEther('0.01'), requireAbove: true },
   ],
   keeperHealthy: true,
+  marketMakingMaxSilenceSec: 3600,
   faucet: faucet(),
   errors: [],
   ...over,
@@ -347,6 +351,8 @@ describe('aggregateMarketDay', () => {
         settledPool: 200n,
         upWins: 1,
         downWins: 1,
+        // 1000, 1001 and 1005 each carried internal money; the fixture starts them all at ANCHOR.
+        internalStakeTimes: [ANCHOR, ANCHOR, ANCHOR],
       }),
     );
   });
@@ -439,6 +445,7 @@ describe('totalsFor', () => {
       settledPool: 1_065n,
       upWins: 760,
       downWins: 570,
+      marketMakingSilenceSec: null,
     });
   });
 
@@ -460,6 +467,7 @@ describe('totalsFor', () => {
       settledPool: 0n,
       upWins: 0,
       downWins: 0,
+      marketMakingSilenceSec: null,
     });
   });
 });
@@ -874,6 +882,87 @@ describe('formatReport', () => {
     expect(text).toContain('btcUsd1m read failed');
     // Nothing else in the report may introduce hex of its own.
     expect(text.match(/0x[0-9a-fA-F]+/g)).toEqual(['0xdeadbeef', '0x4e487b71']);
+  });
+});
+
+describe('market-making silence', () => {
+  // 2026-09-04 CST, the day the owner asked about: window 09-03T16:00Z → 09-04T16:00Z.
+  const START = Date.parse('2026-09-03T16:00:00Z') / 1000;
+  const END = Date.parse('2026-09-04T16:00:00Z') / 1000;
+  const at = (iso: string): number => Date.parse(iso) / 1000;
+
+  it('measures the leading and trailing gaps, not just the ones between stakes', () => {
+    // The trailing gap is the one that mattered: the bot died at 13:34 CST and nothing bounded
+    // the silence but the end of the day. A gap-between-stakes-only reading would score 0 here.
+    expect(longestSilenceSec([START + 100], START, END)).toBe(END - START - 100);
+    expect(longestSilenceSec([END - 100], START, END)).toBe(END - START - 100);
+    // No stakes at all is the whole window, not zero.
+    expect(longestSilenceSec([], START, END)).toBe(END - START);
+    // A window that has not opened yet cannot have been silent.
+    expect(longestSilenceSec([], END, START)).toBe(0);
+  });
+
+  it('reconstructs the real 2026-09-04 outage from the stakes that day actually carried', () => {
+    // Both real outages: dead until 09:02 CST, alive to 13:34 CST, then dead to midnight.
+    // The real window: first stake after the restart, last stake before the SIGTERM. btcUsd10m
+    // epoch 413 at 05:30:13Z is the last thing the bot did before it went quiet for the day.
+    const alive: number[] = [];
+    for (let ts = at('2026-09-04T01:02:51Z'); ts < at('2026-09-04T05:30:13Z'); ts += 600) alive.push(ts);
+    alive.push(at('2026-09-04T05:30:13Z'));
+    const silence = longestSilenceSec(alive, START, END);
+    // The trailing hole is the longer of the two: 05:30:13Z → 16:00:00Z.
+    expect(silence).toBe(END - at('2026-09-04T05:30:13Z'));
+    expect((silence / 3600).toFixed(1)).toBe('10.5');
+    expect(formatHours(silence)).toBe('10.5');
+  });
+
+  it('takes the union across markets, so five idle markets never invent an outage', () => {
+    // btcUsd10m made every 10 minutes all day; the other five never traded — the funded steady
+    // state. Read per market that is five 24-hour outages; read board-wide it is no outage.
+    const funded: number[] = [];
+    for (let ts = START; ts < END; ts += 600) funded.push(ts);
+    expect(longestSilenceSec(funded, START, END)).toBe(600);
+
+    const markets = [
+      marketDay({ name: 'btcUsd10m', slots: 144, internalRounds: funded.length, internalStakeTimes: funded }),
+      marketDay({ name: 'btcUsd1m', slots: 1_440 }),
+      marketDay({ name: 'ethUsd1m', slots: 1_440 }),
+    ];
+    const totals = totalsFor('2026-09-04', markets, { startTs: START, endTs: END });
+    expect(totals.marketMakingSilenceSec).toBe(600);
+    expect(evaluateHealth(snapshot({ today: totals })).healthy).toBe(true);
+  });
+
+  it('turns the verdict red on a day the board went unmade, and stays quiet when not measured', () => {
+    const dead = totalsFor('2026-09-04', [marketDay({ slots: 144 })], { startTs: START, endTs: END });
+    expect(evaluateHealth(snapshot({ today: dead })).problems).toEqual([
+      '做市中断 24.0 小时（阈值 1.0 小时），六个市场同时无内部下注',
+    ]);
+    // 0 stands the check down for a deliberate pause.
+    expect(evaluateHealth(snapshot({ today: dead, marketMakingMaxSilenceSec: 0 })).healthy).toBe(true);
+    // A day whose window was never supplied is unmeasured, and unmeasured is never green-by-default.
+    const unmeasured = totalsFor('2026-09-04', [marketDay({ slots: 144 })]);
+    expect(evaluateHealth(snapshot({ today: unmeasured })).healthy).toBe(true);
+    expect(unmeasured.marketMakingSilenceSec).toBeNull();
+  });
+
+  it('would have caught the 09-04 report, which was green on every term it had', () => {
+    // The regression this whole change exists for. Solvent, unpaused, settled, funded, keeper up
+    // — the exact shape that rendered ✅ 正常 — plus the one fact nothing was looking at.
+    const stakes: number[] = [];
+    for (let ts = at('2026-09-04T01:02:51Z'); ts < at('2026-09-04T05:30:13Z'); ts += 600) stakes.push(ts);
+    stakes.push(at('2026-09-04T05:30:13Z'));
+    const today = totalsFor(
+      '2026-09-04',
+      [marketDay({ name: 'btcUsd10m', slots: 4_752, materialised: 413, internalRounds: 338, internalStakeTimes: stakes })],
+      { startTs: START, endTs: END },
+    );
+    const text = formatReport(snapshot({ today }), { envLabel: 'testnet', offsetMinutes: 480 });
+    expect(text).toContain('🔴 异常');
+    expect(text).toContain('做市中断 10.5 小时');
+    // And the two numbers a reader needed to see it without being told.
+    expect(text).toContain('做市覆盖：338/4752 时间格（7.1%）　最长静默 10.5 小时');
+    expect(text).toContain('时间格：4752　开出回合：413');
   });
 });
 

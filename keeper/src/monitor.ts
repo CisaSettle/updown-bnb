@@ -6,12 +6,21 @@
  * `/healthz` green even when both demo-liquidity accounts are unable to place the first stake.
  * This oneshot is therefore run by a separate systemd timer. It logs a structured ERROR, sends
  * one Telegram incident through @bluff_alert_bot, retries undelivered alerts, and sends recovery.
+ *
+ * It also watches the betting bot, which nothing else could. Between 2026-09-04 and 2026-09-05 the
+ * bot was dead for 20.7 hours across 1,976 runs of this watchdog, every one of which reported
+ * healthy — a dead bot spends no gas, so it drifts further ABOVE its balance floor, and settles
+ * nothing, so `/healthz` stays green. Board-wide stake silence is the signal that had been missing.
+ * The bot now runs beside this watchdog under `updown-betbot.service`, but the check is deliberately
+ * still made from the chain rather than from the local unit: what it must detect is a bot that is
+ * not betting, and a running process is not the same claim as a placed stake.
  */
 
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createPublicClient, formatEther, getAddress, http, isAddress, parseEther, type Address } from 'viem';
+import { createPublicClient, formatEther, getAddress, http, isAddress, parseEther, type Address, type PublicClient } from 'viem';
+import { marketAbi } from './abi.js';
 import { createLogger, registerEnvSecrets } from './logger.js';
 
 const SERVICE = 'updown-health-monitor';
@@ -30,6 +39,24 @@ export interface MonitorSnapshot {
   deploymentMarkets: Record<string, string> | null;
   healthBlockers: string[];
   balances: Array<{ label: string; balance: bigint; minimum: bigint; requireAbove?: boolean }>;
+  /**
+   * How long it has been since ANY bot account staked on ANY market, paired with the age at which
+   * that becomes a failure. Absent when the check is switched off or the reading failed.
+   *
+   * Deliberately a board-wide minimum rather than a per-market age. The bot is routinely narrowed
+   * to a single market to stretch testnet gas — five silent markets are the designed steady state,
+   * and a per-market alarm would page every day for it, which is exactly the false alarm 6afcdd9
+   * deleted. What is never normal is the whole board going quiet at once: that is the bot process
+   * being gone, and it is the one condition no other signal here can see. A dead bot keeps its
+   * gas (so the balance floors read greener, not redder) and settles nothing new (so `/healthz`
+   * stays green), which is how a 20-hour outage passed three of these runs a minute apart.
+   *
+   * `idleSec: null` is the distinct case where the markets are readable but NO account has ever
+   * staked on any of them — a bot that has not started, which after a redeploy onto fresh
+   * contracts is the normal shape of "never started". It must not be confused with the field
+   * being absent, which means the reading could not be taken at all.
+   */
+  marketMaking?: { idleSec: number | null; maxIdleSec: number };
   errors: string[];
 }
 
@@ -124,6 +151,21 @@ export function evaluateSnapshot(snapshot: MonitorSnapshot, escalation?: Unverif
       problems.push(`${item.label} gas ${formatEther(item.balance)} tBNB ${relation} ${formatEther(item.minimum)}`);
     }
   }
+
+  if (snapshot.marketMaking) {
+    const { idleSec, maxIdleSec } = snapshot.marketMaking;
+    // Empty history is a finding, not a missing measurement. A fresh deployment starts every
+    // market with no stake at all, so treating "nothing to compare against" as healthy would keep
+    // the board green for as long as the bot never started — precisely when it matters most.
+    if (idleSec === null) {
+      problems.push('no market-making stake has ever been placed on any of the six markets; the betting bot has never started');
+    } else if (idleSec > maxIdleSec) {
+      problems.push(
+        `no market-making stake on any of the six markets for ${Math.floor(idleSec / 60)} min ` +
+        `(alarm at ${Math.floor(maxIdleSec / 60)} min); the betting bot is not placing orders`,
+      );
+    }
+  }
   return {
     healthy: problems.length === 0,
     problems,
@@ -158,6 +200,8 @@ interface Config {
   statePath: string;
   repeatMs: number;
   unverifiedGraceMs: number;
+  /** Age of the newest market-making stake that turns the board red. 0 switches the check off. */
+  marketMakingMaxIdleSec: number;
   alertToken: string;
   alertChatId: string;
   envLabel: string;
@@ -178,6 +222,20 @@ function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!Number.isFinite(unverifiedGraceSeconds) || unverifiedGraceSeconds < 60) {
     throw new Error('UPDOWN_UNVERIFIED_GRACE_SECONDS must be at least 60');
   }
+  // 3600s is ~6 dry 10m rounds, or 60 dry 1m rounds — far outside the jitter of a bot that is
+  // merely slow, and far inside the 20-hour outages this exists to catch. 0 is the documented
+  // way to stand the check down while market making is deliberately off.
+  // `?.trim() ||`, not `??`: an env FILE renders an unset key as the empty string, and `Number('')`
+  // is 0 — which is the one value that means "switched off". A blank line in monitor.env would
+  // otherwise disable this check silently, failing open in exactly the way the check exists to
+  // prevent. 0 stays the only way to stand it down, and it has to be typed.
+  const marketMakingMaxIdleSec = Number(env['UPDOWN_MARKET_MAKING_MAX_IDLE_SECONDS']?.trim() || '3600');
+  if (!Number.isFinite(marketMakingMaxIdleSec) || marketMakingMaxIdleSec < 0) {
+    throw new Error('UPDOWN_MARKET_MAKING_MAX_IDLE_SECONDS must be 0 (off) or a positive number of seconds');
+  }
+  if (marketMakingMaxIdleSec > 0 && marketMakingMaxIdleSec < 600) {
+    throw new Error('UPDOWN_MARKET_MAKING_MAX_IDLE_SECONDS below 600 would page on one missed 10m round');
+  }
   return {
     rpcUrl: required(env, 'RPC_URL'),
     healthUrl: env['KEEPER_HEALTH_URL']?.trim() || DEFAULT_HEALTH_URL,
@@ -190,6 +248,7 @@ function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     statePath: env['UPDOWN_MONITOR_STATE_PATH']?.trim() || DEFAULT_STATE_PATH,
     repeatMs: repeatSeconds * 1_000,
     unverifiedGraceMs: unverifiedGraceSeconds * 1_000,
+    marketMakingMaxIdleSec,
     alertToken: env['ALERT_TELEGRAM_BOT_TOKEN']?.trim() || required(env, 'TELEGRAM_BOT_TOKEN'),
     alertChatId: required(env, 'ALERT_TELEGRAM_CHAT_ID'),
     envLabel: env['ALERT_ENV_LABEL']?.trim() || 'prod',
@@ -213,6 +272,46 @@ function writeState(path: string, state: MonitorState): void {
 
 function safeStrings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+/**
+ * Seconds since the newest stake by any bot account on any market, read from the chain alone.
+ *
+ * Chain-only is the whole point: `systemctl is-active` would answer a different question — a bot
+ * that is up but wedged, out of USDT, or pointed at the wrong market set is running and not
+ * betting. The stake ledger is the only record of the thing that actually matters, and it stays
+ * readable if the bot moves hosts again. `_userEpochs` is append-only and strictly increasing, so
+ * the last entry is the account's newest bet — one indexed read, no scan, no event log.
+ *
+ * The age is measured from the round's `startTs` rather than the block the stake landed in, which
+ * overstates idleness by at most one round length. That is the conservative direction for an
+ * alarm whose threshold is measured in hours, and it costs no extra read.
+ */
+export async function readMarketMakingIdleSec(
+  client: PublicClient,
+  markets: Address[],
+  bots: Address[],
+  nowSec: number,
+): Promise<number | null | undefined> {
+  const newestPerMarket = await Promise.all(markets.map(async (address) => {
+    const lastEpochs = await Promise.all(bots.map(async (user) => {
+      const [, total] = await client.readContract({ address, abi: marketAbi, functionName: 'userEpochs', args: [user, 0n, 0n] });
+      if (total === 0n) return undefined;
+      const [page] = await client.readContract({ address, abi: marketAbi, functionName: 'userEpochs', args: [user, total - 1n, 1n] });
+      return page[0];
+    }));
+    const newest = lastEpochs.filter((epoch): epoch is bigint => epoch !== undefined).sort((a, b) => (a < b ? 1 : -1))[0];
+    if (newest === undefined) return undefined;
+    const round = await client.readContract({ address, abi: marketAbi, functionName: 'getRound', args: [newest] });
+    return Number(round.startTs);
+  }));
+
+  const startTimes = newestPerMarket.filter((value): value is number => value !== undefined);
+  // Three outcomes, and the middle one is the one that used to be lost: nothing to read at all
+  // (undefined), markets read but never staked in (null), or a real age.
+  if (markets.length === 0) return undefined;
+  if (startTimes.length === 0) return null;
+  return Math.max(0, nowSec - Math.max(...startTimes));
 }
 
 async function collectSnapshot(config: Config): Promise<MonitorSnapshot> {
@@ -268,6 +367,21 @@ async function collectSnapshot(config: Config): Promise<MonitorSnapshot> {
     ];
     const balances = await Promise.all(accounts.map((item) => client.getBalance({ address: item.address })));
     snapshot.balances = accounts.map((item, index) => ({ ...item, balance: balances[index] ?? 0n }));
+
+    // Read separately from the balances above, and never allowed to fail the whole chain check:
+    // a market-making reading that could not be taken must not blank the gas floors, which are
+    // the older and more consequential alarm.
+    if (config.marketMakingMaxIdleSec > 0) {
+      try {
+        const addresses = Object.values(snapshot.deploymentMarkets ?? {}).map((value) => getAddress(value));
+        const idleSec = await readMarketMakingIdleSec(client, addresses, config.botAddresses, Math.floor(Date.now() / 1000));
+        if (idleSec !== undefined) snapshot.marketMaking = { idleSec, maxIdleSec: config.marketMakingMaxIdleSec };
+        // `undefined` reaches here only when the manifest named no markets, which the market-set
+        // check above already reports; it is not silently swallowed.
+      } catch (error) {
+        snapshot.errors.push(`market-making check failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   } catch (error) {
     snapshot.errors.push(`chain check failed: ${error instanceof Error ? error.message : String(error)}`);
   }

@@ -297,6 +297,14 @@ export interface MarketDay {
   settledPool: bigint;
   upWins: number;
   downWins: number;
+  /**
+   * `startTs` of every round this market carried an internal stake in, ascending.
+   *
+   * Kept as times rather than a count because a count is an integral and an outage is a hole: the
+   * 2026-09-04 report showed 338 covered rounds and a green verdict for a day the bot was dead
+   * 81% of, because all 338 landed in one 4.5-hour block. Only the spacing shows that.
+   */
+  internalStakeTimes: number[];
 }
 
 export const EMPTY_OUTCOMES: Readonly<Record<RoundOutcome, number>> = Object.freeze({
@@ -339,6 +347,7 @@ export function aggregateMarketDay(
     settledPool: 0n,
     upWins: 0,
     downWins: 0,
+    internalStakeTimes: [],
   };
   if (!epochs) return day;
 
@@ -358,7 +367,10 @@ export function aggregateMarketDay(
     const internal = internalByEpoch.get(epoch.toString()) ?? 0n;
     const capped = internal > pool ? pool : internal;
     day.internalAmount += capped;
-    if (capped > 0n) day.internalRounds++;
+    if (capped > 0n) {
+      day.internalRounds++;
+      day.internalStakeTimes.push(Number(round.startTs));
+    }
     const real = pool - capped;
     if (real > 0n) {
       day.realAmount += real;
@@ -391,9 +403,39 @@ export interface DayTotals {
   settledPool: bigint;
   upWins: number;
   downWins: number;
+  /**
+   * Longest board-wide market-making silence inside the window, or null when no window was given.
+   * Null means "not measured" and never "fine" — no caller may read it as green.
+   */
+  marketMakingSilenceSec: number | null;
 }
 
-export function totalsFor(date: string, markets: MarketDay[]): DayTotals {
+/**
+ * The longest stretch of the window during which NO market anywhere carried an internal stake.
+ *
+ * Board-wide on purpose. The bot is routinely narrowed to a single market to stretch testnet gas,
+ * so five silent markets are the designed steady state and a per-market figure would read as five
+ * daily outages — the false alarm 6afcdd9 deleted. The union across markets asks the only question
+ * that has one answer: was anybody making a market at all?
+ *
+ * The leading and trailing gaps count. That is the whole point: on 2026-09-04 the bot died at
+ * 13:34 local and the silence that mattered ran from there to midnight, with no later stake to
+ * bound it. `endTs` is clipped by the caller to `now` for a day still in progress, so an unfinished
+ * day is not accused of a silence that has not happened yet.
+ */
+export function longestSilenceSec(stakeTimes: readonly number[], startTs: number, endTs: number): number {
+  if (endTs <= startTs) return 0;
+  const inside = stakeTimes.filter((ts) => ts >= startTs && ts <= endTs).sort((a, b) => a - b);
+  let longest = 0;
+  let previous = startTs;
+  for (const ts of inside) {
+    if (ts - previous > longest) longest = ts - previous;
+    previous = ts;
+  }
+  return Math.max(longest, endTs - previous);
+}
+
+export function totalsFor(date: string, markets: MarketDay[], window?: { startTs: number; endTs: number }): DayTotals {
   const totals: DayTotals = {
     date,
     markets,
@@ -411,6 +453,7 @@ export function totalsFor(date: string, markets: MarketDay[]): DayTotals {
     settledPool: 0n,
     upWins: 0,
     downWins: 0,
+    marketMakingSilenceSec: null,
   };
   for (const market of markets) {
     totals.slots += market.slots;
@@ -428,6 +471,13 @@ export function totalsFor(date: string, markets: MarketDay[]): DayTotals {
     totals.downWins += market.downWins;
   }
   totals.totalAmount = totals.upAmount + totals.downAmount;
+  if (window) {
+    totals.marketMakingSilenceSec = longestSilenceSec(
+      markets.flatMap((market) => market.internalStakeTimes),
+      window.startTs,
+      window.endTs,
+    );
+  }
   return totals;
 }
 
@@ -453,6 +503,8 @@ export interface Snapshot {
   /** Everything the owner needs to top the board up by hand, because nothing else can. */
   faucet: FaucetStatus | null;
   keeperHealthy: boolean | null;
+  /** Board-wide market-making silence that makes the day a failure. 0 stands the check down. */
+  marketMakingMaxSilenceSec: number;
   errors: string[];
 }
 
@@ -576,6 +628,13 @@ export function evaluateHealth(snapshot: Snapshot): Health {
     if (bad) problems.push(`${account.label} gas ${formatEth(account.balance)} tBNB below ${formatEth(account.minimum)}`);
   }
   if (snapshot.keeperHealthy === false) problems.push('keeper /healthz reports unhealthy');
+  // The gap this section had. Every other term above is about money that is owed or a service that
+  // answers; none of them moves when the bot that produces all the volume simply stops, which is
+  // why 2026-09-04 rendered 正常 over a day the board was unmade for 81% of.
+  const silence = snapshot.today.marketMakingSilenceSec;
+  if (silence !== null && snapshot.marketMakingMaxSilenceSec > 0 && silence > snapshot.marketMakingMaxSilenceSec) {
+    problems.push(`做市中断 ${formatHours(silence)} 小时（阈值 ${formatHours(snapshot.marketMakingMaxSilenceSec)} 小时），六个市场同时无内部下注`);
+  }
   return { healthy: problems.length === 0, problems };
 }
 
@@ -601,6 +660,11 @@ export function formatAmount(value: bigint, decimals: number, dp: number): strin
 
 export function formatEth(value: bigint): string {
   return formatAmount(value, 18, 4);
+}
+
+/** Seconds as hours to one decimal — the scale a market-making outage is actually read at. */
+export function formatHours(seconds: number): string {
+  return (seconds / 3600).toFixed(1);
 }
 
 export function clip(text: string, limit: number): string {
@@ -705,6 +769,16 @@ export function formatReport(snapshot: Snapshot, cfg: ReportConfig): string {
   );
   if (internalLine !== '') activity.push(`内部做市（不计入真实用户）：${internalLine}`);
 
+  // Always rendered when it was measured, green or not. The covered/expected pair and the longest
+  // silence are the two numbers that separate "quiet market" from "the bot is gone", and the
+  // 09-04 report carried neither: 338 covered rounds read as ordinary until you know the day held
+  // 4752 slots and that every one of the 338 landed inside a single 4.5-hour block.
+  if (today.marketMakingSilenceSec !== null && today.slots !== 0) {
+    const share = ((today.internalRounds / today.slots) * 100).toFixed(1);
+    const silence = `最长静默 ${formatHours(today.marketMakingSilenceSec)} 小时`;
+    activity.push(`做市覆盖：${today.internalRounds}/${today.slots} 时间格（${share}%）　${silence}`);
+  }
+
   if (today.totalAmount !== 0n) {
     const sides = formatNonzeroCounts(
       [
@@ -718,6 +792,9 @@ export function formatReport(snapshot: Snapshot, cfg: ReportConfig): string {
 
   const roundsLine = formatNonzeroCounts(
     [
+      // The denominator was computed on every run and thrown away unless the day was totally
+      // empty, which left "开出回合 413" reading as a plain fact rather than 8.7% of the grid.
+      ['时间格', today.slots],
       ['开出回合', today.materialised],
       ['有资金', today.materialised - today.outcomes.empty],
       ['空轮', today.outcomes.empty],
@@ -988,6 +1065,8 @@ interface Config {
   botMin: bigint;
   keeperMin: bigint;
   funderReserve: bigint;
+  /** Board-wide market-making silence that makes a day a failure. 0 stands the check down. */
+  marketMakingMaxSilenceSec: number;
   healthUrl: string | null;
   faucetAddress: Address | null;
   faucetUrl: string;
@@ -1042,6 +1121,13 @@ function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!Number.isFinite(runwayWarnDays) || runwayWarnDays <= 0) {
     throw new Error('UPDOWN_GAS_RUNWAY_WARN_DAYS must be a positive number');
   }
+  // One hour is ~6 dry 10m rounds or 60 dry 1m ones — far outside a slow bot's jitter and far
+  // inside the outages this exists to name. The watchdog pages on the same span within minutes;
+  // this is the daily record of it, so the two agree by construction rather than by coincidence.
+  const marketMakingMaxSilenceSec = Number(env['UPDOWN_MARKET_MAKING_MAX_SILENCE_SECONDS']?.trim() || '3600');
+  if (!Number.isFinite(marketMakingMaxSilenceSec) || marketMakingMaxSilenceSec < 0) {
+    throw new Error('UPDOWN_MARKET_MAKING_MAX_SILENCE_SECONDS must be 0 (off) or a positive number of seconds');
+  }
   const botAddresses = addressList(env['BOT_ADDRESSES']);
   const funderRaw = env['FUNDER_ADDRESS']?.trim();
   const funderAddress = funderRaw ? getAddress(funderRaw) : null;
@@ -1060,6 +1146,7 @@ function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     internalAddresses,
     botAddresses,
     funderAddress,
+    marketMakingMaxSilenceSec: marketMakingMaxSilenceSec,
     botMin: parseEther(env['BOT_MIN_GAS_BNB']?.trim() || '0.01'),
     keeperMin: parseEther(env['KEEPER_MIN_GAS_BNB']?.trim() || '0.05'),
     funderReserve: parseEther(env['FUNDER_RESERVE_BNB']?.trim() || '0.01'),
@@ -1306,7 +1393,10 @@ async function collectDay(
       days.push(aggregateMarketDay(market, epochs, new Map(), new Map(), nowTs));
     }
   }
-  return totalsFor(window.date, days);
+  // A day still in progress is judged only up to now: the hours it has not lived yet are not
+  // silence. For the completed day the report actually sends, `endTs` is already in the past and
+  // the clip is a no-op.
+  return totalsFor(window.date, days, { startTs: window.startTs, endTs: Math.min(window.endTs, nowTs) });
 }
 
 async function collectSnapshot(
@@ -1455,6 +1545,7 @@ async function collectSnapshot(
       warnDays: config.runwayWarnDays,
     },
     keeperHealthy,
+    marketMakingMaxSilenceSec: config.marketMakingMaxSilenceSec,
     errors,
   };
 }

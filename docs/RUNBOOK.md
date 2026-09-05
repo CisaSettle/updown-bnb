@@ -489,6 +489,17 @@ the keeper restart without paging. A run that cannot reach `/healthz` or read th
 that clock where it was, so a flapping endpoint cannot hold an unverified keeper below the grace
 for ever.
 
+It also fails when **no market anywhere** has carried an internal stake for longer than
+`UPDOWN_MARKET_MAKING_MAX_IDLE_SECONDS` (default 3600, 0 switches it off), read straight from the
+stake ledger on chain. That is the check that would have caught 2026-09-04, when the betting bot
+was dead for 20.7 hours and 1,976 consecutive runs of this watchdog reported healthy: a dead bot
+spends no gas, so it drifts further ABOVE the floor above rather than under it, and it settles
+nothing, so `/healthz` stays green. Deliberately board-wide and not per market — the bot is
+routinely narrowed to one market to stretch gas, so five silent markets are the designed steady
+state, and only total silence means the process is gone. A board on which no account has EVER
+staked fails too, rather than reading as unmeasured, because that is the shape of a bot that never
+started on a fresh deployment.
+
 On the first failure it writes a structured `ERROR` to `journalctl -u updown-health-monitor` and
 sends one incident through the dedicated `@bluff_alert_bot`; an undelivered alert is retried, a
 continuing incident is reminded at most hourly, and recovery sends one green notice. Monitoring is

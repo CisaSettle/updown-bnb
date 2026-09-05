@@ -2,6 +2,32 @@
   "schemaVersion": 1,
   "entries": [
     {
+      "id": "2026-09-05-watch-the-bot-that-makes-the-book",
+      "releaseId": "web-2026.09.05.1",
+      "releasedAt": "2026-09-05",
+      "status": "released",
+      "title": {
+        "zh": "做市停了，监控现在看得见",
+        "en": "Market making stopping is now something the monitoring can see"
+      },
+      "summary": {
+        "zh": "做市机器人在 2026-09-04 停了 20.7 小时，期间看门狗跑了 1976 次、每一次都报「healthy」，次日的日报也写着「数据健康 ✅ 正常」。原因是没有任何一项检查与「有没有人在下注」有关：机器人死了不花 gas，余额反而离下限更远；它不结算，keeper 的 /healthz 也照样是绿的。现在看门狗直接从链上读「任一市场最近一笔内部下注」的时间，全盘沉默超过一小时就告警。",
+        "en": "The market-making bot stopped for 20.7 hours on 2026-09-04. The watchdog ran 1,976 times through it and reported healthy every time, and the next morning's report said 数据健康 ✅ 正常. Nothing it checked was a function of whether anyone was betting: a dead bot spends no gas, so its balance drifts further above the floor, and it settles nothing, so the keeper's /healthz stays green. The watchdog now reads the newest internal stake on any market straight off the chain and pages when the whole board has been silent for an hour."
+      },
+      "highlights": {
+        "zh": [
+          "检查是全盘面的，不是逐市场的。为了省测试网 gas，机器人经常被收窄到只做一个市场，所以五个市场安静是设计中的常态；逐市场告警等于每天误报五次，那正是 6afcdd9 刚删掉的那类假警报。只有六个市场同时沉默，才说明进程没了。",
+          "日报补上了两个此前算出来又扔掉的数字：做市覆盖（338/4752 时间格）与最长静默。原来那句「开出回合 413」没有分母，读起来像一件平常事，其实是全天时间格的 8.7%，而且 338 个回合全挤在一段 4.5 小时里。用同一天的链上数据重跑，结论从 ✅ 正常 变成 🔴 异常。",
+          "静默的首尾两段都算数：机器人 13:34 停掉之后没有任何后续下注去界定那段沉默，只统计「两次下注之间」的间隔会把这一天算成零中断。"
+        ],
+        "en": [
+          "The check is board-wide, not per market. The bot is routinely narrowed to a single market to stretch testnet gas, so five silent markets are the designed steady state; a per-market alarm would be five false pages a day — the exact class of false alarm 6afcdd9 had just removed. Only all six going quiet at once means the process is gone.",
+          "The daily report now prints two numbers it had been computing and discarding: market-making coverage (338 of 4,752 grid slots) and the longest silence. \"开出回合 413\" had no denominator, so it read as ordinary; it was 8.7% of the day's slots, and all 338 covered rounds fell inside a single 4.5-hour block. Re-rendered against the same day's chain data, the verdict turns from ✅ 正常 to 🔴 异常.",
+          "The leading and trailing silences count. Nothing bet after the bot died at 13:34, so no later stake bounded that gap — measuring only the intervals between stakes would have scored the day as no outage at all."
+        ]
+      }
+    },
+    {
       "id": "2026-09-04-fallback-faucets-when-the-official-one-is-dry",
       "releaseId": "web-2026.09.04.4",
       "releasedAt": "2026-09-04",
