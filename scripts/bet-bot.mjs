@@ -438,6 +438,7 @@ async function keeperGasGuard() {
  * bet, and what is left of the side cap right now.
  */
 const plans = new Map()
+const dormantMinuteMarkets = new Set()
 const firstBetMinLead = firstBetMinLeadReader()
 async function tick(market) {
   const read = (fn, args = []) => pub.readContract({ address: market.address, abi: MARKET, functionName: fn, args })
@@ -445,6 +446,10 @@ async function tick(market) {
     readBettableRound(read),
     firstBetMinLead(market.address, read),
   ])
+  const dormantMinute = Number(bettableRound.lockTs - bettableRound.startTs) <= 60 &&
+    bettableRound.upAmount === 0n && bettableRound.downAmount === 0n && !maintenanceRequired
+  if (dormantMinute) dormantMinuteMarkets.add(market.key)
+  else dormantMinuteMarkets.delete(market.key)
   let plan = plans.get(market.key)
 
   if (!plan || plan.epoch !== epoch) {
@@ -599,6 +604,7 @@ for (;;) {
   // Rotate priority so earlier transactions cannot repeatedly consume a dormant 1m market's
   // short first-bet window. Account queues still serialize every signing operation.
   const orderedMarkets = [...markets.slice(marketCursor), ...markets.slice(0, marketCursor)]
+    .sort((a, b) => Number(dormantMinuteMarkets.has(b.key)) - Number(dormantMinuteMarkets.has(a.key)))
   marketCursor = (marketCursor + 1) % markets.length
   // One failing market must not starve the other five, so each tick carries its own catch — and
   // a stop signal is honoured between ticks, not just once per pass.
@@ -648,7 +654,9 @@ for (;;) {
     }
   }
   if (stopping) break
-  await sleep(10_000)
+  // Empty minute rounds accept their first stake for only ten seconds. Once awake, return to
+  // the normal cadence; the existing keeper and funded-successor runway take over.
+  await sleep(dormantMinuteMarkets.size ? 1_000 : 10_000)
 }
 await Promise.all(queues.values())
 log('stopped cleanly')
