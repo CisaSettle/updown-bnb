@@ -593,11 +593,16 @@ for (const who of [A, B]) {
 }
 
 let beat = 0
+let marketCursor = 0
 for (;;) {
   if (stopping) break
+  // Rotate priority so earlier transactions cannot repeatedly consume a dormant 1m market's
+  // short first-bet window. Account queues still serialize every signing operation.
+  const orderedMarkets = [...markets.slice(marketCursor), ...markets.slice(0, marketCursor)]
+  marketCursor = (marketCursor + 1) % markets.length
   // One failing market must not starve the other five, so each tick carries its own catch — and
   // a stop signal is honoured between ticks, not just once per pass.
-  for (const market of markets) {
+  for (const market of orderedMarkets) {
     if (stopping) break
     try {
       await tick(market)
