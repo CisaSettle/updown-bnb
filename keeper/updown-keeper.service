@@ -65,7 +65,12 @@ ProtectProc=invisible
 RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
-RestrictAddressFamilies=AF_INET AF_INET6
+# AF_UNIX is here for METRICS_SOCKET. Without it the kernel refuses the socket with
+# `listen EAFNOSUPPORT: address family not supported` — which no test outside systemd can
+# reproduce, because the sandbox is what enforces it (found on the 2026-09-06 deploy). It is a
+# narrow addition: a unix socket cannot leave this host, and the file's own 0660 permissions under
+# RuntimeDirectory remain the access control.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 LockPersonality=true
 MemoryDenyWriteExecute=false
 SystemCallArchitectures=native
