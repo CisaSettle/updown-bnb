@@ -45,6 +45,13 @@ RestartPreventExitStatus=78
 # on a network interface. 0750 lets the container's root traverse it while nobody else can.
 RuntimeDirectory=updown
 RuntimeDirectoryMode=0750
+# Without this the lane dies on the first restart, silently. `RuntimeDirectory=` REMOVES the
+# directory when the unit stops and creates a new one on start — a new inode — while the TLS front's
+# bind mount stays pinned to the old one, so the container goes on seeing an empty directory for
+# ever after. Measured on the 2026-09-06 deploy: host /run/updown was inode 2739482 while the caddy
+# container's was 2738971, and every report 502'd. `yes` keeps one directory for the life of the
+# host, which is what a bind mount needs. The socket inside is still recreated on every start.
+RuntimeDirectoryPreserve=yes
 
 StandardOutput=journal
 StandardError=journal
