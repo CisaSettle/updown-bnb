@@ -39,6 +39,13 @@ RestartSec=5
 # A configuration error (exit 78 / EX_CONFIG) is not fixed by restarting.
 RestartPreventExitStatus=78
 
+# /run/updown, owned by the service user and removed when the unit stops. It holds METRICS_SOCKET
+# when the browser-error ingest is switched on: the TLS front bind-mounts this directory, and the
+# socket's permissions (0660, updown:updown) are the whole access-control story — nothing new goes
+# on a network interface. 0750 lets the container's root traverse it while nobody else can.
+RuntimeDirectory=updown
+RuntimeDirectoryMode=0750
+
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=updown-keeper

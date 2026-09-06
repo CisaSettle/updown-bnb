@@ -61,12 +61,17 @@ const DEFAULT_FAUCET_URL = 'https://www.bnbchain.org/en/testnet-faucet';
  * qualifier, and — as on 2026-09-04 — it answers "The faucet has insufficient funds" because the
  * dispenser itself is empty. BNB Chain's own page anticipates the second by linking elsewhere, so
  * the report carries those links rather than making the owner go hunting at the one moment it has
- * just told them to claim. Both defaults were claimed live that day, and neither demands the
- * mainnet balance the primary does. QuickNode's path is `/binance-smart-chain`; `/bsc/testnet`
- * only redirects.
+ * just told them to claim. Neither default demands the BSC-mainnet balance the primary does.
+ *
+ * QuickNode was removed on 2026-09-06. It gates on an ETH MAINNET balance — the check that made it
+ * reject fresh wallets on 2026-09-05 (`web/src/config/faucet.ts`) — and every operational account
+ * here holds zero ETH, so it would refuse the very address this report tells the owner to claim
+ * for. A fallback that cannot serve the funder is worse than no fallback: it spends the owner's
+ * attention at the moment gas has already run out. The official Telegram bot replaces it; it takes
+ * an address with no qualifier at all, and it is what the app itself now sends users to.
  */
 const DEFAULT_FAUCET_FALLBACK_URLS =
-  'https://faucet.quicknode.com/binance-smart-chain,https://tokentool.bitbond.com/faucet/bsc-testnet';
+  'https://t.me/bnbchain_official_bot,https://tokentool.bitbond.com/faucet/bsc-testnet';
 const DEFAULT_MAINNET_RPC = 'https://bsc-dataseed1.bnbchain.org';
 const EXPECTED_MARKETS = ['bnbUsd1m', 'bnbUsd10m', 'btcUsd1m', 'btcUsd10m', 'ethUsd1m', 'ethUsd10m'] as const;
 /** Grid slots per `getRounds` call. Large enough to keep a 1m market to ~15 calls a day. */

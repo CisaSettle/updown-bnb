@@ -111,6 +111,20 @@ export interface KeeperConfig {
   logLevel: LogLevel;
   metricsPort: number;
   metricsHost: string;
+  /** Extra unix socket for the same routes; empty when none. See `ServerDeps.socketPath`. */
+  metricsSocket: string;
+
+  /**
+   * Ingestion of error reports from the web app. OFF by default: it is the only input this process
+   * accepts, and it runs beside the signing key, so it exists only where an operator has said so.
+   */
+  clientErrors: {
+    enabled: boolean;
+    maxPerMinute: number;
+    maxSignatures: number;
+    /** Empty accepts any origin. A noise filter, never authentication — `Origin` is spoofable. */
+    allowedOrigins: string[];
+  };
 
   price: {
     endpoint: string;
@@ -380,6 +394,17 @@ export function loadConfig(options: LoadConfigOptions = {}): KeeperConfig {
 
   const metricsPort = readInt(env, 'METRICS_PORT', 9464, issues, 0, 65535);
   const metricsHost = readString(env, 'METRICS_HOST', '0.0.0.0') as string;
+  const metricsSocket = (readString(env, 'METRICS_SOCKET', '') as string).trim();
+
+  const clientErrors = {
+    enabled: readBool(env, 'CLIENT_ERROR_REPORTS', false, issues),
+    maxPerMinute: readInt(env, 'CLIENT_ERROR_MAX_PER_MINUTE', 60, issues, 1, 10_000),
+    maxSignatures: readInt(env, 'CLIENT_ERROR_MAX_SIGNATURES', 32, issues, 1, 1_000),
+    allowedOrigins: (readString(env, 'CLIENT_ERROR_ALLOWED_ORIGINS', '') as string)
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter((origin) => origin !== ''),
+  };
 
   // ── deployments ──────────────────────────────────────────────────────────
   let deployment: DeploymentFile | undefined;
@@ -487,6 +512,8 @@ export function loadConfig(options: LoadConfigOptions = {}): KeeperConfig {
     logLevel,
     metricsPort,
     metricsHost,
+    metricsSocket,
+    clientErrors,
 
     price: {
       endpoint: priceEndpoint,
@@ -557,6 +584,10 @@ export function redactedConfig(config: KeeperConfig): Record<string, unknown> {
     registry: config.deployment.registry,
     priceApi: config.price.endpoint,
     metricsPort: config.metricsPort,
+    metricsSocket: config.metricsSocket || null,
+    // Loud at boot: this is the only input surface the process has, and an operator has to be able
+    // to see from the journal whether it is open.
+    clientErrorReports: config.clientErrors.enabled,
     logLevel: config.logLevel,
     dryRun: config.dryRun,
     strictRelayUpdater: config.strictRelayUpdater,

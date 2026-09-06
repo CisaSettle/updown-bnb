@@ -181,6 +181,8 @@ function makeConfig(): KeeperConfig {
     logLevel: 'error',
     metricsPort: 0,
     metricsHost: '127.0.0.1',
+    metricsSocket: '',
+    clientErrors: { enabled: false, maxPerMinute: 60, maxSignatures: 32, allowedOrigins: [] },
     price: {
       endpoint: 'https://example.invalid/p',
       fallbackEndpoints: [],

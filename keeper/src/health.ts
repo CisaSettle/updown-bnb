@@ -29,6 +29,8 @@
  * supposed to do can happen and the per-market staleness budget takes intervals to notice.
  */
 
+import type { ClientErrorSummary } from './clientErrors.js';
+
 export type MarketHealthState = 'ok' | 'stale' | 'inactive' | 'paused' | 'degraded' | 'unknown';
 
 /**
@@ -143,6 +145,27 @@ export interface MarketHealth {
   settlement: SettlementWindowStats | null;
 }
 
+/**
+ * Exceptions the keeper caught and swallowed in order to stay alive.
+ *
+ * `index.ts` deliberately survives an `uncaughtException` or an `unhandledRejection` — one bad RPC
+ * response must not take the keeper down mid-round — and until this field existed the only trace
+ * was a journal line and a Prometheus counter nothing scraped. The watchdog reads `/healthz` and
+ * nothing else, so a keeper throwing on every tick reported 200 and paged nobody. Reporting the
+ * count here is what gives that failure a way out of the process.
+ *
+ * It is NOT a blocker. A swallowed exception says something is wrong; it does not say the markets
+ * have stopped, and marking `/healthz` 503 for it would turn a diagnosis into an outage.
+ */
+export interface UncaughtSummary {
+  /** How many have been swallowed since this process started. Resets when the keeper restarts. */
+  count: number;
+  /** The most recent one, scrubbed and truncated: enough to name it in an alert, never a payload. */
+  latest: string | null;
+}
+
+export const NO_UNCAUGHT: UncaughtSummary = { count: 0, latest: null };
+
 export interface HealthReport {
   healthy: boolean;
   uptimeSec: number;
@@ -151,6 +174,17 @@ export interface HealthReport {
   warnings: string[];
   /** Keeper-wide conditions that make the report unhealthy by themselves. */
   blockers: string[];
+  /** Exceptions swallowed to keep the process alive. Reported, never a blocker. */
+  uncaught: UncaughtSummary;
+  /**
+   * What the web app has reported, when ingestion is switched on. ABSENT — not zero — when it is
+   * off or when the keeper build predates it, because "nobody is collecting" and "nothing went
+   * wrong" are opposite claims and the watchdog must not confuse them.
+   *
+   * It is a browser's word about a browser, so it says nothing about this keeper's health and never
+   * touches `healthy`. The watchdog reports it on its own lane, for the same reason.
+   */
+  clientErrors?: ClientErrorSummary;
 }
 
 export interface HealthOptions {
@@ -310,6 +344,8 @@ export function evaluateHealth(
   warnings: readonly string[] = [],
   options: HealthOptions = DEFAULT_HEALTH_OPTIONS,
   blockers: readonly string[] = [],
+  uncaught: UncaughtSummary = NO_UNCAUGHT,
+  clientErrors?: ClientErrorSummary,
 ): HealthReport {
   const evaluated = markets.map((m) => evaluateMarketHealth(m, nowMs, options));
   return {
@@ -319,6 +355,9 @@ export function evaluateHealth(
     markets: evaluated,
     warnings: [...warnings],
     blockers: [...blockers],
+    uncaught: { count: uncaught.count, latest: uncaught.latest },
+    // Spread, not defaulted: the field stays absent when nothing is collecting.
+    ...(clientErrors ? { clientErrors } : {}),
   };
 }
 

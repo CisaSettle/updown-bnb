@@ -7,6 +7,7 @@ import {
 } from 'viem'
 import { allErrorsAbi } from '../abi'
 import { t, type Lang, type Text } from './i18n'
+import { report } from './report'
 
 /**
  * Human copy for every custom error the protocol can revert with. A user must never see a raw
@@ -192,8 +193,23 @@ export const ERROR_TEXT = {
   },
   unnamedRevert: { en: 'The contract rejected this transaction.', zh: '合约拒绝了这笔交易。' },
   noGas: {
-    en: 'Not enough gas balance in your wallet to send this transaction.',
-    zh: '钱包里的余额不够付这笔交易的 gas。',
+    en: 'This wallet does not have enough BNB to pay the gas for this transaction. Top it up and try again.',
+    zh: '这个钱包里的 BNB 不够付这笔交易的 gas。先充一点再试。',
+  },
+  // The three ways a node says "you already have one of these in flight". All arrive as -32000, all
+  // used to reach the reader as the generic fallback, and all three have a different next step —
+  // wait, wait-or-speed-up, and pay more — so they are three messages rather than one.
+  alreadyKnown: {
+    en: 'This exact transaction is already queued on the network. Give it a moment to confirm rather than sending it again.',
+    zh: '这笔一模一样的交易已经在网络里排队了。等它确认，不要再发一次。',
+  },
+  replacementUnderpriced: {
+    en: 'This wallet already has a transaction waiting with the same nonce, and the network only replaces one for a higher fee. Wait for the pending transaction, or speed it up in your wallet.',
+    zh: '这个钱包里已经有一笔用同一个 nonce 的交易在等待，网络只接受手续费更高的替换。等那一笔确认，或者在钱包里给它加速。',
+  },
+  underpriced: {
+    en: 'The network turned this transaction down for offering too low a gas price. Raise the fee in your wallet and try again.',
+    zh: '网络嫌这笔交易出的 gas 价格太低，把它退回来了。在钱包里把手续费调高再试。',
   },
   wrongChain: {
     en: 'Your wallet is on a different network. Switch network and try again.',
@@ -307,6 +323,115 @@ function decodeRaw(raw: Hex | undefined): { name: string; args?: readonly unknow
   }
 }
 
+/**
+ * Every `details` string in the cause chain, lower-cased: the words the NODE wrote.
+ *
+ * This is the field that actually carries the diagnosis, and the reason a wallet with no gas used
+ * to be told "出了点问题，重试一次（错误码 -32000）". viem's top-level `shortMessage` is its own UI
+ * copy, not the node's: an `InsufficientFundsError` says "The total cost (gas * gas fee + value) of
+ * executing this transaction exceeds the balance of the account." — a sentence that does not
+ * contain the phrase "insufficient funds" anywhere — and anything viem could not name at all says
+ * only "Missing or invalid parameters.". Matching on `shortMessage` therefore missed the whole
+ * -32000 family, while `details` carried "insufficient funds for gas * price + value: balance 0…"
+ * up the chain the entire time.
+ *
+ * `details` specifically, and not the whole message: viem's `metaMessages` pretty-print the request
+ * arguments, so a full-message match would find the word "nonce" — and an address, and the calldata
+ * — in every transaction error ever thrown.
+ */
+function nodeDetails(err: unknown, depth = 0): string {
+  if (!err || typeof err !== 'object' || depth > 8) return ''
+  const e = err as { details?: unknown; data?: unknown; cause?: unknown }
+  const own = typeof e.details === 'string' ? e.details : ''
+  // `data` matters as much as `details` for an injected wallet. MetaMask does not pass the node's
+  // reply through — it wraps it as `{code:-32603, message:'Internal JSON-RPC error.', data:{code:
+  // -32000, message:'insufficient funds …'}}`, and viem copies only the OUTER message into
+  // `details`. Without this hop the same empty wallet is diagnosable through the app's own demo
+  // connector and undiagnosable through MetaMask, which is the wallet most people use.
+  const data = e.data as { message?: unknown } | undefined
+  const nested = typeof data?.message === 'string' ? data.message : ''
+  return `${own} ${nested} ${nodeDetails(e.data, depth + 1)} ${nodeDetails(e.cause, depth + 1)}`.toLowerCase()
+}
+
+/**
+ * Failures named by the library that threw them.
+ *
+ * A class NAME is the one thing viem and wagmi do not rephrase between releases; their prose is
+ * their own UI copy and changes freely. Every branch here replaced a substring test against a
+ * sentence the library never actually emits — `chain` + `mismatch` against a message that says
+ * "does not match the target chain", `timed out` against "The request took too long to respond" —
+ * each of which had been quietly dead, sending its failure to the generic fallback instead.
+ */
+const FAILURE_BY_NAME: Record<string, Text> = {
+  InsufficientFundsError: ERROR_TEXT.noGas,
+  ChainMismatchError: ERROR_TEXT.wrongChain,
+  ChainNotConfiguredError: ERROR_TEXT.wrongChain,
+  TimeoutError: ERROR_TEXT.timeout,
+  // wagmi's errors do not extend viem's `BaseError`, so they never reached the branch that used to
+  // match this — an English reader was shown "Connector not connected.\n\nVersion: @wagmi/core@2.x"
+  // and a 中文 reader the bare fallback, while the copy for it sat unused.
+  ConnectorNotConnectedError: ERROR_TEXT.disconnected,
+  ConnectorUnavailableReconnectingError: ERROR_TEXT.disconnected,
+  NonceTooLowError: ERROR_TEXT.nonce,
+  NonceTooHighError: ERROR_TEXT.nonce,
+  NonceMaxValueError: ERROR_TEXT.nonce,
+  HttpRequestError: ERROR_TEXT.network,
+  ExecutionRevertedError: ERROR_TEXT.reverted,
+}
+
+/** The copy for the first named failure in the cause chain. */
+function namedFailureCopy(err: unknown, depth = 0): Text | undefined {
+  if (!err || typeof err !== 'object' || depth > 8) return undefined
+  const e = err as { name?: unknown; cause?: unknown }
+  if (typeof e.name === 'string' && FAILURE_BY_NAME[e.name]) return FAILURE_BY_NAME[e.name]
+  return namedFailureCopy(e.cause, depth + 1)
+}
+
+/**
+ * Envelopes a wallet or a node writes around someone else's failure.
+ *
+ * viem builds a `ContractFunctionRevertedError` for a -32603, so its `reason` is whatever the
+ * WALLET said — "Internal JSON-RPC error." — not what the contract said. Passing that through as a
+ * revert reason would hand a 中文 reader an English sentence no contract ever wrote, which is the
+ * one thing the passthrough rule exists to prevent.
+ */
+const ENVELOPE = /internal (?:json-)?rpc error|internal error|missing or invalid parameters|unknown error/
+
+/**
+ * Everything the node might have said about this failure, from wherever the wrapper put it.
+ *
+ * `messageChain` is included because a wallet that throws a plain object rather than a viem error
+ * still quotes the node verbatim in its `message`. It is safe to match against the patterns below
+ * for the same reason `nodeDetails` exists: they are node sentences, and none of them appears in
+ * viem's pretty-printed request arguments.
+ */
+function nodeText(err: unknown): string {
+  return `${nodeDetails(err)} ${messageChain(err)}`
+}
+
+/**
+ * The copy for a failure the node named in its own words.
+ *
+ * `text` must be node-authored — a `details` string, or a bare provider error's message — never
+ * viem's pretty-printed request arguments. A revert is left alone on purpose: its reason is the
+ * contract's sentence, not the node's, and "execution reverted: insufficient funds" from some
+ * token would otherwise be reported as the user's own wallet being empty.
+ */
+function nodeCopy(text: string): Text | undefined {
+  if (!text.trim() || text.includes('execution reverted')) return undefined
+  // Both spellings geth uses; BSC sends the first from `eth_sendRawTransaction` and the shorter
+  // "insufficient funds for transfer" from `eth_estimateGas` once a gas price is set.
+  if (text.includes('insufficient funds') || text.includes('exceeds transaction sender account balance')) {
+    return ERROR_TEXT.noGas
+  }
+  if (text.includes('already known') || text.includes('known transaction')) return ERROR_TEXT.alreadyKnown
+  // Must precede the bare "underpriced" test: a replacement is a different situation with a
+  // different next step, and it contains the shorter phrase.
+  if (text.includes('replacement transaction underpriced')) return ERROR_TEXT.replacementUnderpriced
+  if (text.includes('underpriced')) return ERROR_TEXT.underpriced
+  return undefined
+}
+
 /** Every message in the cause chain, lower-cased, so a wrapped error is not invisible. */
 function messageChain(err: unknown, depth = 0): string {
   if (!err || depth > 6) return ''
@@ -378,13 +503,11 @@ function looksLikeRejection(err: unknown): boolean {
 export function humanizeError(err: unknown, lang: Lang, fallback: Text = ERROR_TEXT.fallback): string {
   if (!err) return t(lang, fallback)
   if (looksLikeRejection(err)) return t(lang, ERROR_TEXT.rejected)
-  // Whatever we end up showing, the original survives somewhere a person can go and read it. An
-  // error we could not classify is precisely the one worth having the full text of.
-  if (typeof console !== 'undefined') console.warn('[updown] unhandled error surfaced to the user:', err)
 
   const connector = connectorCopy(err)
   if (connector) return t(lang, connector)
 
+  // A decoded custom error is the most specific thing anyone can say, so it goes first.
   if (err instanceof BaseError) {
     const reverted = err.walk((e) => e instanceof ContractFunctionRevertedError)
     if (reverted instanceof ContractFunctionRevertedError) {
@@ -392,24 +515,50 @@ export function humanizeError(err: unknown, lang: Lang, fallback: Text = ERROR_T
         ? { name: reverted.data.errorName, args: reverted.data.args as readonly unknown[] | undefined }
         : decodeRaw(reverted.raw)
       if (named) return t(lang, errorCopy(named.name, named.args))
-      if (reverted.reason && !HEXY.test(reverted.reason)) return reverted.reason
+      // Not every "revert" is one. viem classifies a -32603 as a revert, and an injected wallet
+      // wraps a plain gas failure in exactly that code — so the node's own words are consulted
+      // before this error's `reason` is believed to be the contract's.
+      const spokenByNode = nodeCopy(nodeText(err))
+      if (spokenByNode) return t(lang, spokenByNode)
+      if (reverted.reason && !HEXY.test(reverted.reason) && !ENVELOPE.test(reverted.reason.toLowerCase())) {
+        return reverted.reason
+      }
       return t(lang, ERROR_TEXT.unnamedRevert)
     }
+  }
 
+  // Then the node's own words. They are more specific than any library's summary of them — it is
+  // the node, not viem, that distinguishes "already known" from "replacement transaction
+  // underpriced" — and for the -32000 family they are the only place the diagnosis appears at all.
+  const spokenByNode = nodeCopy(nodeText(err))
+  if (spokenByNode) return t(lang, spokenByNode)
+
+  // Then the name the throwing library gave it. This branch is deliberately outside the
+  // `instanceof BaseError` gate: wagmi's errors are not viem's, and gating on that class is why
+  // they were never classified at all.
+  const spokenByName = namedFailureCopy(err)
+  if (spokenByName) return t(lang, spokenByName)
+
+  if (err instanceof BaseError) {
+    // Last resort inside viem: its own prose. Kept as a net for messages neither the node nor the
+    // class name accounted for, with `execution reverted` first — a contract's revert reason can
+    // itself mention funds, and reading that as an empty wallet blames the reader for the
+    // contract's answer.
     const short = err.shortMessage || err.message || ''
     const lower = short.toLowerCase()
+    if (lower.includes('execution reverted')) return t(lang, ERROR_TEXT.reverted)
     if (lower.includes('insufficient funds')) return t(lang, ERROR_TEXT.noGas)
     if (lower.includes('chain') && lower.includes('mismatch')) return t(lang, ERROR_TEXT.wrongChain)
     if (lower.includes('timed out') || lower.includes('timeout')) return t(lang, ERROR_TEXT.timeout)
     if (lower.includes('connector not connected') || lower.includes('no connector')) {
       return t(lang, ERROR_TEXT.disconnected)
     }
-    if (lower.includes('execution reverted')) return t(lang, ERROR_TEXT.reverted)
     if (lower.includes('nonce')) return t(lang, ERROR_TEXT.nonce)
     if (NETWORKY.test(lower)) return t(lang, ERROR_TEXT.network)
     if (RPCY.test(lower)) return t(lang, ERROR_TEXT.rpc)
     const spoken = passthrough(short, lang, fallback)
-    return spoken === fallback ? fallbackWithCode(err, lang, fallback) : t(lang, spoken)
+    if (spoken === fallback) return unclassified(err, lang, fallback)
+    return t(lang, spoken)
   }
 
   const message = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
@@ -417,5 +566,20 @@ export function humanizeError(err: unknown, lang: Lang, fallback: Text = ERROR_T
     const spoken = passthrough(message, lang, fallback)
     if (spoken !== fallback) return t(lang, spoken)
   }
+  return unclassified(err, lang, fallback)
+}
+
+/**
+ * The last exit: nothing in this file could name what happened.
+ *
+ * Both records live here rather than at the top of `humanizeError`, where the `console.warn` used
+ * to sit firing for every error including the ones that go on to be named perfectly. This is the
+ * only branch where "we do not know what this is" is true, and it is the only branch worth anyone's
+ * attention — the reader gets the generic line either way, and an operator gets told this happened
+ * to somebody, which before now nobody ever was.
+ */
+function unclassified(err: unknown, lang: Lang, fallback: Text): string {
+  if (typeof console !== 'undefined') console.warn('[updown] unhandled error surfaced to the user:', err)
+  report('unclassified', err)
   return fallbackWithCode(err, lang, fallback)
 }

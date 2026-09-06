@@ -1,4 +1,6 @@
-import { BaseError, ContractFunctionRevertedError, encodeErrorResult } from 'viem'
+import { BaseError, ChainMismatchError, ContractFunctionRevertedError, InvalidInputRpcError, RpcRequestError, TimeoutError, encodeErrorResult } from 'viem'
+import { ConnectorNotConnectedError } from '@wagmi/core'
+import { getContractError, getEstimateGasError, getTransactionError } from 'viem/utils'
 import { describe, expect, it } from 'vitest'
 import { allErrorsAbi } from '../../abi'
 import { ERROR_COPY, ERROR_TEXT, errorCopy, faucetCooldownCopy, humanizeError, isRequestAlreadyPending } from '../errors'
@@ -13,6 +15,67 @@ function revertWith(errorName: string, args?: readonly unknown[]): BaseError {
   } as Parameters<typeof encodeErrorResult>[0])
   const reverted = new ContractFunctionRevertedError({ abi: allErrorsAbi, data, functionName: 'betUp' })
   return new BaseError('reverted', { cause: reverted })
+}
+
+/**
+ * The error the app ACTUALLY receives when the node refuses a write, assembled through viem's own
+ * wrappers rather than hand-written.
+ *
+ * A `new BaseError('insufficient funds for gas')` proves nothing: viem never produces that
+ * sentence. Its real `shortMessage` for the same node reply is "The total cost (gas * gas fee +
+ * value) … exceeds the balance of the account.", which contains none of the words a classifier
+ * would look for — which is exactly how a wallet with no gas came to be told "出了点问题".
+ */
+function nodeRefusal(message: string, code = -32000): BaseError {
+  return nodeRefusalWithData(message, code)
+}
+
+/**
+ * The demo wallet's chain, which is one wrapper deeper.
+ *
+ * A local account signs in the page, so viem estimates gas itself and the node's refusal arrives
+ * through `getEstimateGasError` BEFORE the two wrappers an injected wallet produces. That is the
+ * path the owner was actually on, and no test built it.
+ */
+function demoRefusal(message: string, code = -32000): BaseError {
+  const account = { address: '0x2222222222222222222222222222222222222222', type: 'local' } as never
+  const rpc = new RpcRequestError({
+    body: { method: 'eth_estimateGas', params: [] },
+    error: { code, message },
+    url: 'https://data-seed-prebsc-1-s1.bnbchain.org:8545',
+  })
+  const estimate = getEstimateGasError(new InvalidInputRpcError(rpc) as never, { account, chain: undefined, docsPath: undefined } as never)
+  const tx = getTransactionError(estimate as never, { account, chain: undefined, docsPath: undefined })
+  return getContractError(tx, {
+    abi: allErrorsAbi,
+    address: '0x1111111111111111111111111111111111111111',
+    args: [true],
+    docsPath: undefined,
+    functionName: 'setAutoClaimOptIn',
+    sender: '0x2222222222222222222222222222222222222222',
+  })
+}
+
+/** The same, for a wallet that nests the node's real reply under `data` instead of passing it on. */
+function nodeRefusalWithData(message: string, code: number, data?: { code: number; message: string }): BaseError {
+  const rpc = new RpcRequestError({
+    body: { method: 'eth_sendRawTransaction', params: [] },
+    error: { code, message, ...(data ? { data } : {}) },
+    url: 'https://data-seed-prebsc-1-s1.bnbchain.org:8545',
+  })
+  const tx = getTransactionError(new InvalidInputRpcError(rpc), {
+    account: { address: '0x2222222222222222222222222222222222222222', type: 'json-rpc' } as never,
+    chain: undefined,
+    docsPath: undefined,
+  })
+  return getContractError(tx, {
+    abi: allErrorsAbi,
+    address: '0x1111111111111111111111111111111111111111',
+    args: [true],
+    docsPath: undefined,
+    functionName: 'setAutoClaimOptIn',
+    sender: '0x2222222222222222222222222222222222222222',
+  })
 }
 
 const CJK = /[一-鿿]/
@@ -255,6 +318,121 @@ describe('humanizeError', () => {
       expect(/[a-z]{3,}\s+[a-z]{2,}/.test(zh), short).toBe(false)
       expect(humanizeError(new BaseError(short), 'en'), short).toBe(ERROR_TEXT[key].en)
     }
+  })
+
+  // The owner's report, exactly: "自动领取设置 · 失败 / 出了点问题，重试一次（错误码 -32000）" after
+  // clicking the auto-collect toggle on a freshly generated demo wallet with no tBNB. Every one of
+  // these is a real BSC reply, and every one of them used to land in the generic fallback because
+  // the classifier read viem's summary instead of the node's own sentence.
+  describe('the -32000 family a node refuses a write with', () => {
+    it('tells a wallet with no gas that it has no gas, in both languages', () => {
+      for (const message of [
+        'insufficient funds for gas * price + value: balance 0, tx cost 180000000000000, overshot 180000000000000',
+        'insufficient funds for transfer',
+      ]) {
+        expect(humanizeError(nodeRefusal(message), 'zh'), message).toBe(ERROR_TEXT.noGas.zh)
+        expect(humanizeError(nodeRefusal(message), 'en'), message).toBe(ERROR_TEXT.noGas.en)
+      }
+    })
+
+    it('never falls back to the bare code for a failure the node named', () => {
+      for (const [message, key] of [
+        ['insufficient funds for gas * price + value: balance 0', 'noGas'],
+        ['already known', 'alreadyKnown'],
+        ['replacement transaction underpriced', 'replacementUnderpriced'],
+        ['transaction underpriced', 'underpriced'],
+      ] as Array<[string, keyof typeof ERROR_TEXT]>) {
+        const zh = humanizeError(nodeRefusal(message), 'zh')
+        expect(zh, message).toBe(ERROR_TEXT[key].zh)
+        expect(zh, message).not.toContain('-32000')
+        expect(zh, message).not.toBe(ERROR_TEXT.fallback.zh)
+      }
+    })
+
+    // A wallet extension throws the provider error straight through, unwrapped by viem. The node
+    // wrote the same sentence, so the reader gets the same answer.
+    it('reads the same node sentence out of a bare provider error', () => {
+      const bare = { code: -32000, message: 'insufficient funds for gas * price + value: balance 0' }
+      expect(humanizeError(bare, 'zh')).toBe(ERROR_TEXT.noGas.zh)
+      expect(humanizeError(bare, 'en')).toBe(ERROR_TEXT.noGas.en)
+    })
+
+    // The demo wallet signs in the page, so viem estimates gas itself and the refusal arrives one
+    // wrapper deeper than an injected wallet's. It is the path the owner was on.
+    it('says the same thing through the demo wallet’s deeper chain', () => {
+      expect(humanizeError(demoRefusal('insufficient funds for transfer'), 'zh')).toBe(ERROR_TEXT.noGas.zh)
+      expect(humanizeError(demoRefusal('insufficient funds for transfer'), 'en')).toBe(ERROR_TEXT.noGas.en)
+    })
+
+    // The guard that keeps a contract's own words out of the wallet's mouth. Deliberately at the
+    // DEFAULT -32000: a revert sent under code 3 takes viem's decoding branch and never reaches
+    // the prose tests where the two could be confused, so testing that code proves nothing here.
+    it('does not blame the wallet for a revert that happens to mention funds', () => {
+      for (const build of [nodeRefusal, demoRefusal]) {
+        const reverted = build('execution reverted: ERC20: insufficient funds')
+        expect(reverted.shortMessage.toLowerCase()).toContain('insufficient funds')
+        expect(humanizeError(reverted, 'zh')).toBe(ERROR_TEXT.reverted.zh)
+        expect(humanizeError(reverted, 'en')).toBe(ERROR_TEXT.reverted.en)
+      }
+    })
+
+    // Nothing above weakens the rule the fallback exists for: a code we cannot name still shows
+    // its number rather than pretending to know more than it does.
+    it('still carries the code for a -32000 nobody has named', () => {
+      const zh = humanizeError(nodeRefusal('some future node message'), 'zh')
+      expect(zh).toContain('-32000')
+    })
+
+    // An injected wallet does not pass the node's reply through. MetaMask wraps it as -32603 with
+    // the real sentence on `data`, and viem — which reads only the OUTER message into `details` —
+    // then classifies the whole thing as a REVERT whose reason is the wallet's English envelope.
+    // Without this the same empty wallet is diagnosable through the app's own demo connector and
+    // undiagnosable through the wallet most people actually use.
+    it('reaches the node’s sentence through an injected wallet’s -32603 envelope', () => {
+      const wrapped = nodeRefusalWithData('Internal JSON-RPC error.', -32603, {
+        code: -32000,
+        message: 'err: insufficient funds for gas * price + value: address 0x… have 0 want 180000000000000',
+      })
+      expect(humanizeError(wrapped, 'zh')).toBe(ERROR_TEXT.noGas.zh)
+      expect(humanizeError(wrapped, 'en')).toBe(ERROR_TEXT.noGas.en)
+      // …and the wallet's own English envelope never reaches a reader as if the contract wrote it.
+      for (const lang of ['en', 'zh'] as const) {
+        expect(humanizeError(wrapped, lang)).not.toContain('Internal JSON-RPC error')
+      }
+    })
+
+    it('does not report a wallet envelope as something the contract said', () => {
+      const opaque = nodeRefusalWithData('Internal JSON-RPC error.', -32603, { code: -32000, message: 'nothing recognisable' })
+      expect(humanizeError(opaque, 'zh')).toBe(ERROR_TEXT.unnamedRevert.zh)
+      expect(humanizeError(opaque, 'en')).toBe(ERROR_TEXT.unnamedRevert.en)
+    })
+  })
+
+  // Each of these used to be matched against a sentence the library does not write, so each was
+  // dead: the copy existed, and the reader got the generic fallback anyway. They are asserted
+  // against the real objects here, because a hand-written message proves only that the test and
+  // the code agree with each other.
+  describe('failures named by the library that threw them', () => {
+    it('classifies viem’s own errors by what viem actually throws', () => {
+      const mismatch = new ChainMismatchError({ chain: { id: 56, name: 'BNB Smart Chain' } as never, currentChainId: 97 })
+      expect(mismatch.shortMessage).not.toContain('mismatch')
+      expect(humanizeError(mismatch, 'zh')).toBe(ERROR_TEXT.wrongChain.zh)
+      expect(humanizeError(mismatch, 'en')).toBe(ERROR_TEXT.wrongChain.en)
+
+      const timeout = new TimeoutError({ body: {}, url: 'https://data-seed-prebsc-1-s1.bnbchain.org:8545' })
+      expect(timeout.shortMessage.toLowerCase()).not.toContain('timed out')
+      expect(humanizeError(timeout, 'zh')).toBe(ERROR_TEXT.timeout.zh)
+      expect(humanizeError(timeout, 'en')).toBe(ERROR_TEXT.timeout.en)
+    })
+
+    // wagmi's errors do not extend viem's BaseError, so they skipped the whole classifying branch.
+    it('classifies wagmi’s errors too, and leaks no library version to the reader', () => {
+      const disconnected = new ConnectorNotConnectedError()
+      expect(disconnected).not.toBeInstanceOf(BaseError)
+      expect(humanizeError(disconnected, 'zh')).toBe(ERROR_TEXT.disconnected.zh)
+      expect(humanizeError(disconnected, 'en')).toBe(ERROR_TEXT.disconnected.en)
+      expect(humanizeError(disconnected, 'en')).not.toContain('@wagmi/core')
+    })
   })
 
   it('falls back in the reader’s language when there is nothing usable at all', () => {

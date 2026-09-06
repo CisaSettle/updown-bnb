@@ -128,7 +128,7 @@ const snapshot = (over: Partial<Snapshot> = {}): Snapshot => ({
 const faucet = (over: Partial<FaucetStatus> = {}): FaucetStatus => ({
   address: '0xE6b9a3895Ab013A1E82909f175f13D35400c6200' as Address,
   url: 'https://www.bnbchain.org/en/testnet-faucet',
-  fallbackUrls: ['https://faucet.quicknode.com/binance-smart-chain', 'https://tokentool.bitbond.com/faucet/bsc-testnet'],
+  fallbackUrls: ['https://t.me/bnbchain_official_bot', 'https://tokentool.bitbond.com/faucet/bsc-testnet'],
   qualifierWei: parseEther('0.031'),
   qualifierMinimumWei: parseEther('0.002'),
   burnPerDayWei: parseEther('0.026'),
@@ -1085,7 +1085,7 @@ describe('the claim section', () => {
     // insufficient funds", the dispenser itself being empty, which no amount of qualifying fixes.
     const text = formatReport(snapshot(), cfg);
     expect(text).toContain(
-      '备用水龙头（官方没币时；要求各不相同）：https://faucet.quicknode.com/binance-smart-chain　' +
+      '备用水龙头（官方没币时；要求各不相同）：https://t.me/bnbchain_official_bot　' +
         'https://tokentool.bitbond.com/faucet/bsc-testnet',
     );
   });

@@ -20,7 +20,8 @@ import { encodeAbiParameters, encodeEventTopics, type Address } from 'viem';
 import { Keeper } from '../src/keeper.js';
 import { marketAbi } from '../src/abi.js';
 import { handleRequest } from '../src/server.js';
-import { createLogger } from '../src/logger.js';
+import { createLogger, registerSecret } from '../src/logger.js';
+import { describeUncaught } from '../src/keeper.js';
 import type { KeeperConfig } from '../src/config.js';
 import type { Clients } from '../src/chain.js';
 
@@ -59,6 +60,8 @@ function makeConfig(): KeeperConfig {
     logLevel: 'error',
     metricsPort: 0,
     metricsHost: '127.0.0.1',
+    metricsSocket: '',
+    clientErrors: { enabled: false, maxPerMinute: 60, maxSignatures: 32, allowedOrigins: [] },
     price: {
       endpoint: 'https://example.invalid/p',
       fallbackEndpoints: [],
@@ -656,5 +659,40 @@ describe('Keeper clock reaching its markets', () => {
     );
 
     await h.keeper.stop();
+  });
+});
+
+/**
+ * An exception the keeper swallowed has to leave the process to be worth anything, and the way out
+ * is the health report the watchdog already reads. Before this the only trace was a journal line
+ * and a Prometheus counter nothing scrapes, so a keeper throwing on every tick reported 200 and
+ * paged nobody.
+ */
+describe('exceptions swallowed to stay alive', () => {
+  it('leaves the process on /healthz, without turning a diagnosis into an outage', () => {
+    const { keeper } = makeKeeper();
+    expect(keeper.health().uncaught).toEqual({ count: 0, latest: null });
+
+    keeper.noteUncaught(new TypeError('cannot read properties of undefined'));
+    keeper.noteUncaught(new Error('second one'));
+    const report = keeper.health();
+    expect(report.uncaught.count).toBe(2);
+    expect(report.uncaught.latest).toBe('Error: second one');
+    // Reported, never a blocker: the markets have not stopped, and a 503 here would page an outage
+    // that is not happening.
+    expect(report.blockers).toEqual([]);
+  });
+
+  it('never puts a credential or an unbounded payload into an alert', () => {
+    registerSecret('super-secret-key');
+    expect(describeUncaught(new Error('rpc https://node/super-secret-key failed'))).not.toContain('super-secret-key');
+    const long = describeUncaught(new Error('x'.repeat(500)));
+    expect(long?.length).toBeLessThanOrEqual(240);
+    expect(long?.endsWith('…')).toBe(true);
+    // Newlines in a stack-carrying message would break the one-line alert format.
+    expect(describeUncaught(new Error('one\ntwo'))).toBe('Error: one two');
+    // Nothing to say is said as nothing, not as an empty quote.
+    expect(describeUncaught(undefined)).toBe(null);
+    expect(describeUncaught('plain string')).toBe('plain string');
   });
 });

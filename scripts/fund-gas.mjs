@@ -5,7 +5,7 @@
  * The board burns tBNB continuously — the keeper hardest, because it pushes relay prices and
  * settles every round — and the chain's own faucet is the only source, gated behind a captcha and
  * a small mainnet balance on the receiving address (an anti-sybil price on identity, not scarcity;
- * see RUNBOOK §2 "Keeping the testnet in gas"). So the sustainable loop is: a human claims into one
+ * see docs/RUNBOOK.html, "Keeping the testnet in gas"). So the sustainable loop is: a human claims into one
  * qualifying address every few days, and this script spreads it.
  *
  * Top-up-to-target rather than send-fixed-amounts: the accounts drain at very different rates, so
@@ -16,6 +16,8 @@
  *
  * Env:
  *   SRC_KEY       the funded account's key. Its address is also the faucet target.
+ *   BOT_ADDRESSES csv of the betting-bot accounts. REQUIRED to fund them: they are not in the
+ *                 deployment manifest, so without this the keeper is the only target.
  *   RPC_URL       BSC testnet RPC   (default: the public endpoint)
  *   RESERVE_BNB   left behind in the source, for whatever else uses it   (default: 0.01)
  */
@@ -62,6 +64,13 @@ for (const [name, addr, target] of [
   }
   seen.add(key)
   TARGETS.push([name, addr, target])
+}
+
+// The bots are the accounts that hit their floor first, and they are invisible to this script
+// unless they are named. Silently funding only the keeper looks like success in the output, which
+// is how a run can "work" and leave both bots exactly as broke as they were.
+if (!process.env.BOT_ADDRESSES?.trim()) {
+  console.warn('BOT_ADDRESSES is not set — only the keeper will be funded, and both betting bots will be skipped.')
 }
 
 if (!process.env.SRC_KEY) {
@@ -118,7 +127,15 @@ const total = due.reduce((s, d) => s + d.gap, 0n)
 const scale = total > available ? available : total
 if (total > available) console.log(`Short by ${formatEther(total - available)} — scaling every top-up to ${((Number(scale) / Number(total)) * 100).toFixed(0)}%`)
 if (scale <= 0n) {
-  console.error('Source is at or below its reserve. Claim from the faucet first — RUNBOOK §2, "Keeping the testnet in gas".')
+  // This is the message the 2026-09-05 incident printed, so it carries the whole instruction
+  // rather than a pointer: the funder is the only account that clears the faucet's mainnet
+  // qualifier, and a reader at this point has already run out of gas.
+  console.error(
+    `Source ${src.address} is at or below its ${formatEther(RESERVE)} tBNB reserve. Claim first at ` +
+      'https://www.bnbchain.org/en/testnet-faucet (needs 0.002 BNB on BSC mainnet at the same address), ' +
+      'or https://t.me/bnbchain_official_bot if that dispenser is empty. ' +
+      'See docs/RUNBOOK.html, "Keeping the testnet in gas".',
+  )
   process.exit(1)
 }
 

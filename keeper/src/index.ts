@@ -46,12 +46,14 @@ async function main(): Promise<void> {
   const keeper = new Keeper({ config, logger });
 
   // One bad market, one bad RPC response or one unexpected rejection must never kill the keeper.
+  // The error is handed to `noteUncaught` as well as logged: the journal line is for whoever is
+  // already looking, and the health report is what makes the watchdog page someone who is not.
   process.on('unhandledRejection', (reason) => {
-    keeper.noteUncaught();
+    keeper.noteUncaught(reason);
     logger.error('unhandled rejection (keeper continues)', { error: reason });
   });
   process.on('uncaughtException', (error) => {
-    keeper.noteUncaught();
+    keeper.noteUncaught(error);
     logger.error('uncaught exception (keeper continues)', { error });
   });
 
@@ -65,6 +67,12 @@ async function main(): Promise<void> {
       health: () => keeper.health(),
       logger,
       version: VERSION,
+      // Absent unless CLIENT_ERROR_REPORTS is on, and then `/client-error` 404s like any other
+      // path — the route does not exist rather than existing and refusing.
+      ...(keeper.clientErrors ? { clientErrors: keeper.clientErrors } : {}),
+      // The TLS front reaches the report route through this, so nothing new has to appear on a
+      // network interface. The TCP listener above is unchanged and still what the watchdog polls.
+      ...(config.metricsSocket ? { socketPath: config.metricsSocket } : {}),
     });
   } catch (error) {
     logger.error('startup failed', { error });

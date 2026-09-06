@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { allocateGasRefills, selectGasRefills } from '../lib/gas-refill.mjs'
+import { allocateGasRefills, assignSides, selectGasRefills } from '../lib/gas-refill.mjs'
 
 const HOUR = 60 * 60 * 1_000
 const nowMs = 100 * HOUR
@@ -53,4 +53,32 @@ test('partial funds are shared proportionally instead of starving the second bot
 
 test('dust allocations stay in the source account', () => {
   assert.deepEqual(allocateGasRefills([{ address: 'A', gap: 10n }], 4n, 5n), [])
+})
+
+// 2026-09-05: bot B ran out of tBNB. Because the two sides of every round were split across the
+// two accounts, B's side was never placed, ~95% of rounds closed with an empty side, and the
+// contract voided and refunded all of them at zero fee. /healthz stayed 200 because a one-sided
+// book is a benign void, and the board-wide idle check stayed quiet because bot A was still
+// betting. Revenue was zero for hours behind an all-green board.
+test('one solvent account takes both sides rather than voiding the round', () => {
+  const A = { address: 'A' }
+  const B = { address: 'B' }
+  const canPay = (account) => account.address !== 'B'
+  assert.deepEqual(assignSides([A, B], canPay, false), [A, A])
+  assert.deepEqual(assignSides([A, B], canPay, true), [A, A])
+})
+
+test('two solvent accounts still take one side each, and the coin flip decides which', () => {
+  const A = { address: 'A' }
+  const B = { address: 'B' }
+  const canPay = () => true
+  assert.deepEqual(assignSides([A, B], canPay, false), [A, B])
+  assert.deepEqual(assignSides([A, B], canPay, true), [B, A])
+})
+
+test('with both accounts dry the normal split stands, so the failure is loud rather than silent', () => {
+  const A = { address: 'A' }
+  const B = { address: 'B' }
+  const canPay = () => false
+  assert.deepEqual(assignSides([A, B], canPay, false), [A, B])
 })

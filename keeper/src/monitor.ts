@@ -21,7 +21,8 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createPublicClient, formatEther, getAddress, http, isAddress, parseEther, type Address, type PublicClient } from 'viem';
 import { marketAbi } from './abi.js';
-import { createLogger, registerEnvSecrets } from './logger.js';
+import type { ClientErrorSummary } from './clientErrors.js';
+import { createLogger, registerEnvSecrets, scrubSecrets } from './logger.js';
 
 const SERVICE = 'updown-health-monitor';
 const DEFAULT_STATE_PATH = '/var/lib/updown-health-monitor/state.json';
@@ -38,7 +39,26 @@ export interface MonitorSnapshot {
   /** Market name → checksummed address from `DEPLOYMENTS_PATH`; null when the manifest was not read. */
   deploymentMarkets: Record<string, string> | null;
   healthBlockers: string[];
-  balances: Array<{ label: string; balance: bigint; minimum: bigint; requireAbove?: boolean }>;
+  /**
+   * Exceptions the keeper swallowed to stay alive, as `/healthz` reports them. Absent on a keeper
+   * build that predates the field, which is not the same claim as zero.
+   */
+  healthUncaught?: { count: number; latest: string | null };
+  /**
+   * How many of those this watchdog has already reported. Only the excess is new. Set by the caller
+   * from the state file, so `evaluateSnapshot` stays pure.
+   */
+  uncaughtBaseline?: number;
+  /** What the web app has reported to the keeper, when ingestion is on. Absent when it is not. */
+  healthClientErrors?: ClientErrorSummary;
+  /**
+   * `address` is carried, not just the label. "bot B gas 0.0079 tBNB below minimum 0.01" is the
+   * whole alert an operator wakes up to, and the first question it provokes — *which* account? —
+   * used to require reading `monitor.env` on the production host to answer. The address is public
+   * operational data that is already in that file; putting it in the alert is what turns the page
+   * into something actionable from a phone.
+   */
+  balances: Array<{ label: string; address: string; balance: bigint; minimum: bigint; requireAbove?: boolean }>;
   /**
    * How long it has been since ANY bot account staked on ANY market, paired with the age at which
    * that becomes a failure. Absent when the check is switched off or the reading failed.
@@ -57,6 +77,35 @@ export interface MonitorSnapshot {
    * being absent, which means the reading could not be taken at all.
    */
   marketMaking?: { idleSec: number | null; maxIdleSec: number };
+  /**
+   * How many recently closed rounds carried stake on ONE side only, out of every round that
+   * carried stake at all. Absent when the check is switched off or the reading failed.
+   *
+   * This is the gap the 2026-09-05 gas incident opened up. `bet-bot.mjs` splits the UP and DOWN
+   * sides of each round across its two accounts, so ONE account running out of gas leaves ~95% of
+   * rounds with an empty side; the contract voids those and refunds every stake at zero fee, which
+   * takes protocol revenue to zero across the whole board. Nothing else here can see it:
+   * `one-sided-book` is a benign void reason so `/healthz` stays 200 (`isKeeperFaultVoid`), and
+   * `marketMaking` above is a board-wide MINIMUM idle age, so the account that still has gas keeps
+   * it near zero. The product is broken and every other signal is green.
+   *
+   * Read from the round structs alone — `voided` with exactly one side empty — so it needs no event
+   * scan and no knowledge of the void reason codes.
+   *
+   * PER MARKET, never pooled. A pooled fraction is diluted by markets the bot is not covering: a
+   * market with no stake stops advancing its epoch entirely (`_roundNeedsMaintenance` is false for
+   * an empty round, so the keeper's worker goes dormant), which freezes its last rounds — healthy,
+   * two-sided, historical — permanently in the denominator. With the board narrowed to two markets
+   * to stretch gas, which is exactly what this incident's runbook tells the operator to do, a pooled
+   * ratio could never reach 50% however completely the book was broken.
+   */
+  oneSidedBook?: {
+    markets: Array<{ name: string; staked: number; oneSided: number; tie: number }>;
+    maxRatio: number;
+    minSample: number;
+  };
+  /** Why the one-sided read could not be taken. A note, never a page — see the call site. */
+  oneSidedReadError?: string;
   errors: string[];
 }
 
@@ -81,6 +130,65 @@ export interface MonitorState {
   alertDelivered?: boolean;
   /** When the keeper first reported no market addresses; absent once it reports them. */
   unverifiedSince?: string;
+  /**
+   * The keeper's uncaught-exception count as of the last DELIVERED alert. An undelivered alert
+   * leaves it alone on purpose: the same exceptions are then reported again rather than lost.
+   */
+  uncaughtSeen?: number;
+  /** The client-error count as of the last DELIVERED browser digest, and when that was sent. */
+  clientSeen?: number;
+  lastClientAlertAt?: string;
+}
+
+/**
+ * Whether a browser-error digest is due.
+ *
+ * Its own lane on purpose. Client errors are a browser's word about a browser: they say nothing
+ * about whether the keeper is running, the markets are ticking or the gas rails are funded, so they
+ * must never flip `healthy`, never open or close an incident, and never consume the incident alert
+ * slot in the shared @bluff_alert_bot chat. A page that breaks for every visitor would otherwise be
+ * able to hold the cooldown down on the alerts that mean the protocol has stopped.
+ *
+ * The cooldown is therefore the whole abuse answer: however many reports arrive, they collapse into
+ * at most one message per window before anything is sent.
+ */
+export function clientAlertDue(
+  state: Pick<MonitorState, 'lastClientAlertAt'>,
+  fresh: number,
+  nowMs: number,
+  cooldownMs: number,
+  threshold: number,
+): boolean {
+  if (cooldownMs <= 0) return false;
+  if (fresh < Math.max(1, threshold)) return false;
+  const last = Date.parse(state.lastClientAlertAt ?? '');
+  return !Number.isFinite(last) || nowMs - last >= cooldownMs;
+}
+
+/** The digest itself: a count, the loudest signatures, and what it is NOT. */
+export function clientAlertText(envLabel: string, fresh: number, summary: ClientErrorSummary): string {
+  const top = summary.signatures.slice(0, 5).map(({ sig, n }) => `${sig} x${n}`).join(', ');
+  const dropped = summary.dropped > 0 ? `; ${summary.dropped} beyond the signature cap` : '';
+  const refused = summary.refused > 0 ? `; ${summary.refused} report(s) refused` : '';
+  return (
+    `[UpDown ${envLabel}] web app: ${fresh} new browser error(s)${dropped}${refused}. ` +
+    `${top || 'no signature breakdown'}. ` +
+    `The keeper and the markets are unaffected - this is what visitors' browsers reported.`
+  );
+}
+
+/**
+ * The count above which an exception is new.
+ *
+ * The keeper's counter is per-process and starts again at zero on every restart. A reading BELOW
+ * what was already acknowledged is therefore a new process, not a repaired one — and keeping the
+ * old baseline would silently swallow every exception the restarted keeper throws up to it. That
+ * matters most in exactly the case that restarts the keeper.
+ */
+export function uncaughtBaseline(seen: number | undefined, reported: number | undefined): number {
+  const previous = seen ?? 0;
+  if (reported === undefined) return previous;
+  return reported < previous ? 0 : previous;
 }
 
 /** How long the keeper may report no market addresses before that is a failure in itself. */
@@ -107,6 +215,19 @@ export function evaluateSnapshot(snapshot: MonitorSnapshot, escalation?: Unverif
     problems.push(`healthz market set is ${actual.join(',') || 'empty'}, expected six live 1m/10m markets`);
   }
   for (const blocker of snapshot.healthBlockers.slice(0, 3)) problems.push(`keeper blocker: ${blocker}`);
+
+  // The keeper survives an uncaught exception on purpose — one bad RPC response must not take it
+  // down mid-round — and that is exactly why nothing else here can see one. `/healthz` stays 200,
+  // the balance floors stay green, and the rounds keep landing right up until the throw is the
+  // reason they stop. Until this check existed the only trace was a journal line nobody reads.
+  const fresh = (snapshot.healthUncaught?.count ?? 0) - (snapshot.uncaughtBaseline ?? 0);
+  if (snapshot.healthUncaught && fresh > 0) {
+    const latest = snapshot.healthUncaught.latest;
+    problems.push(
+      `keeper swallowed ${fresh} uncaught error(s) to stay alive` +
+        (latest ? `; latest: ${latest}` : '; see journalctl -u updown-keeper'),
+    );
+  }
 
   // Names and states read identically on a keeper still serving a superseded deployment; only the
   // addresses differ. A keeper build that reports no addresses at all cannot be verified and is
@@ -148,8 +269,21 @@ export function evaluateSnapshot(snapshot: MonitorSnapshot, escalation?: Unverif
     const bad = item.requireAbove ? item.balance <= item.minimum : item.balance < item.minimum;
     if (bad) {
       const relation = item.requireAbove ? 'at/below reserve' : 'below minimum';
-      problems.push(`${item.label} gas ${formatEther(item.balance)} tBNB ${relation} ${formatEther(item.minimum)}`);
+      const line = `${item.label} ${item.address} gas ${formatEther(item.balance)} tBNB ${relation} ${formatEther(item.minimum)}`;
+      // The funder is not one more low account: it is the SOURCE every other account refills from,
+      // so at or below its reserve the automatic rail is not slow, it is off. `bet-bot.mjs` then
+      // computes a negative `available` on every check and returns without sending, for ever, and
+      // the only thing that clears it is a human at the faucet. On 2026-09-05 that state ran for
+      // hours behind an alert that read like any other low balance. Saying what it MEANS is what
+      // makes the difference between a line in a list and an instruction.
+      problems.push(item.requireAbove ? `${line} — automatic gas refills are dead until a faucet claim` : line);
     }
+  }
+
+  // Deliberately a note and not a problem: see `clientAlertDue`. It is logged and it rides in the
+  // digest; it never makes this watchdog's verdict unhealthy.
+  if (snapshot.healthClientErrors && snapshot.healthClientErrors.count > 0) {
+    notes.push(`web app has reported ${snapshot.healthClientErrors.count} browser error(s) since the keeper started`);
   }
 
   if (snapshot.marketMaking) {
@@ -163,6 +297,38 @@ export function evaluateSnapshot(snapshot: MonitorSnapshot, escalation?: Unverif
       problems.push(
         `no market-making stake on any of the six markets for ${Math.floor(idleSec / 60)} min ` +
         `(alarm at ${Math.floor(maxIdleSec / 60)} min); the betting bot is not placing orders`,
+      );
+    }
+  }
+
+  // A book with one empty side is not an outage — it is worse, because it looks like one. Rounds
+  // still open, lock and settle on time; they just refund everybody and earn nothing. The ratio,
+  // not the count, is the signal: the bot places a one-sided book on purpose about 5% of the time
+  // (`ONE_SIDED_PROB` in `scripts/bet-bot.mjs`), so a handful is the design and a majority is a
+  // dead account. The sample floor keeps a quiet board — a market set narrowed to stretch gas,
+  // an hour with few rounds — from turning one or two deliberate one-sided books into a page.
+  if (snapshot.oneSidedReadError) {
+    notes.push(`one-sided book check could not be read: ${snapshot.oneSidedReadError}`);
+  }
+
+  if (snapshot.oneSidedBook) {
+    const { markets, maxRatio, minSample } = snapshot.oneSidedBook;
+    const ratio = (market: { staked: number; oneSided: number }) => market.oneSided / market.staked;
+    const failing = markets
+      .filter((market) => market.staked >= minSample && ratio(market) > maxRatio)
+      .sort((a, b) => ratio(b) - ratio(a));
+    const worst = failing[0];
+    if (worst) {
+      // Ties are reported but never counted toward the alarm. A tie refunds at zero fee too, so it
+      // is the same lost revenue — but it means the price came back to exactly where it started,
+      // which no operational change prevents and no operator can act on. Folding it in would let a
+      // flat hour on a 1-minute feed page for something nobody can fix.
+      const ties = worst.tie > 0 ? `; ${worst.tie} more refunded as ties, which nothing can prevent` : '';
+      const more = failing.length > 1 ? ` (and ${failing.length - 1} more market${failing.length > 2 ? 's' : ''})` : '';
+      problems.push(
+        `${worst.name}${more}: ${worst.oneSided} of the last ${worst.staked} staked rounds had an empty side ` +
+        `(${Math.round(ratio(worst) * 100)}%, alarm above ${Math.round(maxRatio * 100)}%); those all void and ` +
+        `refund at zero fee — a betting-bot account is probably unable to sign${ties}`,
       );
     }
   }
@@ -202,9 +368,21 @@ interface Config {
   unverifiedGraceMs: number;
   /** Age of the newest market-making stake that turns the board red. 0 switches the check off. */
   marketMakingMaxIdleSec: number;
+  /** Share of recent staked rounds that may have an empty side. 0 switches the check off. */
+  oneSidedMaxRatio: number;
+  /** Closed rounds examined per market. */
+  oneSidedWindow: number;
+  /** Staked rounds needed before the ratio is allowed to page. */
+  oneSidedMinSample: number;
+  /** How recently a round must have closed to be judged. 0 disables the recency bound. */
+  oneSidedMaxAgeSec: number;
   alertToken: string;
   alertChatId: string;
   envLabel: string;
+  /** Minimum gap between two browser-error digests. 0 stands the lane down entirely. */
+  clientAlertCooldownMs: number;
+  /** New browser errors needed before a digest is worth sending. */
+  clientAlertThreshold: number;
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -236,6 +414,48 @@ function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (marketMakingMaxIdleSec > 0 && marketMakingMaxIdleSec < 600) {
     throw new Error('UPDOWN_MARKET_MAKING_MAX_IDLE_SECONDS below 600 would page on one missed 10m round');
   }
+  // Same `?.trim() ||` shape as the idle check above, and for the same reason: a blank line in an
+  // env file must not silently disable a check that exists to catch a silent failure.
+  // 0.5 sits an order of magnitude above the bot's deliberate 5% one-sided rate and well below the
+  // ~95% a dead account produces, so neither a run of intentional one-sided books nor a couple of
+  // capped sides can reach it.
+  const oneSidedMaxRatio = Number(env['UPDOWN_ONE_SIDED_MAX_RATIO']?.trim() || '0.5');
+  if (!Number.isFinite(oneSidedMaxRatio) || oneSidedMaxRatio < 0 || oneSidedMaxRatio > 1) {
+    throw new Error('UPDOWN_ONE_SIDED_MAX_RATIO must be 0 (off) or a ratio between 0 and 1');
+  }
+  const oneSidedWindow = Number(env['UPDOWN_ONE_SIDED_WINDOW']?.trim() || '20');
+  if (!Number.isFinite(oneSidedWindow) || oneSidedWindow < 1) {
+    throw new Error('UPDOWN_ONE_SIDED_WINDOW must be at least 1');
+  }
+  // Below this the ratio is noise: on a board narrowed to one market to stretch gas, three staked
+  // rounds of which two are deliberately one-sided is 67% and means nothing.
+  const oneSidedMinSample = Number(env['UPDOWN_ONE_SIDED_MIN_SAMPLE']?.trim() || '8');
+  if (!Number.isFinite(oneSidedMinSample) || oneSidedMinSample < 1) {
+    throw new Error('UPDOWN_ONE_SIDED_MIN_SAMPLE must be at least 1');
+  }
+
+  // Long enough that a covered 10m market keeps its whole 20-round window (200 min), short enough
+  // that a market the bot stopped covering drops out of the sample within a few hours instead of
+  // voting with frozen history for ever.
+  const oneSidedMaxAgeSec = Number(env['UPDOWN_ONE_SIDED_MAX_AGE_SECONDS']?.trim() || '14400');
+  if (!Number.isFinite(oneSidedMaxAgeSec) || oneSidedMaxAgeSec < 0) {
+    throw new Error('UPDOWN_ONE_SIDED_MAX_AGE_SECONDS must be 0 (off) or a positive number of seconds');
+  }
+
+  // 0 is the documented way to stand the browser lane down; anything positive is clamped to at
+  // least a minute so a misconfiguration cannot turn a page full of visitors into a message storm.
+  const clientAlertCooldownSeconds = Number(env['UPDOWN_CLIENT_ALERT_COOLDOWN_SECONDS']?.trim() || '3600');
+  if (!Number.isFinite(clientAlertCooldownSeconds) || clientAlertCooldownSeconds < 0) {
+    throw new Error('UPDOWN_CLIENT_ALERT_COOLDOWN_SECONDS must be 0 (off) or a positive number of seconds');
+  }
+  if (clientAlertCooldownSeconds > 0 && clientAlertCooldownSeconds < 60) {
+    throw new Error('UPDOWN_CLIENT_ALERT_COOLDOWN_SECONDS below 60 would let browser noise crowd out keeper alerts');
+  }
+  const clientAlertThreshold = Number(env['UPDOWN_CLIENT_ALERT_THRESHOLD']?.trim() || '1');
+  if (!Number.isFinite(clientAlertThreshold) || clientAlertThreshold < 1) {
+    throw new Error('UPDOWN_CLIENT_ALERT_THRESHOLD must be at least 1');
+  }
+
   return {
     rpcUrl: required(env, 'RPC_URL'),
     healthUrl: env['KEEPER_HEALTH_URL']?.trim() || DEFAULT_HEALTH_URL,
@@ -249,9 +469,15 @@ function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     repeatMs: repeatSeconds * 1_000,
     unverifiedGraceMs: unverifiedGraceSeconds * 1_000,
     marketMakingMaxIdleSec,
+    oneSidedMaxRatio,
+    oneSidedWindow,
+    oneSidedMinSample,
+    oneSidedMaxAgeSec,
     alertToken: env['ALERT_TELEGRAM_BOT_TOKEN']?.trim() || required(env, 'TELEGRAM_BOT_TOKEN'),
     alertChatId: required(env, 'ALERT_TELEGRAM_CHAT_ID'),
     envLabel: env['ALERT_ENV_LABEL']?.trim() || 'prod',
+    clientAlertCooldownMs: clientAlertCooldownSeconds * 1_000,
+    clientAlertThreshold,
   };
 }
 
@@ -314,6 +540,58 @@ export async function readMarketMakingIdleSec(
   return Math.max(0, nowSec - Math.max(...startTimes));
 }
 
+/**
+ * Per market, how many of its recent closed rounds carried stake on ONE side only.
+ *
+ * Counts a round only once it is `settled` — an open or locked round has not finished attracting
+ * stake, and counting it would report every live epoch as one-sided for the seconds between the
+ * first bet and the second. Rounds with no stake at all are skipped: an empty round is the designed
+ * dormant state of a market the bot is not covering.
+ *
+ * `maxAgeSec` is what makes a narrowed board readable. The window is otherwise epoch-relative, and
+ * a market the bot has stopped covering stops advancing its epoch altogether, so its newest stored
+ * rounds stay in the sample for ever. Without a recency bound those frozen rounds vote in both
+ * directions: healthy history hides a real outage, and one-sided history left behind by an outage
+ * keeps paging long after the board is repaired. Judging only rounds that closed recently makes a
+ * dormant market fall out of the sample entirely, which is the correct answer for a market nobody
+ * is betting on.
+ *
+ * `getRounds` takes its epochs explicitly, so this is one call per market however wide the window,
+ * and the markets are read concurrently.
+ */
+export async function readOneSidedVoidRatio(
+  client: PublicClient,
+  markets: Array<{ name: string; address: Address }>,
+  window: number,
+  maxAgeSec: number,
+  nowSec: number,
+): Promise<Array<{ name: string; staked: number; oneSided: number; tie: number }> | undefined> {
+  if (markets.length === 0 || window <= 0) return undefined;
+  return Promise.all(markets.map(async ({ name, address }) => {
+    const current = await client.readContract({ address, abi: marketAbi, functionName: 'currentEpoch' });
+    // `currentEpoch` is still open, so the newest round worth judging is the one before it.
+    const newest = current - 1n;
+    const epochs: bigint[] = [];
+    for (let i = 0n; i < BigInt(window) && newest - i > 0n; i++) epochs.push(newest - i);
+    const empty = { name, staked: 0, oneSided: 0, tie: 0 };
+    if (epochs.length === 0) return empty;
+    const rounds = await client.readContract({ address, abi: marketAbi, functionName: 'getRounds', args: [epochs] });
+    let staked = 0;
+    let oneSided = 0;
+    let tie = 0;
+    for (const round of rounds) {
+      if (!round.settled) continue;
+      if (maxAgeSec > 0 && nowSec - Number(round.closeTs) > maxAgeSec) continue;
+      const up = round.upAmount;
+      const down = round.downAmount;
+      if (up === 0n && down === 0n) continue;
+      staked++;
+      if (up === 0n || down === 0n) oneSided++;
+      else if (round.voided) tie++;
+    }
+    return { name, staked, oneSided, tie };
+  }));
+}
 async function collectSnapshot(config: Config): Promise<MonitorSnapshot> {
   const snapshot: MonitorSnapshot = {
     healthReachable: false,
@@ -331,6 +609,8 @@ async function collectSnapshot(config: Config): Promise<MonitorSnapshot> {
       healthy?: unknown;
       markets?: Array<{ name?: unknown; address?: unknown }>;
       blockers?: unknown;
+      uncaught?: { count?: unknown; latest?: unknown };
+      clientErrors?: unknown;
     };
     snapshot.healthReachable = response.ok || response.status === 503;
     snapshot.healthHealthy = body.healthy === true;
@@ -344,6 +624,35 @@ async function collectSnapshot(config: Config): Promise<MonitorSnapshot> {
       ),
     );
     snapshot.healthBlockers = safeStrings(body.blockers);
+    // Left absent on a keeper that does not report the field, which is a build too old to be
+    // trusted about it — not a keeper that has thrown nothing.
+    const client = body.clientErrors as
+      | { count?: unknown; refused?: unknown; dropped?: unknown; signatures?: unknown }
+      | undefined;
+    if (client && typeof client.count === 'number' && Number.isFinite(client.count)) {
+      const rows = Array.isArray(client.signatures) ? client.signatures : [];
+      snapshot.healthClientErrors = {
+        count: Math.max(0, Math.floor(client.count)),
+        refused: typeof client.refused === 'number' && Number.isFinite(client.refused) ? Math.max(0, Math.floor(client.refused)) : 0,
+        dropped: typeof client.dropped === 'number' && Number.isFinite(client.dropped) ? Math.max(0, Math.floor(client.dropped)) : 0,
+        // Re-sanitised on the way out as well as on the way in: this text originated in a browser,
+        // and it is about to be put into a Telegram message.
+        signatures: rows
+          .flatMap((row: unknown) => {
+            const entry = row as { sig?: unknown; n?: unknown };
+            const sig = typeof entry.sig === 'string' ? entry.sig.replace(/[^A-Za-z0-9/_.:@+-]/g, '.').slice(0, 120) : '';
+            const n = typeof entry.n === 'number' && Number.isFinite(entry.n) ? Math.max(0, Math.floor(entry.n)) : 0;
+            return sig ? [{ sig, n }] : [];
+          })
+          .slice(0, 5),
+      };
+    }
+    if (typeof body.uncaught?.count === 'number' && Number.isFinite(body.uncaught.count)) {
+      snapshot.healthUncaught = {
+        count: Math.max(0, Math.floor(body.uncaught.count)),
+        latest: typeof body.uncaught.latest === 'string' && body.uncaught.latest !== '' ? body.uncaught.latest : null,
+      };
+    }
   } catch (error) {
     snapshot.errors.push(`health read failed: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -382,17 +691,68 @@ async function collectSnapshot(config: Config): Promise<MonitorSnapshot> {
         snapshot.errors.push(`market-making check failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
+
+    // Same isolation as the market-making read above, and for the same reason: this is the newest
+    // and least load-bearing of the three chain checks, and a failure in it must not blank the gas
+    // floors, which are older and more consequential.
+    if (config.oneSidedMaxRatio > 0) {
+      try {
+        const named = Object.entries(snapshot.deploymentMarkets ?? {}).map(([name, value]) => ({ name, address: getAddress(value) }));
+        // Its own deadline, because the unit is a oneshot under `TimeoutStartSec=45s` and this is
+        // the last and chattiest check in the run. A hung endpoint here would otherwise consume the
+        // whole budget and kill the process before it could send the gas-floor alert — turning the
+        // newest, least important check into a reason the oldest and most important one goes out
+        // undelivered. Losing this reading costs a note; losing the run costs the page.
+        const counts = await Promise.race([
+          readOneSidedVoidRatio(client, named, config.oneSidedWindow, config.oneSidedMaxAgeSec, Math.floor(Date.now() / 1000)),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('one-sided read exceeded its 10s budget')), 10_000).unref(),
+          ),
+        ]);
+        if (counts) {
+          snapshot.oneSidedBook = { markets: counts, maxRatio: config.oneSidedMaxRatio, minSample: config.oneSidedMinSample };
+        }
+      } catch (error) {
+        // A NOTE, not an error. This is the newest and least load-bearing of the three chain checks
+        // and it is also the chattiest — two reads per market against a public data-seed node. A
+        // transient RPC failure here must not turn the whole run red and burn the hour's alert slot
+        // on a page that says nothing about the keeper, the markets or the gas rails. The condition
+        // it exists to catch persists for hours, so it will still be there on the next run a minute
+        // later; what it cannot afford is to cry wolf in between.
+        snapshot.oneSidedReadError = error instanceof Error ? error.message : String(error);
+      }
+    }
   } catch (error) {
     snapshot.errors.push(`chain check failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   return snapshot;
 }
 
+/**
+ * Telegram's `sendMessage` limit, in UTF-16 code units — the unit it actually counts, so an emoji
+ * costs two. An over-long message is rejected with a 400, which loses the ENTIRE alert: the one
+ * outcome this watchdog exists to prevent, arriving precisely when the most has gone wrong and the
+ * problem list is longest.
+ */
+const TELEGRAM_MAX_UTF16 = 4096;
+
+/** Clipped to what Telegram will accept, saying so, rather than silently losing the whole alert. */
+export function clipForTelegram(text: string, max = TELEGRAM_MAX_UTF16): string {
+  if (text.length <= max) return text;
+  const suffix = ' […]';
+  return `${text.slice(0, Math.max(0, max - suffix.length))}${suffix}`;
+}
+
 async function sendTelegram(config: Config, text: string): Promise<void> {
+  // Scrubbed at the one choke point every alert passes through. viem stamps the full RPC URL into
+  // `error.message` on any transport failure, and those messages reach `snapshot.errors` verbatim
+  // and from there into this body — so an API key in the endpoint would otherwise be posted to the
+  // chat. Every LOG line is scrubbed already; an alert is not a log line, and was not.
+  const safeText = clipForTelegram(scrubSecrets(text));
   const response = await fetch(`https://api.telegram.org/bot${config.alertToken}/sendMessage`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ chat_id: config.alertChatId, text, disable_web_page_preview: true }),
+    body: JSON.stringify({ chat_id: config.alertChatId, text: safeText, disable_web_page_preview: true }),
     signal: AbortSignal.timeout(15_000),
   });
   const body = await response.json().catch(() => undefined) as { ok?: unknown } | undefined;
@@ -412,6 +772,9 @@ export function stateAfterSend(
   delivered: boolean,
   nowIso: string,
 ): MonitorState {
+  // Incident fields only. `uncaughtSeen` is not part of the incident — it records which of the
+  // keeper's exceptions have already been announced — and `persist` in `main` owns it end to end,
+  // including across this function's recovery reset.
   if (kind === 'recovery' && delivered) return {};
   return {
     failedSince: state.failedSince ?? nowIso,
@@ -449,6 +812,9 @@ async function main(): Promise<void> {
   const snapshot = await collectSnapshot(config);
   const state = readState(config.statePath);
   const now = new Date();
+  // Only exceptions beyond the last acknowledged count are news. Resolved before either pass so
+  // both verdicts see the same baseline.
+  snapshot.uncaughtBaseline = uncaughtBaseline(state.uncaughtSeen, snapshot.healthUncaught?.count);
   // The unverified clock is independent of the alert state: it starts when the keeper first
   // reports no addresses, survives every alert write, and stops only when the keeper actually
   // reports them. A run that could not look at all leaves it exactly as it was.
@@ -458,13 +824,52 @@ async function main(): Promise<void> {
       : firstPass.addressCheck === 'verified' ? undefined
         : state.unverifiedSince;
   const verdict = evaluateSnapshot(snapshot, { unverifiedSince, nowMs: now.getTime(), graceMs: config.unverifiedGraceMs });
-  const persist = (alertState: MonitorState): void =>
-    writeState(config.statePath, unverifiedSince ? { ...alertState, unverifiedSince } : alertState);
+  // Advanced only by a DELIVERED alert, below: an alert that never reached anyone must report the
+  // same exceptions again rather than mark them as announced.
+  let uncaughtSeen = snapshot.uncaughtBaseline;
+  // The browser lane's own cursor, resolved the same way and for the same reason as the keeper's.
+  const clientBaseline = uncaughtBaseline(state.clientSeen, snapshot.healthClientErrors?.count);
+  let clientSeen = clientBaseline;
+  let lastClientAlertAt = state.lastClientAlertAt;
+
+  // Authoritative for `uncaughtSeen` and the browser-lane fields: any value carried in on
+  // `alertState` is discarded, so a restarted keeper (whose counters begin again at zero) cannot
+  // leave a stale baseline behind and silently swallow what it reports up to it.
+  const persist = (alertState: MonitorState): void => {
+    const { uncaughtSeen: _superseded, clientSeen: _alsoSuperseded, lastClientAlertAt: _andThis, ...incident } = alertState;
+    writeState(config.statePath, {
+      ...incident,
+      ...(unverifiedSince ? { unverifiedSince } : {}),
+      ...(uncaughtSeen > 0 ? { uncaughtSeen } : {}),
+      ...(clientSeen > 0 ? { clientSeen } : {}),
+      ...(lastClientAlertAt ? { lastClientAlertAt } : {}),
+    });
+  };
   const notification = notificationFor(state, verdict.healthy, now.getTime(), config.repeatMs);
 
   if (!verdict.healthy) logger.error('UpDown watchdog failed', { problems: verdict.problems });
   else logger.info('UpDown watchdog healthy', { summary: verdict.summary });
   if (verdict.notes.length > 0) logger.warn('UpDown watchdog note', { notes: verdict.notes, unverifiedSince });
+
+  // The browser lane, sent BEFORE the incident lane and entirely independent of it: it must not be
+  // able to change `verdict`, `notification`, the incident state or the exit code. Its only shared
+  // resource is the Telegram chat, and its cooldown is what keeps it from crowding that.
+  const freshClient = (snapshot.healthClientErrors?.count ?? 0) - clientBaseline;
+  if (
+    snapshot.healthClientErrors &&
+    clientAlertDue(state, freshClient, now.getTime(), config.clientAlertCooldownMs, config.clientAlertThreshold)
+  ) {
+    try {
+      await sendTelegram(config, clientAlertText(config.envLabel, freshClient, snapshot.healthClientErrors));
+      // Advanced only on delivery, so an undelivered digest reports the same errors next time.
+      clientSeen = snapshot.healthClientErrors.count;
+      lastClientAlertAt = now.toISOString();
+    } catch (error) {
+      // `warn`, not `error`: a failed browser digest is not a keeper failure, and must not become
+      // one — nor set the exit code the systemd unit reads.
+      logger.warn('browser-error digest delivery failed', { error });
+    }
+  }
 
   if (notification) {
     let delivered = false;
@@ -474,6 +879,7 @@ async function main(): Promise<void> {
     } catch (error) {
       logger.error('Telegram alert delivery failed', { error });
     }
+    if (delivered && snapshot.healthUncaught) uncaughtSeen = snapshot.healthUncaught.count;
     persist(stateAfterSend(state, notification, delivered, now.toISOString()));
     if (!delivered) {
       process.exitCode = 1;
@@ -481,7 +887,7 @@ async function main(): Promise<void> {
     }
   } else if (!verdict.healthy && !state.failedSince) {
     persist({ failedSince: now.toISOString(), alertDelivered: false });
-  } else if (state.unverifiedSince !== unverifiedSince) {
+  } else if (state.unverifiedSince !== unverifiedSince || clientSeen !== state.clientSeen || lastClientAlertAt !== state.lastClientAlertAt) {
     persist({ failedSince: state.failedSince, lastAlertAt: state.lastAlertAt, alertDelivered: state.alertDelivered });
   }
   process.exitCode = verdict.healthy ? 0 : 1;

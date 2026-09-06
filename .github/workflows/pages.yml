@@ -56,6 +56,10 @@ jobs:
           VITE_CHAIN_ID: ${{ github.event.inputs.chain_id || '97' }}
           VITE_BASE_PATH: /
           VITE_WALLETCONNECT_PROJECT_ID: ${{ vars.WALLETCONNECT_PROJECT_ID }}
+          # A repository VARIABLE, never a secret: it ships in the bundle by construction, which is
+          # exactly why no credential may travel this path. Unset ⇒ the app installs no error
+          # reporters and sends nothing.
+          VITE_ERROR_REPORT_URL: ${{ vars.ERROR_REPORT_URL }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web/dist

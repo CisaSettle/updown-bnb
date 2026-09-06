@@ -30,8 +30,10 @@
  *   GAS_REFILL_MAX_AGE_HOURS refill bots proactively after this age      (default: 24)
  *   GAS_STATE_PATH persisted refill/alert timestamps                     (default: .bet-bot-gas-state.json)
  *   OPEN_FAUCET_ON_DUE open the official faucet when human action is due (default: false)
+ *   UPDOWN_FAUCET_URL where a human claims tBNB   (default: the official BNB Chain page)
+ *   UPDOWN_FAUCET_FALLBACK_URLS csv, offered when the primary refuses or is empty
  */
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -46,7 +48,7 @@ import {
   getAddress,
 } from '../keeper/node_modules/viem/_esm/index.js'
 import { privateKeyToAccount } from '../keeper/node_modules/viem/_esm/accounts/index.js'
-import { allocateGasRefills, selectGasRefills } from './lib/gas-refill.mjs'
+import { allocateGasRefills, assignSides, selectGasRefills } from './lib/gas-refill.mjs'
 import { firstBetMinLeadReader, hasPlanningRunway, readBettableRound } from './lib/bet-window.mjs'
 
 /**
@@ -114,7 +116,27 @@ const GAS_REFILL_MAX_AGE_HOURS = Number(process.env.GAS_REFILL_MAX_AGE_HOURS ?? 
 const GAS_REFILL_MAX_AGE_MS = GAS_REFILL_MAX_AGE_HOURS * 60 * 60 * 1_000
 const GAS_STATE_PATH = process.env.GAS_STATE_PATH ?? join(ROOT, '.bet-bot-gas-state.json')
 const OPEN_FAUCET_ON_DUE = /^(1|true|yes|on)$/i.test(process.env.OPEN_FAUCET_ON_DUE ?? '')
-const GAS_FAUCET_URL = 'https://www.bnbchain.org/en/testnet-faucet'
+/**
+ * Where a human is sent to claim tBNB, and where to go when that dispenser will not serve.
+ *
+ * Env-driven and sharing `UPDOWN_FAUCET_URL` / `UPDOWN_FAUCET_FALLBACK_URLS` with the daily report,
+ * so the two places that tell an operator where to claim cannot drift apart — they did: this file
+ * hard-coded the official page while `web/src/config/faucet.ts` had already moved the product to
+ * the Telegram bot.
+ *
+ * QuickNode is deliberately NOT in the default fallbacks. It gates on an ETH MAINNET balance, and
+ * every operational account here holds zero ETH, so it rejects the exact address this alert asks
+ * the operator to claim for. The official page gates on 0.002 BNB on BSC mainnet instead, which
+ * the funder does hold; the Telegram bot takes an address with no qualifier at all and is what the
+ * app itself now points users at.
+ */
+const DEFAULT_GAS_FAUCET_URL = 'https://www.bnbchain.org/en/testnet-faucet'
+const DEFAULT_GAS_FAUCET_FALLBACK_URLS = 'https://t.me/bnbchain_official_bot,https://tokentool.bitbond.com/faucet/bsc-testnet'
+const GAS_FAUCET_URL = process.env.UPDOWN_FAUCET_URL?.trim() || DEFAULT_GAS_FAUCET_URL
+const GAS_FAUCET_FALLBACK_URLS = (process.env.UPDOWN_FAUCET_FALLBACK_URLS ?? DEFAULT_GAS_FAUCET_FALLBACK_URLS)
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean)
 const GAS_TRANSFER_DUST = parseEther('0.0001')
 if (GAS_TOPUP <= MIN_GAS || KEEPER_TARGET_GAS <= KEEPER_MIN_GAS) {
   console.error('Gas targets must stay above their trigger floors.')
@@ -128,6 +150,23 @@ if (!Number.isFinite(GAS_REFILL_MAX_AGE_HOURS) || GAS_REFILL_MAX_AGE_HOURS <= 0)
  * is indistinguishable from a dead market to a visitor, so the bot never deliberately skips one. */
 const SKIP_PROB = 0
 const ONE_SIDED_PROB = 0.05
+
+/**
+ * Padded gas for one `betUp`/`betDown`, and how many of them an account must be able to afford
+ * before it is still trusted with a side of its own. Observed cost is ~154k gas; the padding covers
+ * the colder path that also wakes a dormant market.
+ *
+ * Eight, not one, because solvency is only re-read once a minute alongside the gas guard, and an
+ * account covering six markets places roughly five bets in that window. A floor of one transaction
+ * would be crossed *between* checks, which is precisely the interval in which the sides would be
+ * split onto an account that can no longer pay — the void this exists to prevent.
+ *
+ * Deliberately far below `MIN_GAS_BNB` (0.01): that floor is the refill trigger, an early warning
+ * with hours of runway behind it. This is the last-resort line where transactions actually start
+ * failing, so it must not pull the book onto one account while there is still gas to run normally.
+ */
+const BET_GAS_LIMIT = 250_000n
+const BET_GAS_RESERVE_TXS = 8n
 
 const MARKET = parseAbi([
   'struct Round { uint64 startTs; uint64 lockTs; uint64 closeTs; uint16 feeBps; uint16 bufferSeconds; bool locked; bool settled; bool voided; int256 lockPrice; int256 closePrice; uint80 lockOracleId; uint80 closeOracleId; uint32 oracleMaxAge; uint256 upAmount; uint256 downAmount; uint256 rewardBaseAmount; uint256 rewardPoolAmount; }',
@@ -195,11 +234,23 @@ const enqueue = (acct, fn) => {
   queues.set(acct.address, next.catch(() => {}))
   return next
 }
-async function send(account, address, abi, functionName, args, value) {
+/**
+ * `receiptTimeoutMs` bounds how long this send may hold its account's queue.
+ *
+ * viem waits 180 seconds for a receipt by default, and every send from one account is serialized
+ * behind the previous one. That is survivable while the two sides of a round sit on two accounts,
+ * but once ONE account carries both sides (see `assignSides`) a slow first receipt holds the second
+ * side past `lockTs` — producing exactly the one-sided void that carrying both sides exists to
+ * prevent. Callers that are racing a window pass the time they actually have.
+ *
+ * Timing out is safe: the transaction may still mine, and the caller marks the item `retried`, which
+ * makes the next attempt believe the on-chain ledger over the error before spending again.
+ */
+async function send(account, address, abi, functionName, args, value, receiptTimeoutMs) {
   return enqueue(account, async () => {
     const { request } = await pub.simulateContract({ account, address, abi, functionName, args, value })
     const hash = await wallet(account).writeContract(request)
-    const receipt = await pub.waitForTransactionReceipt({ hash })
+    const receipt = await pub.waitForTransactionReceipt(receiptTimeoutMs ? { hash, timeout: receiptTimeoutMs } : { hash })
     // Simulation passing does not make the mined result a success — the round can move on, a cap
     // can fill — and a swallowed revert would read as a placed bet.
     if (receipt.status !== 'success') throw new Error(`${functionName} reverted on chain (${hash})`)
@@ -229,7 +280,12 @@ function readGasState() {
 const gasState = readGasState()
 function writeGasState() {
   try {
-    writeFileSync(GAS_STATE_PATH, `${JSON.stringify(gasState, null, 2)}\n`, { mode: 0o600 })
+    // Temp-plus-rename, the same shape the watchdog uses for its own state. This file is now
+    // written on every dry check rather than only on a refill, and a torn write would reset the
+    // FUNDER_DRY escalation that exists precisely because the rail stays dead for hours.
+    const temp = `${GAS_STATE_PATH}.new`
+    writeFileSync(temp, `${JSON.stringify(gasState, null, 2)}\n`, { mode: 0o600 })
+    renameSync(temp, GAS_STATE_PATH)
   } catch (e) {
     log(`gas state write failed: ${short(e)}`)
   }
@@ -244,6 +300,103 @@ function markRefilled(address, at = Date.now()) {
   writeGasState()
 }
 
+/**
+ * Which accounts can still pay for a bet.
+ *
+ * Refreshed from the balances the gas guard already reads, so it costs one extra gas-price call a
+ * minute and no extra balance reads. Empty means "no reading yet", which is treated as solvent:
+ * the first minute of a run must not assume the worst and collapse the book onto one account.
+ */
+const insolvent = new Set()
+async function updateSolvency(balances) {
+  const gasPrice = await pub.getGasPrice()
+  // Clamped below the refill floor, because this line scales with the live gas price while
+  // `MIN_GAS_BNB` is a fixed amount of BNB. Around 5 gwei the unclamped figure would reach 0.01 and
+  // the ordering the comment above describes would invert — the last-resort guard would start
+  // firing before the early-warning floor, pulling the book onto one account while there is still
+  // plenty of gas. Half the refill floor keeps it last-resort at any price.
+  const raw = gasPrice * BET_GAS_LIMIT * BET_GAS_RESERVE_TXS
+  const ceiling = MIN_GAS / 2n
+  const need = raw < ceiling ? raw : ceiling
+  ;[A, B].forEach((who, i) => {
+    const broke = balances[i] < need
+    if (broke && !insolvent.has(who.address)) {
+      log(`${who.address.slice(0, 8)} can no longer fund a bet (${formatEther(balances[i])} BNB < ${formatEther(need)}); the other account will carry both sides`)
+    } else if (!broke && insolvent.has(who.address)) {
+      log(`${who.address.slice(0, 8)} can fund bets again; both sides return to two accounts`)
+    }
+    if (broke) insolvent.add(who.address)
+    else insolvent.delete(who.address)
+  })
+}
+
+/**
+ * Assign the UP and DOWN sides to accounts.
+ *
+ * Normally one side each, coin-flipped. The point of the second account is that a visitor sees two
+ * independent participants rather than one address trading with itself.
+ *
+ * But when one account cannot pay, splitting the sides is far worse than dropping that appearance.
+ * The unfunded side never gets placed, the round settles with an empty side, and the contract voids
+ * it and refunds every stake at zero fee — so a partly-funded bot earns NOTHING on ~95% of rounds
+ * while looking, to `/healthz` and to the board-wide idle check, exactly like a healthy one. That is
+ * the 2026-09-05 incident. One solvent account placing both sides keeps the book real, keeps rounds
+ * settling for value, and costs only the cosmetic fiction of two participants — and it costs the
+ * same gas either way, because it is the same two transactions.
+ */
+function pickSideAccounts() {
+  return assignSides([A, B], (who) => !insolvent.has(who.address), Math.random() < 0.5)
+}
+
+/**
+ * Say the difference between a funder that is momentarily short and one whose rail is off.
+ *
+ * `available = balance - reserve - fee` going negative reads the same in the journal either way,
+ * and on 2026-09-05 the balance sat at EXACTLY `FUNDER_RESERVE_BNB` for hours: every check computed
+ * a negative `available`, returned without sending, and logged a line indistinguishable from a
+ * transient dip. Nothing in that stream said "this will never clear on its own". The streak and the
+ * elapsed time are what make it legible — a first observation is a dip, the hundredth is a state
+ * only a human at the faucet can end.
+ */
+/** A gap this long between two dry observations means the last spell ended; start counting again. */
+const FUNDER_DRY_CONTINUITY_MS = 10 * 60 * 1_000
+
+function noteFunderDry(balance) {
+  const nowMs = Date.now()
+  // Without this the streak is only ever cleared by a landed transfer, so a dry spell that resolved
+  // some other way — a claim spread by hand, a run of checks that found nothing due — would leave a
+  // stale count behind and report the next 30-second dip as a structurally dead rail.
+  const last = Number(gasState.funderDryLastAt ?? 0)
+  if (!last || nowMs - last > FUNDER_DRY_CONTINUITY_MS) {
+    gasState.funderDrySince = nowMs
+    gasState.funderDryStreak = 0
+  }
+  gasState.funderDryLastAt = nowMs
+  gasState.funderDryStreak = Number(gasState.funderDryStreak ?? 0) + 1
+  writeGasState()
+  const streak = gasState.funderDryStreak
+  const minutes = Math.floor((nowMs - Number(gasState.funderDrySince)) / 60_000)
+  const held = `funder holds ${formatEther(balance)} BNB at its ${formatEther(FUNDER_RESERVE)} reserve`
+  if (streak === 1) return held
+  return `FUNDER_DRY: ${held} — the automatic refill rail is OFF and only a faucet claim ends it (${streak} consecutive checks over ${minutes} min)`
+}
+
+/**
+ * Clear the streak once a transfer has actually MINED — never on a balance that merely looks
+ * spendable. `available > 0` is not recovery: every allocation can still fall under the dust floor,
+ * which sends nothing and leaves the bots exactly as broke, and announcing recovery there would
+ * reset the escalation while the rail is still off.
+ */
+function noteFunderFunded() {
+  if (gasState.funderDrySince === undefined && !gasState.funderDryStreak) return
+  const minutes = Math.floor((Date.now() - Number(gasState.funderDrySince ?? Date.now())) / 60_000)
+  log(`funder is funded again after ${minutes} min dry; automatic refills resume`)
+  delete gasState.funderDrySince
+  delete gasState.funderDryStreak
+  delete gasState.funderDryLastAt
+  writeGasState()
+}
+
 function alertFaucetNeeded(reason) {
   const nowMs = Date.now()
   // A dry source stays dry until a human clears the official captcha. One alert per hour is loud
@@ -251,7 +404,8 @@ function alertFaucetNeeded(reason) {
   if (nowMs - Number(gasState.lastFaucetAlertAt ?? 0) < 60 * 60 * 1_000) return
   gasState.lastFaucetAlertAt = nowMs
   const target = FUNDER?.address ?? `${A.address},${B.address}`
-  log(`FAUCET_REQUIRED: ${reason}; claim tBNB for ${target} at ${GAS_FAUCET_URL}`)
+  const fallbacks = GAS_FAUCET_FALLBACK_URLS.length ? `; if it refuses or is empty: ${GAS_FAUCET_FALLBACK_URLS.join(' , ')}` : ''
+  log(`FAUCET_REQUIRED: ${reason}; claim tBNB for ${target} at ${GAS_FAUCET_URL}${fallbacks}`)
   if (
     OPEN_FAUCET_ON_DUE &&
     process.platform === 'darwin' &&
@@ -346,13 +500,14 @@ async function gasGuardAddress(address, floor, target, label) {
       const available = funderBalance - FUNDER_RESERVE - fee
       const gap = target - gas
       const value = available < gap ? available : gap
-      if (value <= 0n) throw new Error(`funder holds ${formatEther(funderBalance)} BNB at its ${formatEther(FUNDER_RESERVE)} reserve`)
+      if (value <= 0n) throw new Error(noteFunderDry(funderBalance))
       const hash = await enqueue(FUNDER, async () => {
         const h = await wallet(FUNDER).sendTransaction({ to: address, value, gas: 21_000n, gasPrice })
         const receipt = await pub.waitForTransactionReceipt({ hash: h })
         if (receipt.status !== 'success') throw new Error(`top-up reverted (${h})`)
         return h
       })
+      noteFunderFunded()
       log(`gas top-up ${formatEther(value)} BNB -> ${label} ${address.slice(0, 8)} (${hash.slice(0, 10)})`)
       return
     } catch (e) {
@@ -371,6 +526,7 @@ async function gasGuardBots() {
   if (stopping) return
   const checkedAt = Date.now()
   const balances = await Promise.all([A, B].map((who) => pub.getBalance({ address: who.address })))
+  await updateSolvency(balances)
   const selected = selectGasRefills({
     accounts: [A, B].map((who, i) => ({
       who,
@@ -399,7 +555,9 @@ async function gasGuardBots() {
   const fees = gasPrice * 21_000n * BigInt(due.length)
   const available = funderBalance - FUNDER_RESERVE - fees
   if (available <= 0n) {
-    alertFaucetNeeded(`bot gas refill due (${dueReason}); funder holds ${formatEther(funderBalance)} BNB`)
+    const state = noteFunderDry(funderBalance)
+    alertFaucetNeeded(`bot gas refill due (${dueReason}); ${state}`)
+    log(state)
     for (const item of due) log(`LOW GAS: bot ${item.address} holds ${formatEther(item.balance)} BNB`)
     return
   }
@@ -407,6 +565,7 @@ async function gasGuardBots() {
   const totalGap = due.reduce((sum, item) => sum + item.gap, 0n)
   const scale = available < totalGap ? available : totalGap
   const allocations = allocateGasRefills(due, available, GAS_TRANSFER_DUST)
+  let landed = 0
   for (const item of allocations) {
     if (stopping) return
     try {
@@ -417,11 +576,17 @@ async function gasGuardBots() {
         return sent
       })
       markRefilled(item.address)
+      landed++
       log(`gas top-up ${formatEther(item.value)} BNB -> bot ${item.address.slice(0, 8)} (${hash.slice(0, 10)})`)
     } catch (e) {
       log(`bot gas top-up failed for ${item.address.slice(0, 8)}: ${short(e)}`)
     }
   }
+  // Headroom above the reserve is not recovery. If every allocation came out under the dust floor,
+  // or all of them reverted, nothing reached a bot and the rail is still off — say so rather than
+  // silently resetting the escalation.
+  if (landed > 0) noteFunderFunded()
+  else log(noteFunderDry(funderBalance))
   if (scale < totalGap) alertFaucetNeeded(`funder could only cover part of the bot refill plan (${dueReason})`)
 }
 
@@ -472,7 +637,7 @@ async function tick(market) {
       return
     }
     const oneSided = roll < SKIP_PROB + ONE_SIDED_PROB
-    const [upAcct, downAcct] = Math.random() < 0.5 ? [A, B] : [B, A]
+    const [upAcct, downAcct] = pickSideAccounts()
     const up = { who: upAcct, fn: 'betUp', side: 'up', usdt: stake() }
     const down = { who: downAcct, fn: 'betDown', side: 'down', usdt: stake() }
     // A one-sided book should not always be an UP book — pick the lone side by coin flip too.
@@ -515,7 +680,10 @@ async function tick(market) {
             return
           }
         }
-        await send(item.who, market.address, MARKET, item.fn, [epoch, amount])
+        // Leave five seconds of the window for the side queued behind this one. With both sides on
+        // a single account they are strictly serial, so an unbounded wait here is a void there.
+        const receiptBudgetMs = Math.max(5_000, (Number(r.lockTs) - t - 5) * 1_000)
+        await send(item.who, market.address, MARKET, item.fn, [epoch, amount], undefined, receiptBudgetMs)
         placed.push(item)
       } catch (e) {
         item.retried = true

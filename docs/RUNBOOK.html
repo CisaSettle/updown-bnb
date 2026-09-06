@@ -31,8 +31,46 @@ journalctl -u updown-betbot -n 50 --no-pager
 curl -fsS localhost:9464/healthz</pre>
 <p>健康检查同时核对市场名称、暂停状态、余额和最近边界进度。已授权修复时重启故障服务：<code>sudo systemctl restart updown-keeper</code> 或 <code>sudo systemctl restart updown-betbot</code>；随后确认实际轮次推进和链上交易，不能只看进程存活。空市场可使用虚拟轮次而不发送交易；机器人可能为节省 gas 只覆盖一个市场。</p>
 <p>暂停后恢复使用 <code>unpause()</code> 并由 keeper 继续推进，已经 genesis 的市场不要再次调用 <code>genesisStart()</code>。暂停不自动退款已锁定仓位；超过有效结算窗口的轮次才会退款。预言机及相位不可更换，没有 <code>setOracle</code>；失效喂价需按新部署处理。错误价格证明会回滚，不能直接触发退款。</p>
-<h2>Gas 与签名保护</h2>
-<p>机器人日志出现 <code>FAUCET_REQUIRED</code> 时，由人工完成 <a href="https://www.bnbchain.org/en/testnet-faucet">官方测试币水龙头</a> 验证码，再在已授权情况下运行 <code>node scripts/fund-gas.mjs</code> 分配测试币。先保证 keeper 能处理已有资金的轮次。<code>RELAY_TICK_MS=0</code> 关闭额外图表喂价，必需的边界喂价仍然执行。</p>
+<h2>浏览器错误告警</h2>
+<p>网页是纯静态的 GitHub Pages，没有自己的后端，浏览器里的错误以前没有任何人能看到。现在页面把<strong>错误签名</strong>（异常类名 + JSON-RPC 错误码，例如 <code>unclassified/InsufficientFundsError/-32000</code>）用 <code>sendBeacon</code> 发到 keeper 的 <code>POST /client-error</code>；keeper 只计数，计数随 <code>/healthz</code> 出来，由 <code>updown-health-monitor.timer</code> 每小时最多发一条 Telegram 摘要。签名里不含消息、堆栈、地址或金额——viem 的 <code>message</code> 会把请求参数（发送地址、calldata、下注金额）打印进去，所以这条链路上永远只发签名。</p>
+<p>收到 <code>[UpDown prod] web app: N new browser error(s)</code> 时：这<strong>不是</strong>停机。keeper 和市场都不受影响，它只说明访客的浏览器报了错。它走独立通道，永远不会把 watchdog 判成 unhealthy，也不会占用停机告警的冷却档期。</p>
+<p>关闭方式有两个：keeper 侧 <code>CLIENT_ERROR_REPORTS=false</code>（路由直接 404），或 watchdog 侧 <code>UPDOWN_CLIENT_ALERT_COOLDOWN_SECONDS=0</code>（仍然计数，不再发消息）。</p>
+<p>开启需要三步：① keeper 的 <code>/etc/updown/keeper.env</code> 里设 <code>CLIENT_ERROR_REPORTS=true</code>、<code>CLIENT_ERROR_ALLOWED_ORIGINS=https://updown.bluffking.ai</code> 和 <code>METRICS_SOCKET=/run/updown/keeper.sock</code>；② texas-h5 主机现有的 Caddy 上加 TLS 前置路由（见下）；③ 在 GitHub 仓库变量里设 <code>ERROR_REPORT_URL</code> 后重新部署 Pages。三步没做完之前，两端都是完全静默的空操作。</p>
+<p><strong>Caddy 是通过 unix socket 而不是端口找到 keeper 的。</strong>本机上 <code>METRICS_HOST=127.0.0.1</code>（刻意锁的，不是默认值），且 ufw 默认 <code>deny (incoming)</code> 把容器→宿主机的路整条堵死 —— 2026-09-06 实测：即使把监听改成 <code>0.0.0.0</code>，<code>deploy_web</code> 上的容器经两个网桥网关（172.18.0.1 / 172.17.0.1）都够不到宿主机。让端口方案跑通只有两条路：绑定所有网卡、以及开一条 9464 的防火墙规则；两者都会为了暴露一个「错误上报」的旁路，去扩大持有 keeper 私钥那个进程的网络暴露面，还会把会报余额的 <code>/metrics</code> 变成只靠 ufw 单点拦着。socket 两样都不需要：keeper 在 <code>/run/updown/keeper.sock</code> 上提供同一套路由（0660 <code>updown:updown</code>，由 unit 的 <code>RuntimeDirectory=updown</code> 创建、停机时清掉），caddy 容器 bind-mount 那个目录，访问控制就是这个文件的权限本身。<strong>任何网络接口上都不多一个字节的暴露</strong>，keeper 原来的 TCP 监听完全不动，watchdog 照旧走 127.0.0.1。</p>
+<p>第 ② 步的两处改动都在 texas-h5 仓库（<code>deploy/</code>），已经提交在那边的本地 main 上，但要跑那边的 deploy workflow 才生效（它会强制重建 caddy 容器）：</p>
+<pre># deploy/docker-compose.prod.yml — caddy 服务的 volumes
+      - /run/updown:/run/updown      # 必须可写：连 unix socket 需要写权限
+
+# deploy/Caddyfile — {$APP_DOMAIN}, {$API_DOMAIN} 块内
+	@updown_report {
+		path /updown/client-error
+		method POST
+	}
+	handle @updown_report {
+		reverse_proxy unix//run/updown/keeper.sock {
+			rewrite /client-error
+		}
+	}
+	handle /updown/* {
+		respond 404
+	}</pre>
+<p><code>method POST</code> 与兜底的 <code>/updown/* → 404</code> 一起，把对外暴露面限制成恰好一个路径一个方法；keeper 的 <code>/metrics</code>（会泄露 keeper 余额）不会因此上公网。</p>
+<p>这个端点是<strong>无认证</strong>的，且和 keeper 私钥同进程。它的边界是：请求体 2 KB 上限（边收边判，不是先缓冲再检查）、固定 schema、每分钟全局配额、签名基数上限、签名字符白名单、无论结果一律回 204（不告诉调用方什么被接受了）、不落盘、不读也不存 IP、不持有任何凭证。<code>Origin</code> 白名单只是降噪，不是认证——它可以被伪造。</p>
+
+<h2>测试币 gas 补给</h2>
+<p>整块板子持续消耗 tBNB，keeper 最多——它要推送边界喂价并结算每一轮。链上水龙头是唯一来源，且需要人工过验证码，所以补给循环是：人工领取到<strong>一个</strong>合格地址，脚本再分发出去。</p>
+<p>机器人日志出现 <code>FAUCET_REQUIRED</code>，或 watchdog 报 <code>funder … at/below reserve</code> 时：</p>
+<ol>
+<li><p>到 <a href="https://www.bnbchain.org/en/testnet-faucet">官方测试币水龙头</a> 领取，收款地址填 <strong>funder</strong>（<code>/etc/updown/monitor.env</code> 的 <code>FUNDER_ADDRESS</code>）。官方水龙头只服务在 <strong>BSC 主网持有 0.002 BNB</strong> 的地址——这是对身份收费，不是资源稀缺——并且要人工过验证码。EVM 地址在两条链上相同，所以同一个地址可以主网持有门槛币、测试网收币。<strong>五个运营地址里只有 funder 满足这个门槛</strong>，keeper、两个 bot、owner 的主网余额都是 0。</p>
+<p>水龙头的发放量与规则由官方决定、随时可变，这里不写死数字，也不要假装验证码可以自动化。官方没币时（2026-09-04 出现过 <code>The faucet has insufficient funds</code>）改用 <a href="https://t.me/bnbchain_official_bot">官方 Telegram 机器人</a>：点 Start 后发送 <code>I would like to get tBNB to my wallet &lt;地址&gt;</code>，它不要求任何主网余额。<strong>不要用 QuickNode</strong>——它查的是 ETH 主网余额，本项目所有账户都是 0。</p></li>
+<li><p>到账后<strong>什么都不用做</strong>：<code>updown-betbot</code> 正在运行时会自己把 funder 的余额分给低于下限的账户。只有在 betbot 停止时才手工分发——同一个 funder 账户上跑两个签名者会抢 nonce：</p>
+<pre>SRC_KEY=0x… BOT_ADDRESSES=&lt;botA&gt;,&lt;botB&gt; node scripts/fund-gas.mjs --dry   # 确认后去掉 --dry</pre>
+<p><code>BOT_ADDRESSES</code> 必须给：不给的话脚本的补给目标只有 keeper，两个 bot 会被静默跳过——而它们通常正是最接近下限的账户。</p></li>
+</ol>
+<p><code>fund-gas.mjs</code> 签名前会重新确认 RPC 返回链 97：这把 key 在同一地址上控制主网真实 BNB，连错端点就是花真钱。它按目标余额补差而不是发固定金额；来源不足时所有转账等比例缩放，让整块板子同时到期，而不是喂饱前几个、饿死最后一个。</p>
+<p>换水龙头地址时注意：<code>/etc/updown/daily-report.env</code> 和 <code>/etc/updown/betbot.env</code> 里的 <code>UPDOWN_FAUCET_URL</code> / <code>UPDOWN_FAUCET_FALLBACK_URLS</code> <strong>覆盖</strong>代码默认值。改了代码默认值还不够，主机上的 env 文件要一起改，否则线上仍然用旧链接。</p>
+<p>gas 紧张时的止血手段：把 <code>/etc/updown/betbot.env</code> 的 <code>MARKETS</code> 收窄到 10 分钟市场（1 分钟市场的交易频率高一个数量级；没有下注后 keeper 对应的 worker 也会转入 dormant，连边界喂价一起停）。<code>RELAY_TICK_MS=0</code> 关闭额外图表喂价，必需的边界喂价仍然执行。先保证 keeper 能处理已有资金的轮次。</p>
+<h2>签名与密钥保护</h2>
 <p>私钥仅存忽略的 env 文件，服务配置权限 0600。机器人仅允许链 97，机器人、keeper、owner 账户必须隔离；资金分配脚本签名前必须核对链 ID。钱包的同一地址可能持有主网真 BNB，不能删除这些保护。</p>
 <h2>发布与验证工具</h2>
 <p>Pages 构建使用 <code>STRICT_DEPLOYMENT=1</code>，缺部署地址即失败；手动发布仅允许当前 main。公开更新记录在产品的 <code>#/changelog</code>，按用户可感知变化更新，不要求每次提交写一条。生产发布、转账和主网部署须有对应授权。</p>
@@ -61,8 +99,46 @@ journalctl -u updown-betbot -n 50 --no-pager
 curl -fsS localhost:9464/healthz</pre>
 <p>Check market identities, pause state, balances and recent boundary progress together. For an authorized repair, restart the failed service with <code>sudo systemctl restart updown-keeper</code> or <code>sudo systemctl restart updown-betbot</code>; then confirm round progress and on-chain transactions, beyond process liveness. Empty markets can use virtual rounds without transactions; the bot may cover only one market to save gas.</p>
 <p>After a pause, call <code>unpause()</code> and let the keeper continue; never call <code>genesisStart()</code> again on an initialized market. Pausing does not automatically refund locked positions; rounds that miss their settlement window become refundable. The oracle and its phase are immutable, with no <code>setOracle</code>; a failed feed requires a new deployment. An invalid price proof reverts and cannot directly force a refund.</p>
-<h2>Gas and signing protection</h2>
-<p>When the bot logs <code>FAUCET_REQUIRED</code>, a human completes the <a href="https://www.bnbchain.org/en/testnet-faucet">official testnet faucet</a> captcha, then runs <code>node scripts/fund-gas.mjs</code> with authorization to distribute test gas. Prioritize keeper gas for funded rounds. <code>RELAY_TICK_MS=0</code> disables extra chart ticks while keeping required boundary relays.</p>
+<h2>Browser-error alerting</h2>
+<p>The web app is a static GitHub Pages bundle with no backend of its own, so until now nobody could see an error that happened in a visitor's browser. The page now sends an <strong>error signature</strong> — the exception class names plus the JSON-RPC code, e.g. <code>unclassified/InsufficientFundsError/-32000</code> — by <code>sendBeacon</code> to the keeper's <code>POST /client-error</code>. The keeper only counts; the counts ride out on <code>/healthz</code>, and <code>updown-health-monitor.timer</code> turns them into at most one Telegram digest per hour. A signature carries no message, no stack, no address and no amount: viem's <code>message</code> pretty-prints the request arguments — sender, calldata, the value of a real bet — so only signatures ever travel this path.</p>
+<p>When <code>[UpDown prod] web app: N new browser error(s)</code> arrives, it is <strong>not</strong> an outage. The keeper and the markets are unaffected; it reports what visitors' browsers hit. It runs on its own lane, never makes the watchdog verdict unhealthy, and never consumes the incident alert slot.</p>
+<p>Two switches turn it off: <code>CLIENT_ERROR_REPORTS=false</code> on the keeper (the route 404s), or <code>UPDOWN_CLIENT_ALERT_COOLDOWN_SECONDS=0</code> on the watchdog (still counted, never sent).</p>
+<p>Turning it on takes three steps. (1) Set <code>CLIENT_ERROR_REPORTS=true</code>, <code>CLIENT_ERROR_ALLOWED_ORIGINS=https://updown.bluffking.ai</code> and <code>METRICS_SOCKET=/run/updown/keeper.sock</code> in <code>/etc/updown/keeper.env</code>. (2) Add the TLS front on the texas-h5 host's existing Caddy (below). (3) Set the <code>ERROR_REPORT_URL</code> repository variable and redeploy Pages. Until all three are done both ends are inert no-ops.</p>
+<p><strong>Caddy reaches the keeper over a unix socket, not a port.</strong> On this host <code>METRICS_HOST</code> is deliberately <code>127.0.0.1</code> — not its default — and ufw's default <code>deny (incoming)</code> blocks the container-to-host path outright: measured on 2026-09-06, a container on <code>deploy_web</code> could not reach a host listener on either bridge gateway (172.18.0.1 or 172.17.0.1) even bound to <code>0.0.0.0</code>. Making a port work would take binding every interface AND opening a firewall rule for 9464 — both widening the network surface of the process that holds the keeper's signing key, and leaving <code>/metrics</code> (which reports its live balance) behind ufw alone, in order to expose a side-channel for error reports. A socket needs neither: the keeper serves the same routes on <code>/run/updown/keeper.sock</code> (0660 <code>updown:updown</code>, created and cleaned by the unit's <code>RuntimeDirectory=updown</code>), the caddy container bind-mounts that directory, and the file's own permissions are the access control. <strong>Nothing new appears on any network interface</strong>, and the keeper's TCP listener is untouched — the watchdog still polls it on 127.0.0.1.</p>
+<p>Both halves of step 2 live in the texas-h5 repository (<code>deploy/</code>). They are committed on that repo's local main and take effect only when its deploy workflow runs, which force-recreates the caddy container:</p>
+<pre># deploy/docker-compose.prod.yml — the caddy service's volumes
+      - /run/updown:/run/updown      # read-write: connecting to a socket needs write permission
+
+# deploy/Caddyfile — inside the {$APP_DOMAIN}, {$API_DOMAIN} block
+	@updown_report {
+		path /updown/client-error
+		method POST
+	}
+	handle @updown_report {
+		reverse_proxy unix//run/updown/keeper.sock {
+			rewrite /client-error
+		}
+	}
+	handle /updown/* {
+		respond 404
+	}</pre>
+<p><code>method POST</code> plus the catch-all <code>/updown/* → 404</code> narrow the public surface to exactly one path and one method, so the keeper's <code>/metrics</code> — which reports the keeper's balance — is not exposed along with it.</p>
+<p>The endpoint is <strong>unauthenticated</strong> and shares a process with the keeper's signing key. Its bounds: a 2 KB body cap enforced while streaming (not buffered then measured), a fixed schema, a global per-minute ceiling, a signature cardinality cap, a signature character allowlist, the same 204 whatever it decides (a caller is never told what was accepted), no disk writes, no IP read or stored, and no credential held. The <code>Origin</code> allowlist is a noise filter, not authentication — it is spoofable.</p>
+
+<h2>Keeping the testnet in gas</h2>
+<p>The board burns tBNB continuously — the keeper hardest, because it pushes boundary prices and settles every round. The chain's faucet is the only source and it is gated behind a captcha a human must clear, so the sustainable loop is: a person claims into <strong>one</strong> qualifying address, and a script spreads it.</p>
+<p>When the bot logs <code>FAUCET_REQUIRED</code>, or the watchdog reports <code>funder … at/below reserve</code>:</p>
+<ol>
+<li><p>Claim at the <a href="https://www.bnbchain.org/en/testnet-faucet">official testnet faucet</a> into the <strong>funder</strong> (<code>FUNDER_ADDRESS</code> in <code>/etc/updown/monitor.env</code>). The faucet serves only an address holding <strong>0.002 BNB on BSC mainnet</strong> — an anti-sybil price on identity, not scarcity — and raises a captcha a human must clear. An EVM address is the same on both chains, so one address can hold the mainnet qualifier and receive the testnet coin. <strong>Of the five operational accounts only the funder clears that bar</strong>; the keeper, both bots and the owner hold zero on mainnet.</p>
+<p>The amount and policy are external and can change; do not encode a promised number here, and do not pretend the captcha can be automated. When the official dispenser is empty (it answered <code>The faucet has insufficient funds</code> on 2026-09-04), use the <a href="https://t.me/bnbchain_official_bot">official Telegram bot</a>: press Start and send <code>I would like to get tBNB to my wallet &lt;address&gt;</code>. It asks for no mainnet balance at all. <strong>Do not use QuickNode</strong> — it gates on an ETH mainnet balance, and every account here holds zero ETH.</p></li>
+<li><p>Once it lands, <strong>do nothing</strong>: a running <code>updown-betbot</code> spreads the funder's balance to whatever is under its floor by itself. Distribute by hand only while the bot is stopped — two signers on the same funder account race each other's nonces:</p>
+<pre>SRC_KEY=0x… BOT_ADDRESSES=&lt;botA&gt;,&lt;botB&gt; node scripts/fund-gas.mjs --dry   # then without --dry</pre>
+<p><code>BOT_ADDRESSES</code> is required. Without it the script's only target is the keeper and both bots are silently skipped — and they are usually the accounts nearest their floor.</p></li>
+</ol>
+<p><code>fund-gas.mjs</code> re-checks that the RPC answers chain 97 before it signs anything: the funding key controls real BNB on mainnet at the same address, and a wrong endpoint would spend it. It tops up to a target rather than sending fixed amounts, and when the source is short it scales every transfer by the same fraction, so a partial claim leaves the whole board on one expiry instead of filling the first account and starving the last.</p>
+<p>When changing faucet links, remember that <code>UPDOWN_FAUCET_URL</code> / <code>UPDOWN_FAUCET_FALLBACK_URLS</code> in <code>/etc/updown/daily-report.env</code> and <code>/etc/updown/betbot.env</code> <strong>override</strong> the code defaults. Changing the default in the repository is not enough — edit the env files on the host too, or production keeps using the old links.</p>
+<p>To stop the bleeding while gas is tight, narrow <code>MARKETS</code> in <code>/etc/updown/betbot.env</code> to the 10-minute markets: the 1-minute ones transact an order of magnitude more often, and with no stake on them the keeper's workers go dormant too, which stops their boundary relays as well. <code>RELAY_TICK_MS=0</code> disables extra chart ticks while keeping required boundary relays. Prioritize keeper gas for funded rounds.</p>
+<h2>Signing and key protection</h2>
 <p>Keep private keys in ignored env files and service configuration at mode 0600. The bot accepts only chain 97; bot, keeper and owner accounts must be separate. The funding script must check chain ID before signing: the same address may hold real mainnet BNB. Preserve these checks.</p>
 <h2>Release and verification tools</h2>
 <p>Pages builds use <code>STRICT_DEPLOYMENT=1</code>, failing on missing deployment addresses; manual deployment accepts only current main. Update the public <code>#/changelog</code> for useful user-visible changes, without requiring an entry for every commit. Production releases, transfers and mainnet deployment require authorization for the action.</p>

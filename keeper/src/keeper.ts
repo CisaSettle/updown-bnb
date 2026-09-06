@@ -9,8 +9,10 @@ import { chainTimestamp, formatNative, weiToNative, type Clients } from './chain
 import { ChainClock, CLOCK_DRIFT_WARN_SEC } from './clock.js';
 import { createClients } from './chain.js';
 import { assumedTxCostWei, type KeeperConfig } from './config.js';
-import { balanceVerdict, evaluateHealth, type HealthReport, type MarketHealthInput } from './health.js';
+import { ClientErrorSink } from './clientErrors.js';
+import { balanceVerdict, evaluateHealth, type HealthReport, type MarketHealthInput, type UncaughtSummary } from './health.js';
 import type { MarketRef } from './deployments.js';
+import { scrubSecrets } from './logger.js';
 import type { Logger } from './logger.js';
 import { HELP, M, MetricsRegistry } from './metrics.js';
 import { PriceSource } from './price.js';
@@ -89,9 +91,21 @@ export class Keeper {
   #stopped = false;
   /** Non-null when NOT ONE market came up at boot, with the per-market reasons. */
   #totalBootstrapFailure: string | null = null;
+  /** Exceptions swallowed since start, and the last one's scrubbed description. See `noteUncaught`. */
+  #uncaught = 0;
+  #lastUncaught: string | null = null;
+  /** Null unless the operator switched ingestion on; `/client-error` 404s while it is. */
+  readonly #clientErrors: ClientErrorSink | null;
 
   constructor(deps: KeeperDeps) {
     this.config = deps.config;
+    this.#clientErrors = deps.config.clientErrors.enabled
+      ? new ClientErrorSink({
+          maxPerMinute: deps.config.clientErrors.maxPerMinute,
+          maxSignatures: deps.config.clientErrors.maxSignatures,
+          allowedOrigins: deps.config.clientErrors.allowedOrigins,
+        })
+      : null;
     this.#logger = deps.logger;
     this.#now = deps.now ?? Date.now;
     this.#startedAtMs = this.#now();
@@ -513,10 +527,56 @@ export class Keeper {
       warnings,
       { intervalsAllowed: this.config.health.intervalsAllowed },
       blockers,
+      this.uncaught,
+      this.#clientErrors?.summary(),
     );
   }
 
-  noteUncaught(): void {
-    this.metrics.increment(M.uncaught, HELP[M.uncaught] as string);
+  get uncaught(): UncaughtSummary {
+    return { count: this.#uncaught, latest: this.#lastUncaught };
   }
+
+  /** The report sink, or null when ingestion is off. `index.ts` hands it to the HTTP server. */
+  get clientErrors(): ClientErrorSink | null {
+    return this.#clientErrors;
+  }
+
+  /**
+   * Record an exception the process swallowed to stay alive.
+   *
+   * The counter was here before; what was missing is anywhere for it to GO. A Prometheus counter is
+   * only a signal if something scrapes it, and the production watchdog reads `/healthz` alone — so
+   * a keeper throwing on every tick reported healthy and paged nobody. `health()` now carries this
+   * out of the process on the one surface that is actually read.
+   */
+  noteUncaught(error?: unknown): void {
+    this.metrics.increment(M.uncaught, HELP[M.uncaught] as string);
+    this.#uncaught += 1;
+    const described = describeUncaught(error);
+    if (described !== null) this.#lastUncaught = described;
+  }
+}
+
+/** How long an exception's description may be before it is cut. Bounds the alert, not the journal. */
+const UNCAUGHT_DETAIL_MAX = 240;
+
+/**
+ * One line naming an exception, safe to put in a Telegram message.
+ *
+ * Scrubbed, because a viem transport failure stamps the full RPC URL — API key and all — into
+ * `error.message`, and the alert channel is not the journal. Truncated, because a stack-carrying
+ * message would otherwise set the size of every alert that quotes it.
+ */
+export function describeUncaught(error: unknown): string | null {
+  const raw =
+    error instanceof Error
+      ? `${error.name}: ${error.message}`
+      : typeof error === 'string'
+        ? error
+        : error === undefined
+          ? ''
+          : String(error);
+  const clean = scrubSecrets(raw).replace(/\s+/g, ' ').trim();
+  if (clean === '') return null;
+  return clean.length > UNCAUGHT_DETAIL_MAX ? `${clean.slice(0, UNCAUGHT_DETAIL_MAX - 1)}…` : clean;
 }
