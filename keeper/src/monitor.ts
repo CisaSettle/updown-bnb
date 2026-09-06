@@ -265,18 +265,32 @@ export function evaluateSnapshot(snapshot: MonitorSnapshot, escalation?: Unverif
     }
   }
 
+  // Whether anything the funder feeds actually needs feeding right now. Computed before the loop
+  // because the funder's own verdict depends on it.
+  const spenderShort = snapshot.balances.some((item) => !item.requireAbove && item.balance < item.minimum);
   for (const item of snapshot.balances) {
     const bad = item.requireAbove ? item.balance <= item.minimum : item.balance < item.minimum;
-    if (bad) {
-      const relation = item.requireAbove ? 'at/below reserve' : 'below minimum';
-      const line = `${item.label} ${item.address} gas ${formatEther(item.balance)} tBNB ${relation} ${formatEther(item.minimum)}`;
-      // The funder is not one more low account: it is the SOURCE every other account refills from,
-      // so at or below its reserve the automatic rail is not slow, it is off. `bet-bot.mjs` then
-      // computes a negative `available` on every check and returns without sending, for ever, and
-      // the only thing that clears it is a human at the faucet. On 2026-09-05 that state ran for
-      // hours behind an alert that read like any other low balance. Saying what it MEANS is what
-      // makes the difference between a line in a list and an instruction.
-      problems.push(item.requireAbove ? `${line} — automatic gas refills are dead until a faucet claim` : line);
+    if (!bad) continue;
+    const relation = item.requireAbove ? 'at/below reserve' : 'below minimum';
+    const line = `${item.label} ${item.address} gas ${formatEther(item.balance)} tBNB ${relation} ${formatEther(item.minimum)}`;
+    if (!item.requireAbove) {
+      problems.push(line);
+      continue;
+    }
+    // The funder is not one more low account: it is the SOURCE every other account refills from.
+    // But it is ALSO spent down to exactly its reserve by every successful distribution — that is
+    // the designed resting state of an account whose whole job is to give everything away, not a
+    // fault. Paging on it unconditionally means the board is red from the moment the rail last
+    // worked until the next claim, which is most of the time, and an alarm that is usually on is
+    // one nobody reads.
+    //
+    // What makes it an incident is the conjunction: the rail is dry AND something it feeds has
+    // fallen through its floor, so a refill is due and cannot happen. That is 2026-09-05 exactly,
+    // and it stays quiet on the far more common state where the funder has simply finished its job.
+    if (spenderShort) {
+      problems.push(`${line} — automatic gas refills are dead until a faucet claim, and an account below its floor is waiting on one`);
+    } else {
+      notes.push(`${line}; nothing is below its floor yet, but the next refill needs a faucet claim`);
     }
   }
 

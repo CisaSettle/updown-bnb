@@ -61,15 +61,29 @@ describe('UpDown out-of-process monitor', () => {
     expect(verdict.problems[0]).toContain('0x4DFD9dDb28cECF5fA0b99B5291E91D783D51E342');
   });
 
-  // A funder at its reserve is not a low balance, it is a dead rail: bet-bot.mjs computes a
-  // negative `available` and returns without sending on every check until a human claims.
-  it('says what a funder at its reserve actually means', () => {
+  // A funder at its reserve is only an incident WITH something waiting on it: bet-bot.mjs then
+  // computes a negative `available` and returns without sending on every check until a human claims.
+  it('says what a funder at its reserve means when an account is waiting on it', () => {
     const snapshot = healthy();
+    snapshot.balances[2]!.balance = 1n;
     snapshot.balances[3]!.balance = 10n;
     const verdict = evaluateSnapshot(snapshot);
     const line = verdict.problems.find((problem) => problem.includes('funder'));
     expect(line).toContain('0xE6b9a3895Ab013A1E82909f175f13D35400c6200');
     expect(line).toContain('automatic gas refills are dead until a faucet claim');
+  });
+
+  // The funder is spent down to EXACTLY its reserve by every successful distribution — that is the
+  // resting state of an account whose job is to give everything away. On 2026-09-06 the rail had
+  // just worked (keeper refilled to its 0.17 target, bot B lifted back over its floor) and the
+  // board still paged every 60 seconds about the funder. An alarm that is usually on is not read.
+  it('stays green when the funder has simply finished its job', () => {
+    const snapshot = healthy();
+    snapshot.balances[3]!.balance = 10n;
+    const verdict = evaluateSnapshot(snapshot);
+    expect(verdict.healthy).toBe(true);
+    expect(verdict.problems).toEqual([]);
+    expect(verdict.notes[0]).toContain('the next refill needs a faucet claim');
   });
 
   it('catches a keeper still serving a superseded deployment behind identical names and green states', () => {
