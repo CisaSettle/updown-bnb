@@ -55,6 +55,10 @@ curl -fsS localhost:9464/healthz</pre>
 		respond 404
 	}</pre>
 <p><code>method POST</code> 与兜底的 <code>/updown/* → 404</code> 一起，把对外暴露面限制成恰好一个路径一个方法；keeper 的 <code>/metrics</code>（会泄露 keeper 余额）不会因此上公网。</p>
+<p><strong>如果上报开始 502，先看这两处 —— 它们是 2026-09-06 上线时踩到的，两个都只有真机才会暴露。</strong>①&nbsp;unit 里 <code>RestrictAddressFamilies</code> 必须含 <code>AF_UNIX</code>，否则内核直接拒绝建 socket（<code>listen EAFNOSUPPORT</code>），而沙箱之外的任何测试都复现不出来。②&nbsp;unit 里必须有 <code>RuntimeDirectoryPreserve=yes</code>：<code>RuntimeDirectory=</code> 会在停止时删掉目录、启动时新建一个（新 inode），而 caddy 的 bind mount 钉在旧 inode 上，于是<strong>第一次重启之后容器就永远看着一个空目录</strong>，两边日志都不会说为什么。排查命令：</p>
+<pre>sudo stat -c %i /run/updown
+sudo docker exec deploy-caddy-1 stat -c %i /run/updown   # 两个 inode 必须相同</pre>
+<p>inode 不一致就 force-recreate 一次 caddy。keeper 本身对此是安全的：socket 起不来只会打一条 error 日志，进程照常settle轮次。</p>
 <p>这个端点是<strong>无认证</strong>的，且和 keeper 私钥同进程。它的边界是：请求体 2 KB 上限（边收边判，不是先缓冲再检查）、固定 schema、每分钟全局配额、签名基数上限、签名字符白名单、无论结果一律回 204（不告诉调用方什么被接受了）、不落盘、不读也不存 IP、不持有任何凭证。<code>Origin</code> 白名单只是降噪，不是认证——它可以被伪造。</p>
 
 <h2>测试币 gas 补给</h2>
@@ -123,6 +127,10 @@ curl -fsS localhost:9464/healthz</pre>
 		respond 404
 	}</pre>
 <p><code>method POST</code> plus the catch-all <code>/updown/* → 404</code> narrow the public surface to exactly one path and one method, so the keeper's <code>/metrics</code> — which reports the keeper's balance — is not exposed along with it.</p>
+<p><strong>If reports start returning 502, check these two first — both were hit on the 2026-09-06 rollout, and neither can be reproduced off the box.</strong> (1)&nbsp;<code>RestrictAddressFamilies</code> in the unit must include <code>AF_UNIX</code>, or the kernel refuses the socket outright (<code>listen EAFNOSUPPORT</code>) — the sandbox is what enforces it, so every test outside systemd passes. (2)&nbsp;the unit must carry <code>RuntimeDirectoryPreserve=yes</code>: <code>RuntimeDirectory=</code> deletes the directory on stop and creates a new one (a new inode) on start, while caddy's bind mount stays pinned to the old one — so <strong>after the first restart the container looks at an empty directory for ever</strong>, with nothing in either log to say why. To diagnose:</p>
+<pre>sudo stat -c %i /run/updown
+sudo docker exec deploy-caddy-1 stat -c %i /run/updown   # the two inodes must match</pre>
+<p>If they differ, force-recreate caddy once. The keeper itself is safe either way: a socket it cannot open is logged as an error and nothing more — it goes on settling rounds.</p>
 <p>The endpoint is <strong>unauthenticated</strong> and shares a process with the keeper's signing key. Its bounds: a 2 KB body cap enforced while streaming (not buffered then measured), a fixed schema, a global per-minute ceiling, a signature cardinality cap, a signature character allowlist, the same 204 whatever it decides (a caller is never told what was accepted), no disk writes, no IP read or stored, and no credential held. The <code>Origin</code> allowlist is a noise filter, not authentication — it is spoofable.</p>
 
 <h2>Keeping the testnet in gas</h2>
