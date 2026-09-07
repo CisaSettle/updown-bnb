@@ -76,9 +76,11 @@ test('two solvent accounts still take one side each, and the coin flip decides w
   assert.deepEqual(assignSides([A, B], canPay, true), [B, A])
 })
 
-test('with both accounts dry the normal split stands, so the failure is loud rather than silent', () => {
+test('both dry accounts pause bets and funding either account restores both sides', () => {
   const A = { address: 'A' }
   const B = { address: 'B' }
   const canPay = () => false
-  assert.deepEqual(assignSides([A, B], canPay, false), [A, B])
+  assert.deepEqual(assignSides([A, B], canPay, false), [])
+  assert.deepEqual(assignSides([A, B], canPay, true), [])
+  assert.deepEqual(assignSides([A, B], (account) => account === B, false), [B, B])
 })

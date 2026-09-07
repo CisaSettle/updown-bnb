@@ -99,6 +99,8 @@ const markets = MARKET_KEYS.map((key) => {
   }
   return { key, address: getAddress(dep[key]) }
 })
+// Reducing synthetic activity must not strand payouts from previously active markets.
+const claimMarkets = ALL_MARKETS.map((key) => ({ key, address: getAddress(dep[key]) }))
 const asset = getAddress(dep.usdt)
 
 const BET_MIN = Number(process.env.BET_MIN ?? '3')
@@ -308,6 +310,7 @@ function markRefilled(address, at = Date.now()) {
  * the first minute of a run must not assume the worst and collapse the book onto one account.
  */
 const insolvent = new Set()
+let gasPaused = false
 async function updateSolvency(balances) {
   const gasPrice = await pub.getGasPrice()
   // Clamped below the refill floor, because this line scales with the live gas price while
@@ -321,13 +324,20 @@ async function updateSolvency(balances) {
   ;[A, B].forEach((who, i) => {
     const broke = balances[i] < need
     if (broke && !insolvent.has(who.address)) {
-      log(`${who.address.slice(0, 8)} can no longer fund a bet (${formatEther(balances[i])} BNB < ${formatEther(need)}); the other account will carry both sides`)
+      log(`${who.address.slice(0, 8)} is below the transaction gas budget (${formatEther(balances[i])} BNB < ${formatEther(need)})`)
     } else if (!broke && insolvent.has(who.address)) {
       log(`${who.address.slice(0, 8)} can fund bets again; both sides return to two accounts`)
     }
     if (broke) insolvent.add(who.address)
     else insolvent.delete(who.address)
   })
+  const paused = insolvent.size === 2
+  if (paused !== gasPaused) {
+    gasPaused = paused
+    log(paused
+      ? 'GAS_PAUSED: both bots below transaction budget; waiting for funding, refill checks remain active'
+      : 'GAS_RESUMED: funded account available; resuming bot transactions')
+  }
 }
 
 /**
@@ -447,6 +457,7 @@ async function probeDue(who, market, offset, limit) {
 }
 
 async function collect(who, market) {
+  if (insolvent.has(who.address)) return
   const read = (fn, args) => pub.readContract({ address: market.address, abi: MARKET, functionName: fn, args })
   const [, total] = await read('userEpochs', [who.address, 0n, 0n])
   if (total === 0n) return
@@ -474,7 +485,7 @@ async function collect(who, market) {
 }
 
 async function faucetTopUp(who) {
-  if (stopping) return
+  if (stopping || insolvent.has(who.address)) return
   const b = await bal(who.address)
   if (b > U(300)) return
   try {
@@ -587,6 +598,7 @@ async function gasGuardBots() {
   // silently resetting the escalation.
   if (landed > 0) noteFunderFunded()
   else log(noteFunderDry(funderBalance))
+  if (landed > 0) await updateSolvency(await Promise.all([A, B].map((who) => pub.getBalance({ address: who.address }))))
   if (scale < totalGap) alertFaucetNeeded(`funder could only cover part of the bot refill plan (${dueReason})`)
 }
 
@@ -605,7 +617,31 @@ async function keeperGasGuard() {
 const plans = new Map()
 const dormantMinuteMarkets = new Set()
 const firstBetMinLead = firstBetMinLeadReader()
+const approvals = new Map()
+async function ensureApproval(who, market) {
+  const key = `${who.address}:${market.address}`
+  if (!approvals.has(key)) {
+    const pending = (async () => {
+      const allowance = await pub.readContract({
+        address: asset, abi: ERC20, functionName: 'allowance', args: [who.address, market.address],
+      })
+      if (allowance < U(1e6)) {
+        await send(who, asset, ERC20, 'approve', [market.address, 2n ** 256n - 1n])
+        log(`approved ${market.key} for ${who.address.slice(0, 8)}`)
+      }
+    })().catch((error) => {
+      approvals.delete(key)
+      throw error
+    })
+    approvals.set(key, pending)
+  }
+  await approvals.get(key)
+}
 async function tick(market) {
+  if (gasPaused) {
+    dormantMinuteMarkets.delete(market.key)
+    return
+  }
   const read = (fn, args = []) => pub.readContract({ address: market.address, abi: MARKET, functionName: fn, args })
   const [{ epoch, round: bettableRound, maintenanceRequired }, firstBetMinLeadSeconds] = await Promise.all([
     readBettableRound(read),
@@ -638,6 +674,7 @@ async function tick(market) {
     }
     const oneSided = roll < SKIP_PROB + ONE_SIDED_PROB
     const [upAcct, downAcct] = pickSideAccounts()
+    if (!upAcct) return
     const up = { who: upAcct, fn: 'betUp', side: 'up', usdt: stake() }
     const down = { who: downAcct, fn: 'betDown', side: 'down', usdt: stake() }
     // A one-sided book should not always be an UP book — pick the lone side by coin flip too.
@@ -659,6 +696,8 @@ async function tick(market) {
   const placed = []
   await Promise.all(
     plan.todo.map(async (item) => {
+      // Keep an existing plan pending during low gas; do not reassign a possibly mined bet.
+      if (insolvent.has(item.who.address)) return
       const sideTotal = item.side === 'up' ? r.upAmount : r.downAmount
       const remaining = maxSide > sideTotal ? maxSide - sideTotal : 0n
       if (remaining < minBet) {
@@ -683,6 +722,7 @@ async function tick(market) {
         // Leave five seconds of the window for the side queued behind this one. With both sides on
         // a single account they are strictly serial, so an unbounded wait here is a void there.
         const receiptBudgetMs = Math.max(5_000, (Number(r.lockTs) - t - 5) * 1_000)
+        await ensureApproval(item.who, market)
         await send(item.who, market.address, MARKET, item.fn, [epoch, amount], undefined, receiptBudgetMs)
         placed.push(item)
       } catch (e) {
@@ -741,22 +781,12 @@ await keeperGasGuard()
 await gasGuardBots()
 for (const who of [A, B]) {
   if (stopping) break
+  if (insolvent.has(who.address)) continue
   await faucetTopUp(who)
   for (const market of markets) {
     if (stopping) break
     try {
-      const allowance = await pub.readContract({
-        address: asset,
-        abi: ERC20,
-        functionName: 'allowance',
-        args: [who.address, market.address],
-      })
-      if (allowance < U(1e6)) {
-        // Exactly type(uint256).max: OpenZeppelin treats only that value as infinite and skips
-        // the per-transfer allowance write.
-        await send(who, asset, ERC20, 'approve', [market.address, 2n ** 256n - 1n])
-        log(`approved ${market.key} for ${who.address.slice(0, 8)}`)
-      }
+      await ensureApproval(who, market)
     } catch (e) {
       // A signal mid-read surfaces as enqueue's refusal — that is a clean stop, not a failure.
       if (stopping) break
@@ -784,8 +814,8 @@ for (;;) {
       log(`${market.key}: tick error: ${short(e)}`)
     }
   }
-  // Roughly once a minute, off the hot path: sweep claims first — a fresh claim can lift the
-  // balance over the faucet threshold — then gas and faucet checks. The sweep lives here, not on
+  // Roughly once a minute, off the hot path: refresh gas before attempting token transactions,
+  // then sweep claims before requesting more test USDT. The sweep lives here, not on
   // plan completion, so sit-outs, missed windows, stalls and restarts still collect. Each probe
   // carries its own catch: a failing read on one market must not starve the rest, and a failing
   // sweep must never starve the gas and faucet checks.
@@ -795,21 +825,21 @@ for (;;) {
     } catch (e) {
       log(`keeper gas check failed: ${short(e)}`)
     }
+    if (!stopping) {
+      try {
+        await gasGuardBots()
+      } catch (e) {
+        log(`gas check failed: ${short(e)}`)
+      }
+    }
     for (const who of [A, B]) {
-      for (const market of markets) {
+      for (const market of claimMarkets) {
         if (stopping) break
         try {
           await collect(who, market)
         } catch (e) {
           log(`${market.key}: collect failed: ${short(e)}`)
         }
-      }
-    }
-    if (!stopping) {
-      try {
-        await gasGuardBots()
-      } catch (e) {
-        log(`gas check failed: ${short(e)}`)
       }
     }
     for (const who of [A, B]) {

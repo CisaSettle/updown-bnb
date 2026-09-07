@@ -37,11 +37,11 @@ export function selectGasRefills({ accounts, floor, target, nowMs, maxAgeMs }) {
  * two participants is a cosmetic price for rounds that actually settle, and it is the same two
  * transactions either way.
  *
- * With both accounts dry there is no assignment that helps, so the normal split stands and the bets
- * fail loudly on their own.
+ * With both accounts dry, pause new bets until the gas guard observes a funded account again.
  */
 export function assignSides(accounts, canPay, swap) {
   const solvent = accounts.filter((account) => canPay(account))
+  if (solvent.length === 0) return []
   if (solvent.length === 1) return [solvent[0], solvent[0]]
   return swap ? [accounts[1], accounts[0]] : [accounts[0], accounts[1]]
 }
