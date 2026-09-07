@@ -46,8 +46,11 @@ export function useLiveRounds(
 
   const data = useMemo<LiveRoundData>(() => {
     const raw = query.data as readonly unknown[] | undefined
+    const bettable = toRound(pick(raw, 0))
     return {
-      bettable: toRound(pick(raw, 0)),
+      // A virtual empty round disappears when the grid advances between the epoch and round
+      // reads. Its all-zero struct is not a real 0%-fee book; wait for the new epoch instead.
+      bettable: bettable?.startTs === 0n ? undefined : bettable,
       bettableOdds: asBigIntPair(pick(raw, 1)),
       live: hasPrev ? toRound(pick(raw, 2)) : undefined,
       liveOdds: hasPrev ? asBigIntPair(pick(raw, 3)) : undefined,

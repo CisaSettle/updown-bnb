@@ -52,7 +52,9 @@ function candidatePaths(chainId, env) {
   const list = []
   if (env.VITE_DEPLOYMENT_FILE) {
     const p = env.VITE_DEPLOYMENT_FILE
-    list.push({ path: isAbsolute(p) ? p : resolve(WEB_ROOT, p), source: 'VITE_DEPLOYMENT_FILE' })
+    const path = isAbsolute(p) ? p : resolve(WEB_ROOT, p)
+    if (!existsSync(path)) throw new Error(`Explicit VITE_DEPLOYMENT_FILE does not exist: ${path}`)
+    list.push({ path, source: 'VITE_DEPLOYMENT_FILE' })
   }
   list.push({
     path: resolve(WEB_ROOT, '..', 'contracts', 'deployments', `${chainId}.json`),
@@ -105,6 +107,7 @@ export function resolveDeployment(env = process.env) {
       )
     }
     const placeholder = deployment.registry.toLowerCase() === ZERO
+    if (strict && placeholder) throw new Error(`Deployment file ${path} has a zero registry (STRICT_DEPLOYMENT=1).`)
     return { deployment, source, path, placeholder, chainId }
   }
 

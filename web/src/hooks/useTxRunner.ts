@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import type { Hash } from 'viem'
 import { useConfig, useWriteContract } from 'wagmi'
 import { getTransactionReceipt, waitForTransactionReceipt } from 'wagmi/actions'
@@ -28,9 +28,13 @@ export function useTxRunner() {
   const config = useConfig()
   const lang = useLang()
   const [busyKey, setBusyKey] = useState<string | null>(null)
+  const inFlight = useRef(false)
 
   const run = useCallback(
     async (key: string, name: Text, send: () => Promise<Hash>, onSuccess?: () => void): Promise<boolean> => {
+      // React state updates do not synchronously disable a second click in the same render.
+      if (inFlight.current) return false
+      inFlight.current = true
       // The action's own name, resolved once: a toast is a snapshot of a moment, and re-reading the
       // language halfway through a receipt would leave one toast written in two of them. The link
       // label is frozen with it — `hrefLabel` is what keeps the Toaster from re-resolving it.
@@ -39,11 +43,23 @@ export function useTxRunner() {
       const toastId = pushToast({ kind: 'pending', title, body: t(lang, ui.toast.confirmInWallet) })
       setBusyKey(key)
       let hash: Hash | undefined
+      let succeeded = false
       // Set by `onReplaced` when the wallet mines a substitute for our transaction. `repriced` is
       // the same call sped up; anything else means the original never executed. (A box rather
       // than a `let`: TS cannot see the closure assignment and would narrow a variable to
       // undefined for good.)
       const replaced: { current?: { reason: 'repriced' | 'cancelled' | 'replaced'; hash: Hash } } = {}
+      const reportCancellation = (minedHash: Hash): boolean => {
+        if (!replaced.current || replaced.current.reason === 'repriced') return false
+        updateToast(toastId, {
+          kind: 'info',
+          title: t(lang, ui.txCancelled(title)),
+          body: t(lang, ui.toast.cancelled),
+          href: txUrl(minedHash),
+          hrefLabel: viewTx,
+        })
+        return true
+      }
       try {
         hash = await send()
         updateToast(toastId, { body: t(lang, ui.toast.waiting), href: txUrl(hash), hrefLabel: viewTx })
@@ -57,16 +73,7 @@ export function useTxRunner() {
         // Wherever the outcome is linked from, it is the mined transaction's hash — after a
         // speed-up the original hash names a transaction the chain never mined.
         const minedHash = replaced.current?.hash ?? hash
-        if (replaced.current && replaced.current.reason !== 'repriced') {
-          updateToast(toastId, {
-            kind: 'info',
-            title: t(lang, ui.txCancelled(title)),
-            body: t(lang, ui.toast.cancelled),
-            href: txUrl(minedHash),
-            hrefLabel: viewTx,
-          })
-          return false
-        }
+        if (reportCancellation(minedHash)) return false
         if (receipt.status === 'success') {
           updateToast(toastId, {
             kind: 'success',
@@ -75,7 +82,7 @@ export function useTxRunner() {
             href: txUrl(minedHash),
             hrefLabel: viewTx,
           })
-          onSuccess?.()
+          succeeded = true
           return true
         }
         // Defensive only: current wagmi throws on a reverted receipt instead of returning it.
@@ -95,6 +102,7 @@ export function useTxRunner() {
           // and only the chain can say which. One read settles it.
           try {
             const receipt = await getTransactionReceipt(config, { hash: minedHash, chainId: CHAIN_ID })
+            if (reportCancellation(minedHash)) return false
             if (receipt.status === 'reverted') {
               updateToast(toastId, {
                 kind: 'error',
@@ -113,7 +121,7 @@ export function useTxRunner() {
               href: txUrl(minedHash),
               hrefLabel: viewTx,
             })
-            onSuccess?.()
+            succeeded = true
             return true
           } catch {
             // No receipt exists: the transaction is signed, broadcast and genuinely unresolved.
@@ -139,7 +147,10 @@ export function useTxRunner() {
         }
         return false
       } finally {
+        inFlight.current = false
         setBusyKey(null)
+        // UI refresh errors must never enter transaction recovery or run this callback twice.
+        if (succeeded) onSuccess?.()
       }
     },
     [config, lang],

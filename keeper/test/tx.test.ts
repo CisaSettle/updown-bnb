@@ -368,27 +368,31 @@ describe('a failure says whether it may have reached the wire', () => {
     expect(nonces).toEqual([7, 7])
   })
 
-  // …while a nonce genuinely taken by somebody else must still be worked around, or every remaining
-  // attempt is a guaranteed failure.
-  it('still re-nonces when the slot was taken by a transaction that is not ours', async () => {
+  it.each(['missing', 'RPC failure'])('never re-nonces a known hash with an unresolved receipt (%s)', async (lookup) => {
     const nonces: number[] = []
-    let current = 7
-    const result = await sendWithRetry(policy, deps({
-      getNonce: async () => current,
+    const getNonce = vi.fn(async () => nonces.length ? 8 : 7)
+    const error = await sendWithRetry(policy, deps({
+      getNonce,
       send: async (ctx) => {
         nonces.push(ctx.nonce)
-        // First attempt fails on the receipt wait, not the send, so nonce 7 is not ambiguous.
-        if (nonces.length === 1) { current = 8; return HASH_A }
+        if (nonces.length === 1) return HASH_A
+        if (ctx.nonce === 7) throw new Error('nonce too low')
         return HASH_B
       },
       waitForReceipt: async (hash) => {
-        if (hash === HASH_A) throw new Error('nonce too low')
+        if (hash === HASH_A) throw new Error('receipt timed out')
         return receipt(hash)
       },
-      getReceiptIfMined: async () => null,
-    }))
-    expect(nonces).toEqual([7, 8])
-    expect(result.receipt.transactionHash).toBe(HASH_B)
+      getReceiptIfMined: async () => {
+        if (lookup === 'RPC failure') throw new Error('RPC unavailable')
+        return null
+      },
+    })).catch((e: unknown) => e)
+    expect(error).toBeInstanceOf(TerminalTxError)
+    expect(didBroadcast(error)).toBe(true)
+    expect((error as TerminalTxError).broadcast).toEqual([HASH_A])
+    expect(nonces).toEqual([7, 7])
+    expect(getNonce).toHaveBeenCalledOnce()
   })
 
   it('treats a reverted transaction as broadcast, because it plainly was', async () => {

@@ -10,6 +10,8 @@ contracts/lib/
 .review/
 *.log
 .bet-bot-gas-state.json
+.bet-bot-gas-state.json.new
+.bet-bot-gas-state.json.transactions*
 .DS_Store
 # Per-machine agent settings stay local.
 .claude/settings.local.json

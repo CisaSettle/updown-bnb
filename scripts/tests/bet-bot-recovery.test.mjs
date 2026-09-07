@@ -7,6 +7,7 @@ import * as url from 'node:url'
 import * as viem from '../../keeper/node_modules/viem/_esm/index.js'
 import * as gas from '../lib/gas-refill.mjs'
 import * as window from '../lib/bet-window.mjs'
+import * as chains from '../../keeper/node_modules/viem/_esm/chains/index.js'
 
 // Execute the real startup and polling loop against an in-memory chain. No keys, RPC or timers.
 const botUrl = new URL('../bet-bot.mjs', import.meta.url)
@@ -69,11 +70,16 @@ async function runBot(recovery) {
       ...viem,
       createPublicClient: () => pub,
       createWalletClient: ({ account }) => ({
-        writeContract: async (request) => {
-          writes.push({ ...request, account: account.address, sleeps })
-          return '0x01'
-        },
-        sendTransaction: async (request) => {
+        prepareTransactionRequest: async (request) => request,
+        signTransaction: async (request) => {
+          if (request.data) {
+            const decoded = viem.decodeFunctionData({ abi: viem.parseAbi([
+              'function approve(address,uint256)', 'function faucet()', 'function claim(uint256[])',
+              'function betUp(uint256,uint256)', 'function betDown(uint256,uint256)',
+            ]), data: request.data })
+            writes.push({ ...request, ...decoded, account: account.address, sleeps })
+            return '0x01'
+          }
           const cost = request.value + request.gas * request.gasPrice
           balances.set(F, balances.get(F) - cost)
           balances.set(request.to, balances.get(request.to) + request.value)
@@ -84,6 +90,9 @@ async function runBot(recovery) {
       }),
     },
     '../keeper/node_modules/viem/_esm/accounts/index.js': { privateKeyToAccount: (address) => ({ address }) },
+    '../keeper/node_modules/viem/_esm/chains/index.js': chains,
+    // Durable signing/replay is exercised with real signed bytes in tx-outbox.test.mjs.
+    './lib/tx-outbox.mjs': { TxOutbox: class { async send(_account, prepare) { return prepare() } } },
     './lib/gas-refill.mjs': gas,
     './lib/bet-window.mjs': window,
   }
@@ -123,9 +132,9 @@ test('direct funding resumes both sides on the solvent bot and approves just onc
   assert.ok(logs.some((line) => line.includes('GAS_RESUMED')))
   const bets = writes.filter((write) => ['betUp', 'betDown'].includes(write.functionName))
   assert.deepEqual(bets.map((bet) => bet.functionName).sort(), ['betDown', 'betUp'])
-  assert.ok(bets.every((bet) => bet.account === B && bet.address === viem.getAddress(dep.btcUsd10m)))
+  assert.ok(bets.every((bet) => bet.account === B && bet.to === viem.getAddress(dep.btcUsd10m)))
   assert.equal(writes.filter((write) => write.functionName === 'approve').length, 1)
-  assert.ok(writes.some((write) => write.functionName === 'claim' && write.address === viem.getAddress(dep.ethUsd10m)))
+  assert.ok(writes.some((write) => write.functionName === 'claim' && write.to === viem.getAddress(dep.ethUsd10m)))
 })
 
 test('funding the source automatically refills both bots and resumes without restart', async () => {

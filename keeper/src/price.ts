@@ -167,11 +167,11 @@ export function parseTickerPayload(payload: unknown, expectedSymbol: string): st
     throw new PriceParseError(String(payload), 'ticker response was not a JSON object');
   }
   const body = payload as TickerResponse;
-  if (typeof body.symbol === 'string' && body.symbol.toUpperCase() !== expectedSymbol.toUpperCase()) {
+  if (typeof body.symbol !== 'string' || body.symbol.toUpperCase() !== expectedSymbol.toUpperCase()) {
     throw new PriceParseError(String(body.symbol), `ticker response is for the wrong symbol (want ${expectedSymbol})`);
   }
-  if (typeof body.price !== 'string' && typeof body.price !== 'number') {
-    throw new PriceParseError(JSON.stringify(payload), 'ticker response has no `price` field');
+  if (typeof body.price !== 'string') {
+    throw new PriceParseError(JSON.stringify(payload), 'ticker response must carry an exact decimal `price` string');
   }
   return String(body.price);
 }
@@ -229,7 +229,7 @@ export class PriceSource {
     const key = symbol.toUpperCase();
     const cached = this.#cache.get(key);
     const now = this.#now();
-    if (cached && now - cached.fetchedAtMs <= this.#options.cacheTtlMs) {
+    if (cached && now >= cached.fetchedAtMs && now - cached.fetchedAtMs <= this.#options.cacheTtlMs) {
       return { ...cached, cached: true };
     }
 

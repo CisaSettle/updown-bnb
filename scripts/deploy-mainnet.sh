@@ -112,7 +112,12 @@ echo "${GRN}preflight passed${RST}"
 echo
 echo "═══ simulation (no broadcast) ═════════════════════════════════════════"
 forge script script/Deploy.s.sol:Deploy --rpc-url "$BSC_RPC_URL" 2>&1 \
-  | grep -E "chainId|registry|BTC/USD|ETH/USD|BNB/USD|usdt|Feed|deployer|Estimated amount|DRY RUN|SIMULATION|Error" || true
+  | grep -E "chainId|registry|BTC/USD|ETH/USD|BNB/USD|usdt|Feed|deployer|Estimated amount|DRY RUN|SIMULATION|Error"
+SIMULATION_STATUS=${PIPESTATUS[0]}
+if [ "$SIMULATION_STATUS" -ne 0 ]; then
+  echo "${RED}simulation failed — nothing was broadcast.${RST}"
+  exit "$SIMULATION_STATUS"
+fi
 
 # ── the point of no return ───────────────────────────────────────────────────
 cat <<BANNER

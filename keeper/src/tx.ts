@@ -189,9 +189,9 @@ export function didBroadcast(error: unknown): boolean {
  *
  * Every retry re-uses the **same nonce** with a strictly higher gas price, so a stuck attempt is
  * replaced rather than duplicated. Before each retry the hashes already broadcast are checked: if
- * one of them landed after all, that receipt is the result. The one exception is a node telling us
- * the nonce itself is spent, which is the single case where reusing it cannot work: then, and only
- * then, the nonce is re-read.
+ * one of them landed after all, that receipt is the result. A spent nonce may only be refreshed
+ * when no earlier attempt of ours could have consumed it. A failed receipt lookup is not proof
+ * that a broadcast transaction did not execute.
  */
 export async function sendWithRetry<R extends MinimalReceipt>(
   policy: SendPolicy,
@@ -225,6 +225,7 @@ export async function sendWithRetry<R extends MinimalReceipt>(
    * else took the slot — is the wrong one. It was almost certainly us.
    */
   const ambiguousNonces = new Set<number>();
+  const broadcastNonces = new Set<number>();
 
   for (let attempt = 0; attempt < policy.maxAttempts; attempt += 1) {
     const gasPriceWei = bumpGasPrice(baseGasPrice, attempt, policy.gasBumpPercent, policy.maxGasPriceWei);
@@ -238,6 +239,7 @@ export async function sendWithRetry<R extends MinimalReceipt>(
       attempted = true;
       const hash = await deps.send(ctx);
       broadcast.push(hash);
+      broadcastNonces.add(nonce);
       deps.onAttempt?.({ attempt, gasPriceWei, nonce, hash, outcome: 'sent', latencyMs: deps.now() - attemptStart });
 
       const receipt = await deps.waitForReceipt(hash, policy.receiptTimeoutMs);
@@ -326,9 +328,9 @@ export async function sendWithRetry<R extends MinimalReceipt>(
       // fresh nonce — two transactions for a boundary only one print can ever serve — and worse,
       // `sendWithRetry` would then RETURN SUCCESSFULLY, so the caller's `didBroadcast` guard never
       // gets a say. The duplicate is invisible from outside. Stop instead, and report it as sent.
-      if (isNonceError(error) && ambiguousNonces.has(nonce)) {
+      if (isNonceError(error) && (ambiguousNonces.has(nonce) || broadcastNonces.has(nonce))) {
         throw new TerminalTxError(
-          `nonce ${nonce} was consumed after an attempt whose result was never seen: a transaction of ours is in flight`,
+          `nonce ${nonce} was consumed after our send: execution is unresolved; refusing to send at a fresh nonce`,
           { cause: error, broadcast: [...broadcast], attempted: true },
         );
       }

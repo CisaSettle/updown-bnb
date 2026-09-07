@@ -125,8 +125,12 @@ describe('parseTickerPayload', () => {
     expect(parseTickerPayload({ symbol: 'BTCUSDT', price: '84123.45' }, 'BTCUSDT')).toBe('84123.45');
   });
 
-  it('accepts a numeric price field', () => {
-    expect(parseTickerPayload({ symbol: 'BTCUSDT', price: 84123.45 }, 'BTCUSDT')).toBe('84123.45');
+  it('rejects numeric prices that have already lost decimal precision', () => {
+    expect(() => parseTickerPayload({ symbol: 'BTCUSDT', price: 84123.45 }, 'BTCUSDT')).toThrow(PriceParseError);
+  });
+
+  it.each([undefined, null, 42, ''])('rejects a price without a verified symbol (%s)', (symbol) => {
+    expect(() => parseTickerPayload({ symbol, price: '84123.45' }, 'BTCUSDT')).toThrow(PriceParseError);
   });
 
   it('refuses a response for a different symbol', () => {
@@ -206,6 +210,16 @@ describe('PriceSource', () => {
     const quote = await source.get('BNBUSDT');
     expect(quote.endpoint).toBe('https://fallback.test/api/v3/ticker/price');
     expect(quote.price8dp).toBe(70_000_000_000n);
+  });
+
+  it('fetches again after the wall clock moves backwards', async () => {
+    const fetchImpl = vi.fn(async () => ok('84123.45')) as unknown as typeof fetch;
+    let now = 10_000;
+    const source = makeSource(fetchImpl, { now: () => now });
+    await source.get('BTCUSDT');
+    now = 1_000;
+    expect((await source.get('BTCUSDT')).cached).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
   it('reports every endpoint failure when none succeed', async () => {

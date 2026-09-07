@@ -39,6 +39,9 @@ jobs:
             if [ "$MODULE" = keeper ] || [ "$MODULE" = web ]; then
               PATTERN="$PATTERN|^contracts/deployments/"
             fi
+            if [ "$MODULE" = scripts ]; then
+              PATTERN="$PATTERN|^keeper/package(-lock)?\.json$"
+            fi
             if grep -Eq "$PATTERN" /tmp/changed-paths; then
               echo "$MODULE=true" >> "$GITHUB_OUTPUT"
             fi
@@ -52,7 +55,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
-      - run: node --test scripts/tests/bet-window.test.mjs scripts/tests/gas-refill.test.mjs
+      - run: npm ci
+        working-directory: keeper
+      - run: node --test scripts/tests/bet-window.test.mjs scripts/tests/gas-refill.test.mjs scripts/tests/bet-bot-recovery.test.mjs scripts/tests/tx-outbox.test.mjs scripts/tests/mainnet-deploy.test.mjs
 
   contracts:
     needs: changes
@@ -109,4 +114,4 @@ jobs:
         working-directory: web
         env:
           DIFF_BASE: ${{ needs.changes.outputs.base }}
-        run: npx vitest run --changed="$DIFF_BASE" --passWithNoTests
+        run: node scripts/test-affected.mjs "$DIFF_BASE"

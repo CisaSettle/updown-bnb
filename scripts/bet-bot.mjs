@@ -46,10 +46,13 @@ import {
   formatEther,
   formatUnits,
   getAddress,
+  encodeFunctionData,
 } from '../keeper/node_modules/viem/_esm/index.js'
 import { privateKeyToAccount } from '../keeper/node_modules/viem/_esm/accounts/index.js'
+import { bscTestnet } from '../keeper/node_modules/viem/_esm/chains/index.js'
 import { allocateGasRefills, assignSides, selectGasRefills } from './lib/gas-refill.mjs'
 import { firstBetMinLeadReader, hasPlanningRunway, readBettableRound } from './lib/bet-window.mjs'
+import { TxOutbox } from './lib/tx-outbox.mjs'
 
 /**
  * Exit code for a configuration error that restarting cannot fix (sysexits.h EX_CONFIG).
@@ -193,7 +196,11 @@ const ERC20 = parseAbi([
   'function faucet()',
 ])
 
-const pub = createPublicClient({ transport: http(RPC) })
+const pub = createPublicClient({ chain: bscTestnet, transport: http(RPC) })
+const outbox = new TxOutbox({
+  path: process.env.TX_STATE_PATH ?? `${GAS_STATE_PATH}.transactions`,
+  publicClient: pub,
+})
 for (const name of ['A_KEY', 'B_KEY']) {
   if (!process.env[name]) {
     console.error(`${name} is required — two funded testnet accounts (see the header comment).`)
@@ -213,7 +220,7 @@ const account = (name, raw) => {
 const A = account('A_KEY', process.env.A_KEY)
 const B = account('B_KEY', process.env.B_KEY)
 const FUNDER = process.env.FUNDER_KEY ? account('FUNDER_KEY', process.env.FUNDER_KEY) : undefined
-const wallet = (a) => createWalletClient({ account: a, transport: http(RPC) })
+const wallet = (a) => createWalletClient({ account: a, chain: bscTestnet, transport: http(RPC) })
 
 // A kill must not land between a broadcast and its receipt: finish in-flight sends, then leave.
 let stopping = false
@@ -245,19 +252,28 @@ const enqueue = (acct, fn) => {
  * side past `lockTs` — producing exactly the one-sided void that carrying both sides exists to
  * prevent. Callers that are racing a window pass the time they actually have.
  *
- * Timing out is safe: the transaction may still mine, and the caller marks the item `retried`, which
- * makes the next attempt believe the on-chain ledger over the error before spending again.
+ * Timeouts leave the signed transaction in the durable outbox. The next operation reconciles it
+ * before any fresh signature is allowed, including after a process restart.
  */
 async function send(account, address, abi, functionName, args, value, receiptTimeoutMs) {
   return enqueue(account, async () => {
-    const { request } = await pub.simulateContract({ account, address, abi, functionName, args, value })
-    const hash = await wallet(account).writeContract(request)
-    const receipt = await pub.waitForTransactionReceipt(receiptTimeoutMs ? { hash, timeout: receiptTimeoutMs } : { hash })
-    // Simulation passing does not make the mined result a success — the round can move on, a cap
-    // can fill — and a swallowed revert would read as a placed bet.
-    if (receipt.status !== 'success') throw new Error(`${functionName} reverted on chain (${hash})`)
-    return hash
+    return outbox.send(account, async () => {
+      await pub.simulateContract({ account, address, abi, functionName, args, value })
+      const client = wallet(account)
+      const request = await client.prepareTransactionRequest({
+        to: address, data: encodeFunctionData({ abi, functionName, args }), value,
+      })
+      return client.signTransaction(request)
+    }, receiptTimeoutMs)
   })
+}
+
+function transferGas(to, value, gasPrice) {
+  return enqueue(FUNDER, () => outbox.send(FUNDER, async () => {
+    const client = wallet(FUNDER)
+    const request = await client.prepareTransactionRequest({ to, value, gas: 21_000n, gasPrice })
+    return client.signTransaction(request)
+  }))
 }
 const bal = (who) => pub.readContract({ address: asset, abi: ERC20, functionName: 'balanceOf', args: [who] })
 const now = async () => Number((await pub.getBlock({ blockTag: 'latest' })).timestamp)
@@ -512,12 +528,7 @@ async function gasGuardAddress(address, floor, target, label) {
       const gap = target - gas
       const value = available < gap ? available : gap
       if (value <= 0n) throw new Error(noteFunderDry(funderBalance))
-      const hash = await enqueue(FUNDER, async () => {
-        const h = await wallet(FUNDER).sendTransaction({ to: address, value, gas: 21_000n, gasPrice })
-        const receipt = await pub.waitForTransactionReceipt({ hash: h })
-        if (receipt.status !== 'success') throw new Error(`top-up reverted (${h})`)
-        return h
-      })
+      const hash = await transferGas(address, value, gasPrice)
       noteFunderFunded()
       log(`gas top-up ${formatEther(value)} BNB -> ${label} ${address.slice(0, 8)} (${hash.slice(0, 10)})`)
       return
@@ -580,17 +591,15 @@ async function gasGuardBots() {
   for (const item of allocations) {
     if (stopping) return
     try {
-      const hash = await enqueue(FUNDER, async () => {
-        const sent = await wallet(FUNDER).sendTransaction({ to: item.address, value: item.value, gas: 21_000n, gasPrice })
-        const receipt = await pub.waitForTransactionReceipt({ hash: sent })
-        if (receipt.status !== 'success') throw new Error(`top-up reverted (${sent})`)
-        return sent
-      })
+      const hash = await transferGas(item.address, item.value, gasPrice)
       markRefilled(item.address)
       landed++
       log(`gas top-up ${formatEther(item.value)} BNB -> bot ${item.address.slice(0, 8)} (${hash.slice(0, 10)})`)
     } catch (e) {
       log(`bot gas top-up failed for ${item.address.slice(0, 8)}: ${short(e)}`)
+      // The outbox may just have reconciled a transfer from a previous pass. Re-plan the entire
+      // allocation from fresh balances; later items still carry the old funder budget.
+      break
     }
   }
   // Headroom above the reserve is not recovery. If every allocation came out under the dust floor,

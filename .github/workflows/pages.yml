@@ -48,7 +48,7 @@ jobs:
           if ! git cat-file -e "${DIFF_BASE}^{commit}" 2>/dev/null; then
             DIFF_BASE=$(git hash-object -t tree /dev/null)
           fi
-          npx vitest run --changed="$DIFF_BASE" --passWithNoTests
+          node scripts/test-affected.mjs "$DIFF_BASE"
       - run: npm run build
         working-directory: web
         env:
