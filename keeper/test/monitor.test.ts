@@ -507,6 +507,16 @@ describe('UpDown out-of-process monitor', () => {
     expect(notificationFor(delivered, true, now, 3_600_000)).toBe('recovery');
   });
 
+  it('suppresses failures, retries, reminders and recovery while notifications are paused', () => {
+    const now = Date.parse('2026-09-01T08:00:00Z');
+    const delivered = { failedSince: '2026-09-01T06:00:00Z', alertDelivered: true, lastAlertAt: '2026-09-01T06:00:00Z' };
+    expect(notificationFor({}, false, now, 3_600_000, false)).toBeNull();
+    expect(notificationFor({ ...delivered, alertDelivered: false }, false, now, 3_600_000, false)).toBeNull();
+    expect(notificationFor(delivered, false, now, 3_600_000, false)).toBeNull();
+    expect(notificationFor(delivered, true, now, 3_600_000, false)).toBeNull();
+    expect(notificationFor(delivered, false, now, 3_600_000, true)).toBe('reminder');
+  });
+
   it('records delivery of the failure alert and clears the incident once recovery is delivered', () => {
     const t1 = '2026-09-01T07:00:00Z';
     const t2 = '2026-09-01T08:00:00Z';
@@ -534,4 +544,3 @@ describe('UpDown out-of-process monitor', () => {
     expect(alertText({ envLabel: 'prod' }, 'recovery', verdict, neverDelivered)).toContain('after an undelivered failure alert');
   });
 });
-

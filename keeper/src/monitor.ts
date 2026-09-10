@@ -361,7 +361,9 @@ export function notificationFor(
   healthy: boolean,
   nowMs: number,
   repeatMs: number,
+  enabled = true,
 ): Notification {
+  if (!enabled) return null;
   if (healthy) return state.failedSince ? 'recovery' : null;
   if (!state.failedSince || !state.alertDelivered) return 'failure';
   const last = Date.parse(state.lastAlertAt ?? '');
@@ -391,6 +393,7 @@ interface Config {
   /** How recently a round must have closed to be judged. 0 disables the recency bound. */
   oneSidedMaxAgeSec: number;
   alertToken: string;
+  watchdogAlertsEnabled: boolean;
   alertChatId: string;
   envLabel: string;
   /** Minimum gap between two browser-error digests. 0 stands the lane down entirely. */
@@ -488,6 +491,7 @@ function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     oneSidedMinSample,
     oneSidedMaxAgeSec,
     alertToken: env['ALERT_TELEGRAM_BOT_TOKEN']?.trim() || required(env, 'TELEGRAM_BOT_TOKEN'),
+    watchdogAlertsEnabled: env['UPDOWN_WATCHDOG_ALERTS_ENABLED']?.trim().toLowerCase() !== 'false',
     alertChatId: required(env, 'ALERT_TELEGRAM_CHAT_ID'),
     envLabel: env['ALERT_ENV_LABEL']?.trim() || 'prod',
     clientAlertCooldownMs: clientAlertCooldownSeconds * 1_000,
@@ -859,7 +863,8 @@ async function main(): Promise<void> {
       ...(lastClientAlertAt ? { lastClientAlertAt } : {}),
     });
   };
-  const notification = notificationFor(state, verdict.healthy, now.getTime(), config.repeatMs);
+  const notification = notificationFor(state, verdict.healthy, now.getTime(), config.repeatMs, config.watchdogAlertsEnabled);
+  if (!config.watchdogAlertsEnabled) logger.info('UpDown watchdog notifications disabled; checks and logs remain active');
 
   if (!verdict.healthy) logger.error('UpDown watchdog failed', { problems: verdict.problems });
   else logger.info('UpDown watchdog healthy', { summary: verdict.summary });
