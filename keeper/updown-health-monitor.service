@@ -8,7 +8,7 @@
 # `/etc/updown/monitor.env` carries only monitoring credentials/public addresses — never the
 # keeper signing key. ALERT_TELEGRAM_BOT_TOKEN is the dedicated @bluff_alert_bot token.
 Description=UpDown production health and testnet-gas watchdog
-Documentation=https://github.com/updown-protocol/updown
+Documentation=https://github.com/CisaSettle/updown-bnb
 After=network-online.target updown-keeper.service
 Wants=network-online.target
 

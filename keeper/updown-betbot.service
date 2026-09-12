@@ -29,7 +29,7 @@
 # race each other's nonces — the exact hazard scripts/bet-bot.mjs refuses keeper and owner keys
 # over. On the laptop: launchctl bootout gui/501/ai.bluffking.updown-betbot
 Description=UpDown testnet market-making bot
-Documentation=https://github.com/updown-protocol/updown
+Documentation=https://github.com/CisaSettle/updown-bnb
 After=network-online.target updown-keeper.service
 Wants=network-online.target
 

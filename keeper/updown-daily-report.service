@@ -11,7 +11,7 @@
 # This is a separate unit from updown-health-monitor on purpose: that one pages, this one reports,
 # and one timer cannot do both — sharing it would either page once a day or report every minute.
 Description=UpDown daily Telegram report of market stake and real-user activity
-Documentation=https://github.com/updown-protocol/updown
+Documentation=https://github.com/CisaSettle/updown-bnb
 After=network-online.target updown-keeper.service
 Wants=network-online.target
 

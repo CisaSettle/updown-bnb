@@ -12,7 +12,7 @@
 
 [Unit]
 Description=UpDown Protocol keeper (executeRound driver for BNB Smart Chain)
-Documentation=https://github.com/updown-protocol/updown
+Documentation=https://github.com/CisaSettle/updown-bnb
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=300
