@@ -10,6 +10,14 @@ declare const __DEPLOYMENT__: {
   ethUsd10m: `0x${string}`
   bnbUsd1m: `0x${string}`
   bnbUsd10m: `0x${string}`
+  // Trade-mode markets: always emitted by the resolver (zero when not deployed), optional here so a
+  // hand-written stand-in deployment (the vitest fixture) may leave them out.
+  btcUsd1mTrade?: `0x${string}`
+  btcUsd10mTrade?: `0x${string}`
+  ethUsd1mTrade?: `0x${string}`
+  ethUsd10mTrade?: `0x${string}`
+  bnbUsd1mTrade?: `0x${string}`
+  bnbUsd10mTrade?: `0x${string}`
   btcFeed: `0x${string}`
   ethFeed: `0x${string}`
   bnbFeed: `0x${string}`

@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {Vm} from "forge-std/Vm.sol";
 import {UpDownBaseTest} from "./UpDownBase.t.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
+import {UpDownRoundEngine} from "../src/UpDownRoundEngine.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
@@ -54,11 +55,11 @@ contract UpDownEventsTest is UpDownBaseTest {
 
         // `_startRound` fires from inside `genesisStart`, so the round exists before it is announced
         vm.expectEmit(true, false, false, true, address(fresh));
-        emit UpDownMarketBase.RoundStarted(
+        emit UpDownRoundEngine.RoundStarted(
             1, _ts(anchor), _ts(anchor + INTERVAL), _ts(anchor + 2 * INTERVAL), FEE_BPS
         );
         vm.expectEmit(true, false, false, true, address(fresh));
-        emit UpDownMarketBase.GenesisStarted(1, anchor);
+        emit UpDownRoundEngine.GenesisStarted(1, anchor);
 
         vm.prank(owner);
         fresh.genesisStart();
@@ -83,18 +84,18 @@ contract UpDownEventsTest is UpDownBaseTest {
         _betDown(bob, 3_000e18);
         _advance(P0); // lock epoch 1, open epoch 2
 
-        UpDownMarketBase.Round memory r2 = _round(2);
+        UpDownRoundEngine.Round memory r2 = _round(2);
         vm.warp(r2.lockTs);
         uint80 rid = feed.setAnswer(81_000e8);
         vm.warp(uint256(r2.lockTs) + 1);
 
         // UP wins: fee = 3000 * 3% = 90 (losing pool only), base = 1000, pool = 1000 + 3000 - 90
         vm.expectEmit(true, false, false, true, address(market));
-        emit UpDownMarketBase.RoundSettled(1, 81_000e8, rid, 1_000e18, 3_910e18, 90e18);
+        emit UpDownRoundEngine.RoundSettled(1, 81_000e8, rid, 1_000e18, 3_910e18, 90e18);
         vm.expectEmit(true, false, false, true, address(market));
-        emit UpDownMarketBase.RoundLocked(2, 81_000e8, rid);
+        emit UpDownRoundEngine.RoundLocked(2, 81_000e8, rid);
         vm.expectEmit(true, false, false, true, address(market));
-        emit UpDownMarketBase.RoundStarted(
+        emit UpDownRoundEngine.RoundStarted(
             3, r2.lockTs, _ts(uint256(r2.lockTs) + INTERVAL), _ts(uint256(r2.lockTs) + 2 * INTERVAL), FEE_BPS
         );
 
@@ -138,7 +139,7 @@ contract UpDownEventsTest is UpDownBaseTest {
         _advance(81_000e8);
 
         vm.expectEmit(true, false, false, true, address(market));
-        emit UpDownMarketBase.TreasuryClaimed(treasury, 90e18);
+        emit UpDownRoundEngine.TreasuryClaimed(treasury, 90e18);
         vm.prank(owner);
         market.claimTreasury(treasury);
     }
@@ -152,13 +153,13 @@ contract UpDownEventsTest is UpDownBaseTest {
         _betDown(bob, 1_000e18);
         _advance(P0);
 
-        UpDownMarketBase.Round memory r2 = _round(2);
+        UpDownRoundEngine.Round memory r2 = _round(2);
         vm.warp(r2.lockTs);
         uint80 rid = feed.setAnswer(P0); // the boundary print equals the strike exactly
         vm.warp(uint256(r2.lockTs) + 1);
 
         vm.expectEmit(true, false, false, true, address(market));
-        emit UpDownMarketBase.RoundVoided(1, VOID_TIE);
+        emit UpDownRoundEngine.RoundVoided(1, VOID_TIE);
         vm.prank(keeper);
         market.executeRound(rid);
 
@@ -170,13 +171,13 @@ contract UpDownEventsTest is UpDownBaseTest {
         _betUp(alice, 1_000e18); // no counterparty
         _advance(P0);
 
-        UpDownMarketBase.Round memory r2 = _round(2);
+        UpDownRoundEngine.Round memory r2 = _round(2);
         vm.warp(r2.lockTs);
         uint80 rid = feed.setAnswer(81_000e8); // UP would have "won", but against nobody
         vm.warp(uint256(r2.lockTs) + 1);
 
         vm.expectEmit(true, false, false, true, address(market));
-        emit UpDownMarketBase.RoundVoided(1, VOID_ONE_SIDED);
+        emit UpDownRoundEngine.RoundVoided(1, VOID_ONE_SIDED);
         vm.prank(keeper);
         market.executeRound(rid);
 
@@ -190,15 +191,15 @@ contract UpDownEventsTest is UpDownBaseTest {
         _betDown(bob, 3_000e18);
         _advance(P0); // epoch 1 is now locked
 
-        UpDownMarketBase.Round memory r1 = _round(1);
+        UpDownRoundEngine.Round memory r1 = _round(1);
         vm.warp(uint256(r1.closeTs) + BUFFER + 1); // nobody turned the crank in time
         uint80 rid = feed.setAnswer(81_000e8);
         vm.warp(block.timestamp + 1);
 
         vm.expectEmit(true, false, false, true, address(market));
-        emit UpDownMarketBase.RoundVoided(1, VOID_WINDOW); // the locked round, from _endRound
+        emit UpDownRoundEngine.RoundVoided(1, VOID_WINDOW); // the locked round, from _endRound
         vm.expectEmit(true, false, false, true, address(market));
-        emit UpDownMarketBase.RoundVoided(2, VOID_WINDOW); // the bettable round, from _lockRound
+        emit UpDownRoundEngine.RoundVoided(2, VOID_WINDOW); // the bettable round, from _lockRound
         vm.prank(keeper);
         market.executeRound(rid);
 
@@ -211,14 +212,14 @@ contract UpDownEventsTest is UpDownBaseTest {
     ///         not `VOID_NOT_LOCKED`. See the log sweep below for why that code is unreachable.
     function test_aRoundThatNeverLockedVoidsWithReasonWindow() public {
         _betUp(alice, 1_000e18); // epoch 1 has a book but is never locked
-        UpDownMarketBase.Round memory r1 = _round(1);
+        UpDownRoundEngine.Round memory r1 = _round(1);
 
         vm.warp(uint256(r1.lockTs) + BUFFER + 1);
         uint80 rid = feed.setAnswer(81_000e8);
         vm.warp(block.timestamp + 1);
 
         vm.expectEmit(true, false, false, true, address(market));
-        emit UpDownMarketBase.RoundVoided(1, VOID_WINDOW);
+        emit UpDownRoundEngine.RoundVoided(1, VOID_WINDOW);
         vm.prank(keeper);
         market.executeRound(rid);
 
@@ -257,7 +258,7 @@ contract UpDownEventsTest is UpDownBaseTest {
         _betUp(alice, 1_000e18);
         _betDown(bob, 1_000e18);
         _advance(83_000e8);
-        UpDownMarketBase.Round memory stuck = _round(market.currentEpoch() - 1);
+        UpDownRoundEngine.Round memory stuck = _round(market.currentEpoch() - 1);
         vm.warp(uint256(stuck.closeTs) + BUFFER + 1);
         uint80 rid = feed.setAnswer(84_000e8);
         vm.warp(block.timestamp + 1);
@@ -269,7 +270,7 @@ contract UpDownEventsTest is UpDownBaseTest {
         Vm.Log[] memory logs = vm.getRecordedLogs();
         for (uint256 i; i < logs.length; ++i) {
             if (logs[i].emitter != address(market)) continue;
-            if (logs[i].topics[0] != UpDownMarketBase.RoundVoided.selector) continue;
+            if (logs[i].topics[0] != UpDownRoundEngine.RoundVoided.selector) continue;
             uint8 reason = abi.decode(logs[i].data, (uint8));
             assertLt(reason, 6, "an unknown void reason code appeared");
             seen[reason] = true;
@@ -290,7 +291,7 @@ contract UpDownEventsTest is UpDownBaseTest {
 
     function test_adminChangesAnnounceThemselves() public {
         vm.expectEmit(false, false, false, true, address(market));
-        emit UpDownMarketBase.ParamsUpdated(450, 120);
+        emit UpDownRoundEngine.ParamsUpdated(450, 120);
         vm.prank(owner);
         market.setParams(450, 120);
 
@@ -302,7 +303,7 @@ contract UpDownEventsTest is UpDownBaseTest {
         MockERC20 stray = new MockERC20("Stray", "STR", 18);
         stray.mint(address(market), 4e18);
         vm.expectEmit(true, true, false, true, address(market));
-        emit UpDownMarketBase.TokenRecovered(address(stray), treasury, 4e18);
+        emit UpDownRoundEngine.TokenRecovered(address(stray), treasury, 4e18);
         vm.prank(owner);
         market.recoverToken(address(stray), treasury, 4e18);
     }

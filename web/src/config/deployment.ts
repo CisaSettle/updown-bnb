@@ -11,6 +11,12 @@ export interface Deployment {
   ethUsd10m: Address
   bnbUsd1m: Address
   bnbUsd10m: Address
+  btcUsd1mTrade: Address
+  btcUsd10mTrade: Address
+  ethUsd1mTrade: Address
+  ethUsd10mTrade: Address
+  bnbUsd1mTrade: Address
+  bnbUsd10mTrade: Address
   btcFeed: Address
   ethFeed: Address
   bnbFeed: Address
@@ -35,6 +41,12 @@ const raw = __DEPLOYMENT__
 
 export const deployment: Deployment = {
   ...raw,
+  btcUsd1mTrade: raw.btcUsd1mTrade ?? zeroAddress,
+  btcUsd10mTrade: raw.btcUsd10mTrade ?? zeroAddress,
+  ethUsd1mTrade: raw.ethUsd1mTrade ?? zeroAddress,
+  ethUsd10mTrade: raw.ethUsd10mTrade ?? zeroAddress,
+  bnbUsd1mTrade: raw.bnbUsd1mTrade ?? zeroAddress,
+  bnbUsd10mTrade: raw.bnbUsd10mTrade ?? zeroAddress,
   registry: envAddress(import.meta.env.VITE_REGISTRY_ADDRESS) ?? raw.registry,
   usdt: envAddress(import.meta.env.VITE_USDT_ADDRESS) ?? raw.usdt,
 }
@@ -50,3 +62,21 @@ export const isPlaceholderDeployment =
 
 /** Testnet deployments use keeper-fed RelayAggregator feeds and a faucet USDT. */
 export const usesRelayFeeds = deployment.relayFeeds
+
+/** Deployment keys of the trade-mode (order book) markets, in picker order. */
+export const TRADE_MARKET_KEYS = [
+  'btcUsd1mTrade',
+  'btcUsd10mTrade',
+  'ethUsd1mTrade',
+  'ethUsd10mTrade',
+  'bnbUsd1mTrade',
+  'bnbUsd10mTrade',
+] as const satisfies ReadonlyArray<keyof Deployment>
+
+/**
+ * Lowercased addresses of every deployed trade market. The registry lists pool and trade markets
+ * side by side, and a trade market must never be driven with the pool market's calls.
+ */
+export const tradeMarketAddresses: ReadonlySet<string> = new Set(
+  TRADE_MARKET_KEYS.map((k) => deployment[k].toLowerCase()).filter((a) => a !== zeroAddress),
+)

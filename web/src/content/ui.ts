@@ -1157,3 +1157,203 @@ export const noMarketsBody = {
   before: { en: 'The registry at ', zh: '注册表 ' },
   after: { en: ' has no enabled markets yet.', zh: ' 还没有启用任何市场。' },
 } satisfies Record<string, Text>
+
+// ── trade mode (order-book markets) ─────────────────────────────────────────────────────────────
+
+/**
+ * Two products share the page. 奖池模式 is the parimutuel pool: stakes lock and pay at settlement.
+ * 交易模式 is the order book: UP and DOWN shares trade at a price until the round expires. The
+ * names say which one holds the money, so they are never shortened to 模式一 / 模式二.
+ */
+export const mode = {
+  label: { en: 'Market type', zh: '市场类型' },
+  pool: { en: 'Pool', zh: '奖池模式' },
+  trade: { en: 'Trade', zh: '交易模式' },
+  poolHint: { en: 'bet into the pool, paid at settlement', zh: '押注进奖池，结算时赔付' },
+  tradeHint: { en: 'buy and sell shares before expiry', zh: '到期前随时买卖份额' },
+} satisfies Record<string, Text>
+
+export const tradeCard = {
+  rounds: { en: 'Round to trade', zh: '交易轮次' },
+  live: { en: 'Live round', zh: '进行中的轮次' },
+  next: { en: 'Next round', zh: '下一轮' },
+  strike: { en: 'Strike', zh: '行权价' },
+  strikeAhead: { en: 'set at lock', zh: '锁定时确定' },
+  strikeRecording: { en: 'Recording the strike…', zh: '正在记录行权价…' },
+  expiresIn: { en: 'Expires in', zh: '距到期' },
+  strikeIn: { en: 'Strike set in', zh: '距确定行权价' },
+  noRound: {
+    en: 'No round is open for trading right now. The next one opens shortly.',
+    zh: '现在没有可交易的轮次。下一轮马上就开。',
+  },
+  notTradeable: { en: 'Not taking orders', zh: '暂停接单' },
+  buy: { en: 'Buy', zh: '买入' },
+  sell: { en: 'Sell', zh: '卖出' },
+  implied: { en: 'implied chance', zh: '隐含概率' },
+  noOffers: { en: 'no offers', zh: '暂无报价' },
+  bookPrice: { en: 'Price', zh: '价格' },
+  bookShares: { en: 'Shares', zh: '份数' },
+  bookAsks: { en: 'Offers to sell', zh: '卖单' },
+  bookBids: { en: 'Offers to buy', zh: '买单' },
+  bookEmpty: {
+    en: 'The book is empty. Place a limit order to set the first price.',
+    zh: '订单簿是空的。挂一个限价单，报出第一个价格。',
+  },
+  explainTitle: { en: 'How trade mode works', zh: '交易模式怎么玩' },
+  footer: {
+    en: 'Non-custodial and fully collateralised: one UP share plus one DOWN share is always backed by exactly 1 USDT held by the contract, so nobody can be liquidated. Nothing here is financial advice.',
+    zh: '非托管、全额抵押：一份 UP 加一份 DOWN 永远由合约里正好 1 USDT 担保，所以没有人会被强平。本页内容不构成任何投资建议。',
+  },
+} satisfies Record<string, Text>
+
+/** `57¢`. The cent sign is the unit in both languages. */
+export function cents(price: number | undefined): string {
+  return price === undefined ? '—' : `${price}¢`
+}
+
+export function tradeRoundAria(marketLabel: string): Text {
+  return { en: `${marketLabel} trading round`, zh: `${marketLabel} 交易轮次` }
+}
+
+export function orderBookTitle(side: 'up' | 'down'): Text {
+  return { en: `Order book · ${sideName(side)}`, zh: `订单簿 · ${sideName(side)}` }
+}
+
+export function tradeExplain(feePct: string): Text {
+  return {
+    en: `Each round has an UP share and a DOWN share. At expiry the winning share pays 1 USDT and the losing share pays nothing; a tie or a voided round pays 0.50 per share. A price is cents of a share, so 57¢ means the book puts the chance at about 57%. You can buy or sell at any time before expiry: an order that trades against the book pays a ${feePct}% taker fee on what it trades, an order that waits on the book pays none.`,
+    zh: `每一轮有 UP 和 DOWN 两种份额。到期时赢的份额每份兑付 1 USDT，输的份额不值钱；平局或作废的轮次每份兑付 0.50。价格是一份的美分数，57¢ 就是订单簿认为发生的概率大约 57%。到期之前随时可以买卖：和订单簿上现成的单子成交要付成交额 ${feePct}% 的吃单手续费，挂在订单簿上等别人来成交的单子不收手续费。`,
+  }
+}
+
+export const tradePanel = {
+  share: { en: 'Share', zh: '份额方向' },
+  action: { en: 'Buy or sell', zh: '买入或卖出' },
+  orderType: { en: 'Order type', zh: '订单类型' },
+  market: { en: 'Market', zh: '市价' },
+  limit: { en: 'Limit', zh: '限价' },
+  shares: { en: 'Shares', zh: '份数' },
+  price: { en: 'Limit price (¢)', zh: '限价（美分）' },
+  freeShares: { en: 'Free shares:', zh: '可用份数：' },
+  fillsNow: { en: 'Fills now', zh: '立即成交' },
+  avgPrice: { en: 'Average price', zh: '成交均价' },
+  fee: { en: 'Taker fee', zh: '吃单手续费' },
+  rests: { en: 'Waits on the book', zh: '挂单等待成交' },
+  notPlaced: { en: 'Not placed (past the price limit)', zh: '不下单（超出价格限制）' },
+  cost: { en: 'Estimated cost', zh: '预计花费' },
+  proceeds: { en: 'Estimated proceeds now', zh: '预计立即到手' },
+  placing: { en: 'Placing order…', zh: '下单中…' },
+  limitNote: {
+    en: 'Estimated from the book as read a moment ago. Anything that crosses the book fills at the resting price; the rest waits on the book until it fills or you cancel it.',
+    zh: '按刚才读到的订单簿估算。能和订单簿成交的部分按对方挂单价成交；剩下的挂在订单簿上，直到成交或你撤单。',
+  },
+} satisfies Record<string, Text>
+
+export function marketOrderNote(slippage: number): Text {
+  return {
+    en: `Estimated from the book as read a moment ago. A market order fills no more than ${slippage}¢ past the best price; whatever cannot fill within that is not placed.`,
+    zh: `按刚才读到的订单簿估算。市价单最多比最优价差 ${slippage}¢ 成交；在这个范围内成交不了的部分不会下单。`,
+  }
+}
+
+/** `Buy UP` / `买入 UP` — the submit button, the transaction name and an order's label. */
+export function tradeAction(buy: boolean, side: 'up' | 'down'): Text {
+  return buy
+    ? { en: `Buy ${sideName(side)}`, zh: `买入 ${sideName(side)}` }
+    : { en: `Sell ${sideName(side)}`, zh: `卖出 ${sideName(side)}` }
+}
+
+/** A share's payout if it wins, for the quote: `pays 3 USDT if UP wins`. */
+export function payoutIfWins(amount: string, side: 'up' | 'down'): Text {
+  return { en: `pays ${amount} if ${sideName(side)} wins`, zh: `${sideName(side)} 赢的话兑付 ${amount}` }
+}
+
+export const tradeReason = {
+  connect: { en: 'Connect your wallet to trade.', zh: '先连接钱包才能交易。' },
+  wrongChain: { en: 'Your wallet is on another network. Switch it first.', zh: '你的钱包在另一条网络上。先切换网络。' },
+  reading: { en: 'Reading the market…', zh: '正在读取市场…' },
+  paused: {
+    en: 'This market is paused, so no new orders are accepted. Cancelling orders and redeeming shares still work.',
+    zh: '这个市场已暂停，不接受新的订单。撤单和兑付份额照常可用。',
+  },
+  closed: {
+    en: 'This round is not taking orders right now — its strike is being recorded, or it is about to close. Pick the other round or wait a moment.',
+    zh: '这一轮现在不接单——要么正在记录行权价，要么马上到期。换另一轮，或者稍等一下。',
+  },
+  enterShares: { en: 'Enter a number of shares.', zh: '填一个份数。' },
+  invalidShares: { en: 'That is not a valid number of shares.', zh: '这不是一个有效的份数。' },
+  shareStep: { en: 'Shares go in steps of 0.01.', zh: '份数最小单位是 0.01。' },
+  enterPrice: { en: 'Enter a limit price in cents, from 1 to 99.', zh: '填一个 1 到 99 之间的限价（美分）。' },
+  invalidPrice: {
+    en: 'A limit price is a whole number of cents from 1 to 99.',
+    zh: '限价必须是 1 到 99 之间的整数美分。',
+  },
+  noLiquidity: {
+    en: 'Nobody is on the other side of the book right now, so a market order has nothing to fill against. Place a limit order instead.',
+    zh: '订单簿对面现在没有单子，市价单没有可成交的。改挂限价单。',
+  },
+  notEnoughShares: {
+    en: 'You do not hold that many free shares of this side. Shares in your open sell orders stay locked until you cancel them.',
+    zh: '你没有这么多这一边的可用份数。挂着的卖单里的份数要撤单之后才能用。',
+  },
+  notEnoughBalance: { en: 'Your balance does not cover this order.', zh: '余额不够这笔订单。' },
+} satisfies Record<string, Text>
+
+export function tradeShareLimits(min: string, max: string): Text {
+  return { en: `An order is between ${min} and ${max} shares.`, zh: `每笔订单在 ${min} 到 ${max} 份之间。` }
+}
+
+export const tradePositions = {
+  heading: { en: 'Your shares and orders', zh: '我的份额和挂单' },
+  connect: { en: 'Connect your wallet to see your shares and orders.', zh: '连接钱包才能看到你的份额和挂单。' },
+  empty: {
+    en: 'No shares or orders in this market yet. Trade a round above and they will show up here.',
+    zh: '你在这个市场还没有份额或挂单。在上面的轮次里交易，它们就会出现在这里。',
+  },
+  readFailed: { en: 'Could not read your trade positions', zh: '读不到你的交易仓位' },
+  readFailedBody: {
+    en: 'Nothing is lost — your shares and orders live on chain. Retry in a moment.',
+    zh: '什么都没有丢——你的份额和挂单都在链上。过一会儿重试。',
+  },
+  colRound: { en: 'Round', zh: '轮次' },
+  colShares: { en: 'Free shares', zh: '可用份数' },
+  colValue: { en: 'Value', zh: '价值' },
+  colStatus: { en: 'Status', zh: '状态' },
+  colAction: { en: 'Action', zh: '操作' },
+  trading: { en: 'Trading', zh: '交易中' },
+  resolving: { en: 'Awaiting settlement', zh: '待结算' },
+  upWon: { en: 'UP won', zh: 'UP 赢' },
+  downWon: { en: 'DOWN won', zh: 'DOWN 赢' },
+  half: { en: 'Tie or void · 0.50 a share', zh: '平局或作废 · 每份 0.50' },
+  redeem: { en: 'Redeem', zh: '兑付' },
+  redeemAll: { en: 'Redeem all', zh: '全部兑付' },
+  redeeming: { en: 'Redeeming…', zh: '兑付中…' },
+  redeemed: { en: 'Redeemed', zh: '已兑付' },
+  valueNote: {
+    en: 'Value is what the best bid in the book would pay for your free shares now, before fee. Shares waiting in open sell orders are listed under open orders instead.',
+    zh: '价值按订单簿当前最优买价计算你的可用份数，未扣手续费。挂在卖单里的份数不算在这里，列在下面的挂单里。',
+  },
+  ordersHeading: { en: 'Open orders', zh: '当前挂单' },
+  noOrders: { en: 'No open orders.', zh: '没有挂单。' },
+  colOrder: { en: 'Order', zh: '订单' },
+  colPrice: { en: 'Price', zh: '价格' },
+  colRemaining: { en: 'Remaining', zh: '剩余份数' },
+  cancel: { en: 'Cancel', zh: '撤单' },
+  cancelAll: { en: 'Cancel all', zh: '全部撤单' },
+  cancelling: { en: 'Cancelling…', zh: '撤单中…' },
+  cancelTx: { en: 'Cancel order', zh: '撤单' },
+  withdraw: { en: 'Withdraw', zh: '提取' },
+  withdrawTx: { en: 'Withdraw proceeds', zh: '提取成交款' },
+} satisfies Record<string, Text>
+
+/** Maker proceeds the contract holds for the wallet: `Proceeds from filled orders: 12 USDT`. */
+export function tradeCashLine(amount: string): Text {
+  return {
+    en: `Proceeds from your filled sell orders: ${amount}. They are also paid out with your next order, cancel or redeem.`,
+    zh: `你的卖单成交款：${amount}。下次下单、撤单或兑付时也会一并打给你。`,
+  }
+}
+
+export function redeemRoundTx(epoch: bigint, lang: Lang): Text {
+  return { en: `Redeem round ${roundNo(epoch, lang)}`, zh: `兑付${roundNo(epoch, lang)}` }
+}

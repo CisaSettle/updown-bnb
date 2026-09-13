@@ -10,6 +10,7 @@ const markets = Array.from({ length: 6 }, (_, index): Market => ({
   label: `${['BTC', 'ETH', 'BNB'][Math.floor(index / 2)]}/USD ${index % 2 ? '10m' : '1m'}`,
   interval: index % 2 ? 600 : 60,
   isNative: false,
+  kind: 'pool',
   enabled: true,
 }))
 

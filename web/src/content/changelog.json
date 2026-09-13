@@ -2,6 +2,34 @@
   "schemaVersion": 1,
   "entries": [
     {
+      "id": "2026-09-14-trade-before-expiry",
+      "releaseId": "web-2026.09.14.1",
+      "releasedAt": "2026-09-14",
+      "status": "released",
+      "title": {
+        "zh": "交易模式：到期前随时买卖",
+        "en": "Trade mode: buy and sell before expiry"
+      },
+      "summary": {
+        "zh": "新增交易模式，和奖池模式并列。每轮有 UP 和 DOWN 两种份额，按 1–99 美分报价，价格就是市场认为的概率；猜对的份额到期兑付 1 USDT。份额在链上订单簿里随时可以买卖，不必等到结算。",
+        "en": "A new Trade mode sits beside the pool. Each round has UP and DOWN shares priced from 1 to 99 cents, the market's probability; a winning share redeems for 1 USDT. Shares trade on an on-chain order book at any time, so you no longer have to hold until settlement."
+      },
+      "highlights": {
+        "zh": [
+          "一份 UP 加一份 DOWN 永远由合约里正好 1 USDT 担保，全额抵押，不会被强平。",
+          "市价单和限价单都支持；只有吃单方付手续费（成交额的 1%），挂单免费。",
+          "平局或无法结算的轮次，每份兑付 0.5 USDT。",
+          "撤单、兑付和提现任何时候都不能被暂停。"
+        ],
+        "en": [
+          "One UP plus one DOWN is always backed by exactly 1 USDT in the contract: fully collateralised, nothing to liquidate.",
+          "Market and limit orders; only the taker pays a fee (1% of notional), resting orders are free.",
+          "A tie or a round that cannot settle redeems every share at 0.5 USDT.",
+          "Cancel, redeem and withdraw can never be paused."
+        ]
+      }
+    },
+    {
       "id": "2026-09-05-the-bot-moves-off-the-laptop",
       "releaseId": "web-2026.09.05.2",
       "releasedAt": "2026-09-05",

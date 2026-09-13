@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {Test, console2} from "forge-std/Test.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
+import {UpDownRoundEngine} from "../src/UpDownRoundEngine.sol";
 import {IAggregatorV3} from "../src/IAggregatorV3.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -113,7 +114,7 @@ contract ChainlinkForkTest is Test {
         console2.log("  age at fork(s)", block.timestamp - upd0);
 
         // ── bet on epoch 1 ────────────────────────────────────────────────
-        UpDownMarketBase.Round memory r1 = market.getRound(1);
+        UpDownRoundEngine.Round memory r1 = market.getRound(1);
         _rollUntil(uint256(r1.startTs));
         vm.prank(alice);
         market.betUp(1, 1_000e18);

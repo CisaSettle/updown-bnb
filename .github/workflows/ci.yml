@@ -57,7 +57,7 @@ jobs:
         with: {node-version: '22'}
       - run: npm ci
         working-directory: keeper
-      - run: node --test scripts/tests/bet-window.test.mjs scripts/tests/gas-refill.test.mjs scripts/tests/bet-bot-recovery.test.mjs scripts/tests/tx-outbox.test.mjs scripts/tests/mainnet-deploy.test.mjs
+      - run: node --test scripts/tests/bet-window.test.mjs scripts/tests/trade-maker.test.mjs scripts/tests/gas-refill.test.mjs scripts/tests/bet-bot-recovery.test.mjs scripts/tests/tx-outbox.test.mjs scripts/tests/mainnet-deploy.test.mjs
 
   contracts:
     needs: changes

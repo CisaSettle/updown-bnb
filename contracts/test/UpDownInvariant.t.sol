@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
+import {UpDownRoundEngine} from "../src/UpDownRoundEngine.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
@@ -122,7 +123,7 @@ abstract contract UpDownHandler is Test {
 
     /// @dev The honest path: publish at the boundary, execute `delay` seconds later.
     function execute(uint256 actorSeed, uint256 priceSeed, uint256 delay) external {
-        UpDownMarketBase.Round memory r = market.getRound(market.currentEpoch());
+        UpDownRoundEngine.Round memory r = market.getRound(market.currentEpoch());
         if (r.lockTs == 0) return;
         _warpTo(uint256(r.lockTs));
         uint80 rid = feed.setAnswer(_nextPrice(priceSeed));
@@ -131,14 +132,14 @@ abstract contract UpDownHandler is Test {
         vm.prank(_actor(actorSeed));
         try market.executeRound(rid) {
             executions++;
-            UpDownMarketBase.Round memory closed = market.getRound(justClosed);
+            UpDownRoundEngine.Round memory closed = market.getRound(justClosed);
             if (closed.settled && !closed.voided) settledRounds++;
         } catch {}
     }
 
     /// @dev A caller trying to cherry-pick a favourable, non-final boundary round.
     function executeWithCherryPickedRound(uint256 actorSeed, uint256 priceSeed) external {
-        UpDownMarketBase.Round memory r = market.getRound(market.currentEpoch());
+        UpDownRoundEngine.Round memory r = market.getRound(market.currentEpoch());
         if (r.lockTs == 0) return;
         _warpTo(uint256(r.lockTs) - 1);
         uint80 early = feed.setAnswer(_nextPrice(priceSeed));
@@ -151,7 +152,7 @@ abstract contract UpDownHandler is Test {
     }
 
     function executeWithDeadOracle(uint256 seed) external {
-        UpDownMarketBase.Round memory r = market.getRound(market.currentEpoch());
+        UpDownRoundEngine.Round memory r = market.getRound(market.currentEpoch());
         if (r.lockTs == 0) return;
         _warpTo(uint256(r.lockTs));
         uint80 rid;
@@ -357,7 +358,7 @@ abstract contract UpDownInvariantTests is Test {
         uint256 cur = market.currentEpoch();
         uint256 from = cur > 40 ? cur - 40 : 1;
         for (uint256 e = from; e <= cur; ++e) {
-            UpDownMarketBase.Round memory r = market.getRound(e);
+            UpDownRoundEngine.Round memory r = market.getRound(e);
             if (!r.settled || r.voided) {
                 assertEq(r.rewardPoolAmount, 0, "unsettled round must not carry a reward pool");
                 continue;
@@ -389,7 +390,7 @@ abstract contract UpDownInvariantTests is Test {
         uint256 cur = market.currentEpoch();
         uint256 from = cur > 40 ? cur - 40 : 1;
         for (uint256 e = from; e <= cur; ++e) {
-            UpDownMarketBase.Round memory r = market.getRound(e);
+            UpDownRoundEngine.Round memory r = market.getRound(e);
             if (r.startTs == 0) continue;
             assertEq(r.oracleMaxAge, market.oracleMaxAge(), "round snapshot drifted from the immutable");
         }

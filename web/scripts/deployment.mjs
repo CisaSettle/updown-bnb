@@ -24,6 +24,13 @@ const OPTIONAL_ADDRESS_KEYS = [
   'ethUsd10m',
   'bnbUsd1m',
   'bnbUsd10m',
+  // Trade-mode (order book) markets. Absent until they are deployed; the UI hides trade mode then.
+  'btcUsd1mTrade',
+  'btcUsd10mTrade',
+  'ethUsd1mTrade',
+  'ethUsd10mTrade',
+  'bnbUsd1mTrade',
+  'bnbUsd10mTrade',
   'btcFeed',
   'ethFeed',
   'bnbFeed',

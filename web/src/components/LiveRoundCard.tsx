@@ -81,7 +81,7 @@ function settlementNote(view: PriceView, closeTs: bigint | undefined, lang: Lang
   }
 }
 
-function PriceBlock({
+export function PriceBlock({
   strike,
   view,
   decimals,

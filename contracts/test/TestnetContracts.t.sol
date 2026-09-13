@@ -6,6 +6,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {RelayAggregator} from "../src/testnet/RelayAggregator.sol";
 import {TestUSDT} from "../src/testnet/TestUSDT.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
+import {UpDownRoundEngine} from "../src/UpDownRoundEngine.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
 
 /**
@@ -227,7 +228,7 @@ contract RelayAggregatorMarketTest is Test {
         vm.prank(bob);
         market.betDown(1, 300e18);
 
-        UpDownMarketBase.Round memory r1 = market.getRound(1);
+        UpDownRoundEngine.Round memory r1 = market.getRound(1);
         uint80 lockId = _relayAt(r1.lockTs, 80_010e8);
         vm.warp(uint256(r1.lockTs) + 1);
         vm.prank(keeper);
@@ -240,7 +241,7 @@ contract RelayAggregatorMarketTest is Test {
         vm.prank(keeper);
         market.executeRound(closeId);
 
-        UpDownMarketBase.Round memory settled = market.getRound(1);
+        UpDownRoundEngine.Round memory settled = market.getRound(1);
         assertTrue(settled.settled);
         assertEq(settled.closeOracleId, closeId);
         // UP wins: fee = 300 * 3% = 9, pool = 100 + 300 - 9 = 391, base = 100
@@ -252,14 +253,14 @@ contract RelayAggregatorMarketTest is Test {
     ///         it is a perfectly real round on this feed. This is the anti-cherry-pick proof running
     ///         against the actual testnet oracle rather than a mock.
     function test_aNonFinalRelayRoundIsRejected() public {
-        UpDownMarketBase.Round memory r1 = market.getRound(1);
+        UpDownRoundEngine.Round memory r1 = market.getRound(1);
         uint80 early = _relayAt(uint256(r1.lockTs) - 30, 90_000e8); // a much better price
         uint80 atBoundary = _relayAt(r1.lockTs, 80_010e8); // the print that actually counts
         assertEq(atBoundary, early + 1, "the successor is n + 1 on a phase-less feed");
 
         vm.warp(uint256(r1.lockTs) + 1);
         vm.prank(keeper);
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(early);
 
         vm.prank(keeper);
@@ -268,18 +269,18 @@ contract RelayAggregatorMarketTest is Test {
     }
 
     function test_aRelayRoundPublishedAfterTheBoundaryIsRejected() public {
-        UpDownMarketBase.Round memory r1 = market.getRound(1);
+        UpDownRoundEngine.Round memory r1 = market.getRound(1);
         uint80 late = _relayAt(uint256(r1.lockTs) + 1, 80_010e8);
         vm.warp(uint256(r1.lockTs) + 2);
         vm.prank(keeper);
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(late);
     }
 
     /// @notice A round id the relay has never written reverts `NoData`; the market catches that and
     ///         treats the proof as unusable rather than propagating the revert.
     function test_aRelayRoundThatDoesNotExistIsRejected() public {
-        UpDownMarketBase.Round memory r1 = market.getRound(1);
+        UpDownRoundEngine.Round memory r1 = market.getRound(1);
         _relayAt(r1.lockTs, 80_010e8);
         vm.warp(uint256(r1.lockTs) + 1);
 
@@ -287,7 +288,7 @@ contract RelayAggregatorMarketTest is Test {
         relay.getRoundData(9_999);
 
         vm.prank(keeper);
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(9_999);
     }
 
@@ -300,12 +301,12 @@ contract RelayAggregatorMarketTest is Test {
         vm.prank(bob);
         market.betDown(1, 100e18);
 
-        UpDownMarketBase.Round memory r1 = market.getRound(1);
+        UpDownRoundEngine.Round memory r1 = market.getRound(1);
         uint80 stale = _relayAt(uint256(r1.lockTs) - MAX_AGE - 1, 80_010e8);
 
         vm.warp(uint256(r1.lockTs) + 1);
         vm.prank(keeper);
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(stale);
 
         // the relay stays silent right through the window
@@ -319,7 +320,7 @@ contract RelayAggregatorMarketTest is Test {
     }
 
     function test_findRoundIdAtLocatesTheBoundaryPrintOnTheRelay() public {
-        UpDownMarketBase.Round memory r1 = market.getRound(1);
+        UpDownRoundEngine.Round memory r1 = market.getRound(1);
         _relayAt(uint256(r1.lockTs) - 90, 79_900e8);
         uint80 wanted = _relayAt(uint256(r1.lockTs) - 20, 80_010e8);
         _relayAt(uint256(r1.lockTs) + 40, 80_400e8); // after the boundary; must not be chosen

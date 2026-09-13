@@ -92,6 +92,16 @@ const PARAMETERISED: Array<[string, Text]> = [
   ['txFailed', ui.txFailed('押 UP')],
   ['txStillPending', ui.txStillPending('押 UP')],
   ['noMarkets', ui.noMarkets('zh')],
+  ['tradeRoundAria', ui.tradeRoundAria('BTC/USD 1m Trade')],
+  ['orderBookTitle', ui.orderBookTitle('down')],
+  ['tradeExplain', ui.tradeExplain('3')],
+  ['marketOrderNote', ui.marketOrderNote(3)],
+  ['tradeAction.buy', ui.tradeAction(true, 'up')],
+  ['tradeAction.sell', ui.tradeAction(false, 'down')],
+  ['payoutIfWins', ui.payoutIfWins('3 USDT', 'up')],
+  ['tradeShareLimits', ui.tradeShareLimits('1', '10,000')],
+  ['tradeCashLine', ui.tradeCashLine('12 USDT')],
+  ['redeemRoundTx', ui.redeemRoundTx(41n, 'zh')],
   ...(
     [
       'boundary',

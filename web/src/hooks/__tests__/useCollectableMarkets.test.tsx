@@ -88,6 +88,7 @@ function market(address: Address): Market {
     enabled: true,
     label: 'BTC/USD · 5m',
     isNative: false,
+    kind: 'pool',
   }
 }
 

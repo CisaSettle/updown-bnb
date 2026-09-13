@@ -12,7 +12,7 @@ import { validateBetInput, type BetInputState } from '../../lib/bet'
  * The other content sweeps check that the 中文 says the same thing as the English and says it in
  * the house register. Neither of them can catch the failure that actually shipped: copy that is
  * fluent, bilingual, well-typeset — and false, because the contract changed underneath it and the
- * words did not. Every assertion here corresponds to a line in `contracts/src/UpDownMarketBase.sol`
+ * words did not. Every assertion here corresponds to a line in `contracts/src/UpDownMarketBase.sol` or `UpDownRoundEngine.sol`
  * that is currently true, and each one failed before the copy was corrected.
  *
  */
@@ -175,7 +175,7 @@ describe('the price source is immutable, and the market is pinned to one aggrega
     // `executeRound` is `external nonReentrant` with no owner check — the owner may call it exactly
     // like anyone else. What nobody can do is choose the price. Listing "settle a round" flatly under
     // Cannot contradicts the product's own strongest claim, that settling is permissionless.
-    const contract = doc('contracts/src/UpDownMarketBase.sol')
+    const contract = doc('contracts/src/UpDownRoundEngine.sol')
     expect(contract).toMatch(/function executeRound\(uint80 boundaryRoundId\) external nonReentrant \{/)
     expect(contract).not.toMatch(/function executeRound\([^)]*\)[^{]*onlyOwner/)
 
@@ -192,7 +192,9 @@ describe('the price source is immutable, and the market is pinned to one aggrega
     // the round that is open for betting right now. The runbook has always said this correctly
     // ("Bet sizing only; cannot affect an existing position"); the FAQ said the opposite.
     const contract = doc('contracts/src/UpDownMarketBase.sol')
-    const struct = contract.slice(contract.indexOf('struct Round {'), contract.indexOf('struct BetInfo {'))
+    const engine = doc('contracts/src/UpDownRoundEngine.sol')
+    const struct = engine.slice(engine.indexOf('struct Round {'), engine.indexOf('}', engine.indexOf('struct Round {')))
+    expect(struct).toContain('uint256 downAmount;')
     for (const field of ['minBetAmount', 'maxBetAmount', 'maxSideAmount']) {
       expect(struct, `Round must not snapshot ${field}`).not.toContain(field)
     }

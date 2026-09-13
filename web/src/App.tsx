@@ -5,11 +5,13 @@ import { Header } from './components/Header'
 import { HistoryPanel } from './components/HistoryPanel'
 import { LiveRoundCard } from './components/LiveRoundCard'
 import { MARKET_PANEL_ID, MarketPicker, marketTabId } from './components/MarketPicker'
+import { ModeSwitch } from './components/ModeSwitch'
 import { NoDeployment } from './components/NoDeployment'
 import { PositionsPanel } from './components/PositionsPanel'
 import { RoundProof } from './components/RoundProof'
 import { SkeletonCard } from './components/Skeleton'
 import { TestnetBanner } from './components/TestnetBanner'
+import { TradeMarketView } from './components/TradeMarketView'
 import { DemoWalletPanel } from './components/DemoWalletPanel'
 import { Toaster } from './components/Toaster'
 import * as ui from './content/ui'
@@ -31,6 +33,7 @@ import { useChainNow } from './hooks/useChainNow'
 import { t, useLang } from './lib/i18n'
 import { useRoute } from './lib/route'
 import { useTheme } from './lib/theme'
+import type { MarketKind } from './lib/trade'
 
 /**
  * The FAQ is loaded on demand. It carries the whole explanatory corpus in two languages — tens of
@@ -40,6 +43,8 @@ const FaqPage = lazy(() => import('./components/FaqPage').then((m) => ({ default
 const ChangelogPage = lazy(() => import('./components/ChangelogPage').then((m) => ({ default: m.ChangelogPage })))
 
 const SELECTED_KEY = 'updown.market'
+const TRADE_SELECTED_KEY = 'updown.tradeMarket'
+const MODE_KEY = 'updown.mode'
 
 /**
  * What the settlement feed is, in words.
@@ -51,11 +56,19 @@ const SELECTED_KEY = 'updown.market'
  */
 const FEED_NAME = ui.feedName(usesRelayFeeds)
 
-function readSelected(): string | undefined {
+function readStored(key: string): string | undefined {
   try {
-    return localStorage.getItem(SELECTED_KEY) ?? undefined
+    return localStorage.getItem(key) ?? undefined
   } catch {
     return undefined
+  }
+}
+
+function writeStored(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    /* private mode — the choice just does not persist */
   }
 }
 
@@ -227,8 +240,12 @@ export default function App() {
   const lang = useLang()
   const route = useRoute()
   const { address } = useAccount()
-  const { markets, isLoading, usingFallback, error } = useMarkets()
-  const [selectedAddress, setSelectedAddress] = useState<string | undefined>(() => readSelected())
+  const { markets, tradeMarkets, isLoading, usingFallback, error } = useMarkets()
+  const [selectedAddress, setSelectedAddress] = useState<string | undefined>(() => readStored(SELECTED_KEY))
+  const [tradeAddress, setTradeAddress] = useState<string | undefined>(() => readStored(TRADE_SELECTED_KEY))
+  const [storedMode, setStoredMode] = useState<MarketKind>(() => (readStored(MODE_KEY) === 'trade' ? 'trade' : 'pool'))
+  // Trade mode exists only once a trade market does; until then the page is the pool page, unchanged.
+  const mode: MarketKind = storedMode === 'trade' && tradeMarkets.length > 0 ? 'trade' : 'pool'
   // Money won in one market must be findable from every other tab — this is what puts the dot on.
   // Paused on the FAQ route, which exists precisely so nothing polls behind it.
   const collectableMarkets = useCollectableMarkets(markets, address, route.name === 'trade')
@@ -238,14 +255,23 @@ export default function App() {
     [markets, selectedAddress],
   )
 
+  const selectedTrade = useMemo(
+    () => tradeMarkets.find((m) => m.address.toLowerCase() === tradeAddress?.toLowerCase()) ?? tradeMarkets[0],
+    [tradeMarkets, tradeAddress],
+  )
+
   useEffect(() => {
-    if (!selected) return
-    try {
-      localStorage.setItem(SELECTED_KEY, selected.address)
-    } catch {
-      /* private mode — the choice just does not persist */
-    }
+    if (selected) writeStored(SELECTED_KEY, selected.address)
   }, [selected])
+
+  useEffect(() => {
+    if (selectedTrade) writeStored(TRADE_SELECTED_KEY, selectedTrade.address)
+  }, [selectedTrade])
+
+  const onMode = (next: MarketKind) => {
+    setStoredMode(next)
+    writeStored(MODE_KEY, next)
+  }
 
   // `index.html` gets the description right before first paint, and `i18n.ts` keeps <html lang> in
   // step with the toggle — but nothing was keeping the description in step with it, so a reader who
@@ -300,13 +326,24 @@ export default function App() {
         <main className="mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-6">
           {showTestnetHelpers ? <DemoWalletPanel /> : null}
 
-          <MarketPicker
-            markets={markets}
-            selected={selected}
-            onSelect={(m) => setSelectedAddress(m.address)}
-            isLoading={isLoading}
-            collectable={collectableMarkets}
-          />
+          {tradeMarkets.length > 0 ? <ModeSwitch mode={mode} onChange={onMode} /> : null}
+
+          {mode === 'trade' ? (
+            <MarketPicker
+              markets={tradeMarkets}
+              selected={selectedTrade}
+              onSelect={(m) => setTradeAddress(m.address)}
+              isLoading={isLoading}
+            />
+          ) : (
+            <MarketPicker
+              markets={markets}
+              selected={selected}
+              onSelect={(m) => setSelectedAddress(m.address)}
+              isLoading={isLoading}
+              collectable={collectableMarkets}
+            />
+          )}
 
           {usingFallback ? (
             <div className="card-muted p-3 text-xs text-amber-800 dark:text-amber-300">
@@ -317,6 +354,10 @@ export default function App() {
 
           {isLoading ? (
             <SkeletonCard />
+          ) : mode === 'trade' && selectedTrade ? (
+            <div role="tabpanel" id={MARKET_PANEL_ID} aria-labelledby={marketTabId(selectedTrade.address)}>
+              <TradeMarketView key={selectedTrade.address} market={selectedTrade} feedName={FEED_NAME} />
+            </div>
           ) : selected ? (
             <div role="tabpanel" id={MARKET_PANEL_ID} aria-labelledby={marketTabId(selected.address)}>
               <MarketView key={selected.address} market={selected} />

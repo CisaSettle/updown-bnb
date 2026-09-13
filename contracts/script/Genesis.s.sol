@@ -2,7 +2,7 @@
 pragma solidity 0.8.28;
 
 import {Script, console2} from "forge-std/Script.sol";
-import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
+import {UpDownRoundEngine} from "../src/UpDownRoundEngine.sol";
 import {UpDownRegistry} from "../src/UpDownRegistry.sol";
 
 /// @notice Owner step after deploy: accept the registry and open the first round on every market.
@@ -22,7 +22,7 @@ contract Genesis is Script {
 
         UpDownRegistry.MarketInfo[] memory markets = reg.allMarkets();
         for (uint256 i; i < markets.length; ++i) {
-            UpDownMarketBase m = UpDownMarketBase(markets[i].market);
+            UpDownRoundEngine m = UpDownRoundEngine(markets[i].market);
             if (m.pendingOwner() == signer) m.acceptOwnership();
             if (!m.genesisStarted()) {
                 m.genesisStart();

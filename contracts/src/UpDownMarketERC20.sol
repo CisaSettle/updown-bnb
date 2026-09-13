@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {UpDownMarketBase} from "./UpDownMarketBase.sol";
+import {UpDownRoundEngine} from "./UpDownRoundEngine.sol";
 
 /// @title UpDownMarketERC20
 /// @notice Binary Up/Down rounds settled in an ERC20 asset (USDT on BNB Chain, 18 decimals).
@@ -81,7 +82,7 @@ contract UpDownMarketERC20 is UpDownMarketBase {
         if (marketBefore - asset.balanceOf(address(this)) != amount) revert UnsupportedAsset();
     }
 
-    /// @inheritdoc UpDownMarketBase
+    /// @inheritdoc UpDownRoundEngine
     function recoverToken(address token, address to, uint256 amount)
         external
         override

@@ -150,7 +150,35 @@ export const ERROR_COPY: Record<string, Text> = {
   InvalidBuffer: { en: 'Invalid settlement buffer setting.', zh: '结算时限设置无效。' },
   InvalidInterval: { en: 'Invalid round interval.', zh: '轮次间隔设置无效。' },
   InvalidOracleMaxAge: { en: 'Invalid oracle staleness setting.', zh: '预言机滞后上限设置无效。' },
-  InvalidLimits: { en: 'Invalid bet limits.', zh: '下注限额设置无效。' },
+  InvalidLimits: { en: 'Invalid bet or order limits.', zh: '下注或订单限额设置无效。' },
+
+  // ── trade mode (order book) ──
+  InvalidPrice: {
+    en: 'A price is a whole number of cents from 1 to 99.',
+    zh: '价格必须是 1 到 99 之间的整数美分。',
+  },
+  InvalidShares: {
+    en: 'That number of shares is outside this market’s order limits, or not in steps of 0.01.',
+    zh: '这个份数超出了本市场的订单限额，或者不是 0.01 的整数倍。',
+  },
+  // Not "trading failed": the round is between its strike boundary and the strike landing on chain,
+  // or has reached expiry. Both pass on their own.
+  NotTradeable: {
+    en: 'This round is not taking orders right now — its strike is being recorded, or it has closed. Try the other round or wait a moment.',
+    zh: '这一轮现在不接单——要么正在记录行权价，要么已经到期。换另一轮，或者稍等一下。',
+  },
+  InsufficientShares: {
+    en: 'You do not hold that many free shares. Shares in your open sell orders stay locked until you cancel them.',
+    zh: '你没有这么多可用份数。挂着的卖单里的份数要撤单之后才能用。',
+  },
+  NotOrderMaker: {
+    en: 'That order belongs to another wallet, so only that wallet can cancel it.',
+    zh: '那笔挂单属于另一个钱包，只有那个钱包能撤。',
+  },
+  OrderInactive: {
+    en: 'That order has already filled or been cancelled. Your orders are being refreshed.',
+    zh: '那笔挂单已经成交或者撤掉了。正在刷新你的挂单。',
+  },
 
   // ── registry ──
   AlreadyRegistered: { en: 'That market is already registered.', zh: '这个市场已经注册过了。' },

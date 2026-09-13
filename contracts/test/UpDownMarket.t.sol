@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {UpDownBaseTest} from "./UpDownBase.t.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
+import {UpDownRoundEngine} from "../src/UpDownRoundEngine.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -16,7 +17,7 @@ contract UpDownMarketTest is UpDownBaseTest {
     function test_genesis_alignsToIntervalGrid() public view {
         assertEq(market.currentEpoch(), 1);
         assertEq(market.anchorTs() % INTERVAL, 0, "anchor not aligned");
-        UpDownMarketBase.Round memory r = _round(1);
+        UpDownRoundEngine.Round memory r = _round(1);
         assertEq(r.startTs, market.anchorTs());
         assertEq(r.lockTs, r.startTs + INTERVAL);
         assertEq(r.closeTs, r.startTs + 2 * INTERVAL);
@@ -59,7 +60,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         _advance(P0);
         _advance(81_000e8); // UP wins
 
-        UpDownMarketBase.Round memory r = _round(1);
+        UpDownRoundEngine.Round memory r = _round(1);
         assertTrue(r.settled && !r.voided);
         assertEq(r.rewardBaseAmount, 1_000e18);
         // fee = 3000 * 3% = 90 ; pool = 1000 + 3000 - 90 = 3910
@@ -165,7 +166,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         _advance(P0);
         _advance(P0); // identical close price → tie
 
-        UpDownMarketBase.Round memory r = _round(1);
+        UpDownRoundEngine.Round memory r = _round(1);
         assertTrue(r.settled && r.voided);
         assertEq(market.treasuryAmount(), 0, "fee taken on a tie");
         _claim(alice, 1);
@@ -195,18 +196,18 @@ contract UpDownMarketTest is UpDownBaseTest {
         _betDown(bob, 1_000e18);
         _advance(P0); // epoch 1 locked
 
-        UpDownMarketBase.Round memory r2 = _round(2);
+        UpDownRoundEngine.Round memory r2 = _round(2);
         vm.warp(r2.lockTs);
         uint80 honest = feed.setAnswer(81_000e8); // UP wins; bob is about to lose
         vm.warp(uint256(r2.lockTs) + 1);
 
         // bob tries every shape of bad proof
         vm.startPrank(bob);
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(type(uint80).max); // a round that does not exist
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(0); // the zero round
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(honest - 1); // a real but non-final round
         vm.stopPrank();
 
@@ -228,13 +229,13 @@ contract UpDownMarketTest is UpDownBaseTest {
         _betDown(bob, 100e18);
         _advance(P0); // lock epoch 1
 
-        UpDownMarketBase.Round memory r2 = _round(2);
+        UpDownRoundEngine.Round memory r2 = _round(2);
         vm.warp(r2.lockTs);
         uint80 rid = feed.setAnswerAt(81_000e8, uint256(r2.lockTs) - MAX_AGE - 1); // too old at the boundary
         vm.warp(uint256(r2.lockTs) + 1);
 
         vm.prank(keeper);
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(rid);
         assertFalse(_round(1).voided, "still inside the window: nothing decided yet");
 
@@ -254,13 +255,13 @@ contract UpDownMarketTest is UpDownBaseTest {
         _betDown(bob, 100e18);
         _advance(P0);
 
-        UpDownMarketBase.Round memory r2 = _round(2);
+        UpDownRoundEngine.Round memory r2 = _round(2);
         vm.warp(uint256(r2.lockTs) + 1);
         uint80 rid = feed.setAnswer(81_000e8);
         feed.setShouldRevert(true);
 
         vm.prank(keeper);
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(rid);
 
         vm.warp(uint256(r2.lockTs) + BUFFER + 1);
@@ -277,14 +278,14 @@ contract UpDownMarketTest is UpDownBaseTest {
         _betDown(bob, 100e18);
         _advance(P0);
 
-        UpDownMarketBase.Round memory r2 = _round(2);
+        UpDownRoundEngine.Round memory r2 = _round(2);
         vm.warp(uint256(r2.lockTs) - 10);
         uint80 early = feed.setAnswer(70_000e8); // an earlier print, still before the boundary
         vm.warp(r2.lockTs);
         uint80 real = feed.setAnswer(90_000e8); // the real boundary print
         vm.warp(uint256(r2.lockTs) + 1);
         vm.prank(keeper);
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(early);
 
         vm.prank(keeper);
@@ -304,7 +305,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         _betDown(bob, 1_000e18);
         _advance(P0);
 
-        UpDownMarketBase.Round memory r2 = _round(2);
+        UpDownRoundEngine.Round memory r2 = _round(2);
         vm.warp(r2.lockTs);
         uint80 honest = feed.setAnswer(81_000e8);
         feed.startNewPhase();
@@ -313,7 +314,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         vm.warp(uint256(r2.lockTs) + 1);
 
         vm.prank(keeper);
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(otherPhase);
 
         // the same-phase print still settles it, at the price it always would have
@@ -333,14 +334,14 @@ contract UpDownMarketTest is UpDownBaseTest {
         _betUp(alice, 1_000e18);
         _betDown(bob, 1_000e18);
 
-        UpDownMarketBase.Round memory r = _round(1);
+        UpDownRoundEngine.Round memory r = _round(1);
         vm.warp(uint256(r.lockTs) - 30);
         uint80 early = feed.setAnswer(79_000e8);
 
         // the boundary second itself: a competing print can still land here with updatedAt == lockTs
         vm.warp(r.lockTs);
         vm.prank(keeper);
-        vm.expectRevert(UpDownMarketBase.TooEarly.selector);
+        vm.expectRevert(UpDownRoundEngine.TooEarly.selector);
         market.executeRound(early);
 
         // and it does land, becoming the last print at or before the boundary
@@ -349,7 +350,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         // one second later the set is frozen, and only the true last print can settle
         vm.warp(uint256(r.lockTs) + 1);
         vm.prank(keeper);
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(early);
 
         vm.prank(keeper);
@@ -364,7 +365,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         _betDown(bob, 1_000e18);
         _advance(P0);
 
-        UpDownMarketBase.Round memory r2 = _round(2);
+        UpDownRoundEngine.Round memory r2 = _round(2);
         vm.warp(r2.lockTs);
         uint80 boundaryId = feed.setAnswer(81_000e8); // the print that defines the boundary
 
@@ -386,12 +387,12 @@ contract UpDownMarketTest is UpDownBaseTest {
         _betDown(bob, 100e18);
         _advance(P0);
 
-        UpDownMarketBase.Round memory r2 = _round(2);
+        UpDownRoundEngine.Round memory r2 = _round(2);
         vm.warp(r2.lockTs);
         uint80 rid = feed.setAnswerAt(-1, r2.lockTs);
         vm.warp(uint256(r2.lockTs) + 1);
         vm.prank(keeper);
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(rid);
     }
 
@@ -400,7 +401,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         _betDown(bob, 1_000e18);
         _advance(P0);
 
-        UpDownMarketBase.Round memory r = _round(2);
+        UpDownRoundEngine.Round memory r = _round(2);
         vm.warp(r.lockTs);
         uint80 rid = feed.setAnswer(99_000e8); // a price that would have paid UP handsomely
         vm.warp(uint256(r.lockTs) + BUFFER + 1); // nobody turned the crank in time
@@ -419,12 +420,12 @@ contract UpDownMarketTest is UpDownBaseTest {
     function test_executeRoundIsPermissionlessFromTheBoundary() public {
         _betUp(alice, 100e18);
         _betDown(bob, 100e18);
-        UpDownMarketBase.Round memory r = _round(1);
+        UpDownRoundEngine.Round memory r = _round(1);
 
         vm.warp(uint256(r.lockTs) - 1);
         uint80 rid = feed.setAnswer(P0);
         vm.prank(carol);
-        vm.expectRevert(UpDownMarketBase.TooEarly.selector);
+        vm.expectRevert(UpDownRoundEngine.TooEarly.selector);
         market.executeRound(rid);
 
         vm.warp(uint256(r.lockTs) + 1);
@@ -437,7 +438,7 @@ contract UpDownMarketTest is UpDownBaseTest {
     function test_lateCrankTurnKeepsTheMachineMoving() public {
         _betUp(alice, 100e18);
         _betDown(bob, 100e18);
-        UpDownMarketBase.Round memory r = _round(1);
+        UpDownRoundEngine.Round memory r = _round(1);
         vm.warp(r.lockTs);
         uint80 rid = feed.setAnswer(P0);
         vm.warp(uint256(r.lockTs) + BUFFER + 1);
@@ -473,7 +474,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         assertFalse(market.maintenanceRequired());
         assertEq(market.currentBettableEpoch(), 11, "the open epoch must follow the time grid as a view");
 
-        UpDownMarketBase.Round memory projected = _round(11);
+        UpDownRoundEngine.Round memory projected = _round(11);
         assertEq(projected.startTs, anchor + 10 * INTERVAL);
         assertEq(projected.lockTs, anchor + 11 * INTERVAL);
         assertEq(projected.feeBps, FEE_BPS);
@@ -496,11 +497,11 @@ contract UpDownMarketTest is UpDownBaseTest {
     }
 
     function test_dormantFirstBetRequiresRelayRunway() public {
-        UpDownMarketBase.Round memory r = _round(1);
+        UpDownRoundEngine.Round memory r = _round(1);
         vm.warp(uint256(r.lockTs) - market.FIRST_BET_MIN_LEAD_SECONDS() + 1);
 
         vm.prank(alice);
-        vm.expectRevert(UpDownMarketBase.NotBettable.selector);
+        vm.expectRevert(UpDownRoundEngine.NotBettable.selector);
         erc20.betUp(1, MIN_BET);
 
         assertFalse(market.maintenanceRequired());
@@ -508,7 +509,7 @@ contract UpDownMarketTest is UpDownBaseTest {
     }
 
     function test_fundedRoundKeepsAcceptingBetsAfterDormantCutoff() public {
-        UpDownMarketBase.Round memory r = _round(1);
+        UpDownRoundEngine.Round memory r = _round(1);
         vm.warp(uint256(r.lockTs) - market.FIRST_BET_MIN_LEAD_SECONDS());
         _betUp(alice, MIN_BET);
 
@@ -524,7 +525,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         _betDown(bob, MIN_BET);
         _advance(P0);
 
-        UpDownMarketBase.Round memory successor = _round(2);
+        UpDownRoundEngine.Round memory successor = _round(2);
         assertEq(successor.upAmount + successor.downAmount, 0);
         assertTrue(market.maintenanceRequired(), "locked predecessor keeps the keeper awake");
 
@@ -536,20 +537,20 @@ contract UpDownMarketTest is UpDownBaseTest {
 
     function test_fundedRoundPinsTheGridUntilItSettlesOrExpires() public {
         _betUp(alice, MIN_BET);
-        UpDownMarketBase.Round memory funded = _round(1);
+        UpDownRoundEngine.Round memory funded = _round(1);
         vm.warp(uint256(funded.lockTs) + 1);
 
         assertTrue(market.maintenanceRequired());
         assertEq(market.currentBettableEpoch(), 1, "a settleable position may not be skipped");
 
         vm.prank(bob);
-        vm.expectRevert(UpDownMarketBase.WrongEpoch.selector);
+        vm.expectRevert(UpDownRoundEngine.WrongEpoch.selector);
         erc20.betDown(2, MIN_BET);
     }
 
     function test_expiredFundedRoundRefundsWhileANewRoundOpensLazily() public {
         _betUp(alice, MIN_BET);
-        UpDownMarketBase.Round memory funded = _round(1);
+        UpDownRoundEngine.Round memory funded = _round(1);
         vm.warp(uint256(funded.lockTs) + BUFFER + 1);
         uint256 epoch = market.currentBettableEpoch();
 
@@ -608,14 +609,14 @@ contract UpDownMarketTest is UpDownBaseTest {
     function test_cannotBetOnALockedEpoch() public {
         _advance(P0); // epoch 1 locked, epoch 2 bettable
         vm.prank(alice);
-        vm.expectRevert(UpDownMarketBase.WrongEpoch.selector);
+        vm.expectRevert(UpDownRoundEngine.WrongEpoch.selector);
         erc20.betUp(1, 100e18);
     }
 
     function test_cannotBetAfterLockTime() public {
         vm.warp(_round(1).lockTs);
         vm.prank(alice);
-        vm.expectRevert(UpDownMarketBase.NotBettable.selector);
+        vm.expectRevert(UpDownRoundEngine.NotBettable.selector);
         erc20.betUp(1, 100e18);
     }
 
@@ -645,7 +646,7 @@ contract UpDownMarketTest is UpDownBaseTest {
     function test_feeOnTransferAssetIsRejected() public {
         usdt.setTransferFeeBps(100); // 1% burned in transit
         vm.prank(alice);
-        vm.expectRevert(UpDownMarketBase.UnsupportedAsset.selector);
+        vm.expectRevert(UpDownRoundEngine.UnsupportedAsset.selector);
         erc20.betUp(1, 1_000e18);
         assertEq(_round(1).upAmount, 0);
         assertEq(market.outstanding(), 0);
@@ -662,8 +663,8 @@ contract UpDownMarketTest is UpDownBaseTest {
         _betDown(bob, 1_000e18);
         _advance(P0); // lock epoch 1 (buffer 240), start epoch 2 (buffer 299)
 
-        UpDownMarketBase.Round memory r1 = _round(1);
-        UpDownMarketBase.Round memory r2 = _round(2);
+        UpDownRoundEngine.Round memory r1 = _round(1);
+        UpDownRoundEngine.Round memory r2 = _round(2);
         assertEq(r1.bufferSeconds, BUFFER);
         assertEq(r2.bufferSeconds, 299);
 
@@ -702,12 +703,12 @@ contract UpDownMarketTest is UpDownBaseTest {
         _betDown(bob, 1_000e18);
         _advance(P0);
 
-        UpDownMarketBase.Round memory r2 = _round(2);
+        UpDownRoundEngine.Round memory r2 = _round(2);
         vm.warp(r2.lockTs);
         uint80 rid = feed.setAnswerAt(99_000e8, uint256(r2.lockTs) - uint256(MAX_AGE) - 1);
         vm.warp(uint256(r2.lockTs) + 1);
         vm.prank(keeper);
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(rid);
         assertEq(market.treasuryAmount(), 0);
     }
@@ -742,7 +743,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         }
 
         // a keeper outage: the rounds it runs over void, and the grid fast-forwards in one tx
-        UpDownMarketBase.Round memory live = _round(market.currentEpoch());
+        UpDownRoundEngine.Round memory live = _round(market.currentEpoch());
         vm.warp(uint256(live.lockTs) + 4 * INTERVAL);
         uint80 rid = feed.setAnswer(P0);
         vm.warp(block.timestamp + 1);
@@ -753,7 +754,7 @@ contract UpDownMarketTest is UpDownBaseTest {
 
         uint256 opened;
         for (uint256 e = 1; e <= market.currentEpoch(); ++e) {
-            UpDownMarketBase.Round memory r = _round(e);
+            UpDownRoundEngine.Round memory r = _round(e);
             if (r.startTs == 0) continue; // an epoch the fast-forward skipped: never opened
             ++opened;
             assertEq(r.oracleMaxAge, immutableAge, "round snapshot diverged from the immutable");
@@ -777,7 +778,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         uint256[] memory e = new uint256[](1);
         e[0] = 1;
         vm.prank(alice);
-        vm.expectRevert(UpDownMarketBase.UnsupportedAsset.selector);
+        vm.expectRevert(UpDownRoundEngine.UnsupportedAsset.selector);
         market.claim(e);
     }
 
@@ -793,12 +794,12 @@ contract UpDownMarketTest is UpDownBaseTest {
         uint256[] memory e = new uint256[](1);
         e[0] = 1;
         vm.prank(alice);
-        vm.expectRevert(UpDownMarketBase.UnsupportedAsset.selector);
+        vm.expectRevert(UpDownRoundEngine.UnsupportedAsset.selector);
         market.claim(e);
     }
 
     function test_findRoundIdAtLocatesTheBoundaryPrint() public {
-        UpDownMarketBase.Round memory r1 = _round(1);
+        UpDownRoundEngine.Round memory r1 = _round(1);
         vm.warp(uint256(r1.lockTs) - 5);
         feed.setAnswer(70_000e8);
         vm.warp(r1.lockTs);
@@ -880,7 +881,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         _advance(P0); // epoch 1 is locked at the strike
 
         // the settlement print lands and everyone can see DOWN has lost
-        UpDownMarketBase.Round memory r2 = _round(2);
+        UpDownRoundEngine.Round memory r2 = _round(2);
         vm.warp(r2.lockTs);
         uint80 boundary = feed.setAnswer(P0 + 5_000e8); // UP wins by a mile
         vm.warp(uint256(r2.lockTs) + 1);
@@ -894,7 +895,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         vm.prank(carol);
         market.executeRound(boundary);
 
-        UpDownMarketBase.Round memory settled = _round(1);
+        UpDownRoundEngine.Round memory settled = _round(1);
         assertTrue(settled.settled, "a locked round must settle through a pause");
         assertFalse(settled.voided, "pausing must not turn a decided round into a refund");
         assertEq(settled.closePrice, P0 + 5_000e8);
@@ -926,7 +927,7 @@ contract UpDownMarketTest is UpDownBaseTest {
 
         // publish at the boundary and settle a moment later, exactly as an honest caller would:
         // the round locked BEFORE the pause still settles, which is the point of the fix.
-        UpDownMarketBase.Round memory r = _round(open);
+        UpDownRoundEngine.Round memory r = _round(open);
         vm.warp(r.lockTs);
         uint80 rid = feed.setAnswer(P0 + 1e8);
         vm.warp(uint256(r.lockTs) + 1);
@@ -953,7 +954,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         _betDown(bob, 1_000e18);
         _advance(P0);
 
-        UpDownMarketBase.Round memory r2 = _round(2);
+        UpDownRoundEngine.Round memory r2 = _round(2);
         feed.startNewPhase(); // the bound phase never prints again
         vm.warp(r2.lockTs);
         feed.setAnswer(99_000e8);
@@ -963,7 +964,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         // and the expectRevert
         uint80 wrongPhase = feed.latestId();
         vm.prank(keeper);
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(wrongPhase);
 
         vm.warp(uint256(r2.lockTs) + BUFFER + 1);
@@ -987,7 +988,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         market.unpause();
 
         // No re-anchor: the next crank turn fast-forwards to the live epoch in one transaction.
-        UpDownMarketBase.Round memory r1 = _round(1);
+        UpDownRoundEngine.Round memory r1 = _round(1);
         vm.warp(uint256(r1.lockTs) + BUFFER + 1);
         uint80 rid = feed.setAnswer(P0 + 1e8);
         vm.prank(keeper);
@@ -1012,7 +1013,7 @@ contract UpDownMarketTest is UpDownBaseTest {
         assertEq(market.treasuryAmount(), 0);
 
         vm.prank(owner);
-        vm.expectRevert(UpDownMarketBase.NothingToClaim.selector);
+        vm.expectRevert(UpDownRoundEngine.NothingToClaim.selector);
         market.claimTreasury(treasury);
 
         _claim(alice, 1); // the winner is still made whole afterwards
@@ -1022,7 +1023,7 @@ contract UpDownMarketTest is UpDownBaseTest {
     function test_settlementAssetCannotBeRecovered() public {
         _betUp(alice, 1_000e18);
         vm.prank(owner);
-        vm.expectRevert(UpDownMarketBase.CannotRecoverAsset.selector);
+        vm.expectRevert(UpDownRoundEngine.CannotRecoverAsset.selector);
         market.recoverToken(address(usdt), owner, 1);
     }
 
@@ -1057,7 +1058,7 @@ contract UpDownMarketTest is UpDownBaseTest {
     }
 
     function test_constructorRejectsBadConfig() public {
-        vm.expectRevert(UpDownMarketBase.InvalidBuffer.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBuffer.selector);
         new UpDownMarketERC20(
             owner,
             address(feed),
@@ -1072,11 +1073,11 @@ contract UpDownMarketTest is UpDownBaseTest {
             MAX_BET,
             MAX_SIDE
         );
-        vm.expectRevert(UpDownMarketBase.InvalidFee.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidFee.selector);
         new UpDownMarketERC20(
             owner, address(feed), address(usdt), INTERVAL, 1001, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
         );
-        vm.expectRevert(UpDownMarketBase.InvalidOracleMaxAge.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidOracleMaxAge.selector);
         new UpDownMarketERC20(
             owner,
             address(feed),

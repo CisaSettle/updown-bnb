@@ -7,6 +7,7 @@ import * as url from 'node:url'
 import * as viem from '../../keeper/node_modules/viem/_esm/index.js'
 import * as gas from '../lib/gas-refill.mjs'
 import * as window from '../lib/bet-window.mjs'
+import * as tradeMaker from '../lib/trade-maker.mjs'
 import * as chains from '../../keeper/node_modules/viem/_esm/chains/index.js'
 
 // Execute the real startup and polling loop against an in-memory chain. No keys, RPC or timers.
@@ -95,6 +96,7 @@ async function runBot(recovery) {
     './lib/tx-outbox.mjs': { TxOutbox: class { async send(_account, prepare) { return prepare() } } },
     './lib/gas-refill.mjs': gas,
     './lib/bet-window.mjs': window,
+    './lib/trade-maker.mjs': tradeMaker,
   }
   const executable = source
     .replace(/^#!.*\n/, '')

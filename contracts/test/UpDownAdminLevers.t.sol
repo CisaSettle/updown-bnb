@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {UpDownErc20Fixture, UpDownFixture} from "./UpDownBase.t.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
+import {UpDownRoundEngine} from "../src/UpDownRoundEngine.sol";
 
 /**
  * @notice The three levers an owner still holds — `setParams`, `setLimits`, `pause` — and the
@@ -44,7 +45,7 @@ abstract contract UpDownAdminLeverTests is UpDownFixture {
         uint16[3] memory tooHigh = [cap + 1, 5_000, type(uint16).max];
         for (uint256 i; i < tooHigh.length; ++i) {
             vm.prank(owner);
-            vm.expectRevert(UpDownMarketBase.InvalidFee.selector);
+            vm.expectRevert(UpDownRoundEngine.InvalidFee.selector);
             market.setParams(tooHigh[i], BUFFER);
             assertEq(market.feeBps(), cap, "a rejected fee must not be written");
             assertEq(market.bufferSeconds(), BUFFER, "and must not drag the buffer with it");
@@ -106,7 +107,7 @@ abstract contract UpDownAdminLeverTests is UpDownFixture {
         uint16[4] memory illegal = [0, IV, IV + 1, type(uint16).max];
         for (uint256 i; i < illegal.length; ++i) {
             vm.prank(owner);
-            vm.expectRevert(UpDownMarketBase.InvalidBuffer.selector);
+            vm.expectRevert(UpDownRoundEngine.InvalidBuffer.selector);
             market.setParams(FEE_BPS, illegal[i]);
             assertEq(market.bufferSeconds(), IV - 1, "a rejected buffer must not be written");
             assertEq(market.feeBps(), FEE_BPS, "and must not drag the fee with it");
@@ -116,13 +117,13 @@ abstract contract UpDownAdminLeverTests is UpDownFixture {
     /// @notice A call carrying one good argument and one bad one writes neither.
     function test_setParamsIsAllOrNothing() public {
         vm.prank(owner);
-        vm.expectRevert(UpDownMarketBase.InvalidFee.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidFee.selector);
         market.setParams(2_000, 120); // a legal buffer, an illegal fee
         assertEq(market.feeBps(), FEE_BPS);
         assertEq(market.bufferSeconds(), BUFFER);
 
         vm.prank(owner);
-        vm.expectRevert(UpDownMarketBase.InvalidBuffer.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBuffer.selector);
         market.setParams(100, 0); // a legal fee, an illegal buffer
         assertEq(market.feeBps(), FEE_BPS);
         assertEq(market.bufferSeconds(), BUFFER);
@@ -194,7 +195,7 @@ abstract contract UpDownAdminLeverTests is UpDownFixture {
         assertEq(_round(late).bufferSeconds, 60, "the live round keeps the fuse it opened with");
         assertEq(market.bufferSeconds(), 299);
 
-        UpDownMarketBase.Round memory r = _round(late);
+        UpDownRoundEngine.Round memory r = _round(late);
         vm.warp(r.lockTs); // == closeTs of the round before it: one boundary, one print
         uint80 rid = feed.setAnswer(81_000e8);
 
@@ -205,7 +206,7 @@ abstract contract UpDownAdminLeverTests is UpDownFixture {
         assertTrue(market.refundable(late, carol), "the round is already refundable at this point");
 
         vm.expectEmit(true, false, false, true, address(market));
-        emit UpDownMarketBase.RoundVoided(late, VOID_WINDOW);
+        emit UpDownRoundEngine.RoundVoided(late, VOID_WINDOW);
         vm.prank(keeper);
         market.executeRound(rid);
 
@@ -241,7 +242,7 @@ abstract contract UpDownAdminLeverTests is UpDownFixture {
         _betDown(bob, 1_000e18);
         _advance(P0); // strikes epoch 1 at P0 and opens epoch 2
 
-        UpDownMarketBase.Round memory r = _round(1);
+        UpDownRoundEngine.Round memory r = _round(1);
         assertTrue(r.locked, "fixture: epoch 1 is struck");
         assertFalse(r.settled);
         assertFalse(r.voided);
@@ -299,7 +300,7 @@ abstract contract UpDownAdminLeverTests is UpDownFixture {
         market.unpause();
 
         // a keeper outage: the next crank turn fast-forwards several epochs in one transaction
-        UpDownMarketBase.Round memory live = _round(market.currentEpoch());
+        UpDownRoundEngine.Round memory live = _round(market.currentEpoch());
         vm.warp(uint256(live.lockTs) + 3 * INTERVAL);
         uint80 rid = feed.setAnswer(P0 + 2e8);
         vm.warp(block.timestamp + 1);
@@ -310,7 +311,7 @@ abstract contract UpDownAdminLeverTests is UpDownFixture {
         uint256 opened;
         uint256 previous;
         for (uint256 e = 1; e <= market.currentEpoch(); ++e) {
-            UpDownMarketBase.Round memory r = _round(e);
+            UpDownRoundEngine.Round memory r = _round(e);
             if (r.startTs == 0) continue; // an epoch the fast-forward skipped: never opened
             ++opened;
             assertEq(uint256(r.lockTs) - r.startTs, INTERVAL, "the betting phase is one interval");
@@ -350,7 +351,7 @@ abstract contract UpDownAdminLeverTests is UpDownFixture {
         uint256 open = market.currentEpoch();
         _betUp(carol, 1_000e18); // a round that will never be struck
 
-        UpDownMarketBase.Round memory r = _round(open);
+        UpDownRoundEngine.Round memory r = _round(open);
         vm.warp(r.lockTs);
         uint80 boundary = feed.setAnswer(P0 + 5_000e8); // UP has plainly won epoch 1
         vm.warp(uint256(r.lockTs) + 1);

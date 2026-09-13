@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
+import {UpDownRoundEngine} from "../src/UpDownRoundEngine.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
@@ -66,14 +67,14 @@ abstract contract UpDownFixture is Test {
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    function _round(uint256 e) internal view returns (UpDownMarketBase.Round memory) {
+    function _round(uint256 e) internal view returns (UpDownRoundEngine.Round memory) {
         return market.getRound(e);
     }
 
     /// @dev Publish the boundary print exactly at the boundary (as Chainlink would), then let an
     ///      unprivileged account turn the crank `delay` seconds later.
     function _advanceLate(int256 price, uint256 delay) internal returns (uint80 roundId) {
-        UpDownMarketBase.Round memory r = _round(market.currentEpoch());
+        UpDownRoundEngine.Round memory r = _round(market.currentEpoch());
         vm.warp(r.lockTs);
         roundId = feed.setAnswer(price);
         // Never execute *at* the boundary: the contract only admits a strictly later block, because

@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {UpDownErc20Fixture, UpDownFixture} from "./UpDownBase.t.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
+import {UpDownRoundEngine} from "../src/UpDownRoundEngine.sol";
 import {IAggregatorV3} from "../src/IAggregatorV3.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
 
@@ -158,15 +159,15 @@ abstract contract UpDownOracleBindingTests is UpDownFixture {
     ///         ever refund.
     function test_aFeedThatCannotAnswerAtConstructionIsRefused() public {
         MockAggregator zero = new MockAggregator(8, "DEAD / USD", 0);
-        vm.expectRevert(UpDownMarketBase.OracleUnusable.selector);
+        vm.expectRevert(UpDownRoundEngine.OracleUnusable.selector);
         _deployOnFeed(address(zero));
 
         MockAggregator negative = new MockAggregator(8, "DEAD / USD", -1);
-        vm.expectRevert(UpDownMarketBase.OracleUnusable.selector);
+        vm.expectRevert(UpDownRoundEngine.OracleUnusable.selector);
         _deployOnFeed(address(negative));
 
         TimelessFeed timeless = new TimelessFeed(P0);
-        vm.expectRevert(UpDownMarketBase.OracleUnusable.selector);
+        vm.expectRevert(UpDownRoundEngine.OracleUnusable.selector);
         _deployOnFeed(address(timeless));
 
         // A feed that reverts outright takes the deployment down with its own error rather than
@@ -232,7 +233,7 @@ abstract contract UpDownOracleBindingTests is UpDownFixture {
         _betUp(alice, 1_000e18);
         _betDown(bob, 1_000e18);
 
-        UpDownMarketBase.Round memory r1 = _round(1);
+        UpDownRoundEngine.Round memory r1 = _round(1);
         vm.warp(r1.lockTs);
         uint80 honest = feed.setAnswer(P0);
         feed.startNewPhase();
@@ -241,7 +242,7 @@ abstract contract UpDownOracleBindingTests is UpDownFixture {
         vm.warp(uint256(r1.lockTs) + 1);
 
         vm.prank(keeper);
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(foreign);
 
         assertFalse(_round(1).voided, "a foreign-phase proof must never void a round");
@@ -262,7 +263,7 @@ abstract contract UpDownOracleBindingTests is UpDownFixture {
         _advance(P0); // epoch 1 is struck at P0
 
         uint256 open = market.currentEpoch();
-        UpDownMarketBase.Round memory r = _round(open);
+        UpDownRoundEngine.Round memory r = _round(open);
         vm.warp(r.lockTs);
         uint80 honest = feed.setAnswer(81_000e8); // bob's DOWN side has lost
         feed.startNewPhase();
@@ -270,7 +271,7 @@ abstract contract UpDownOracleBindingTests is UpDownFixture {
         vm.warp(uint256(r.lockTs) + 1);
 
         vm.prank(bob);
-        vm.expectRevert(UpDownMarketBase.InvalidBoundaryProof.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidBoundaryProof.selector);
         market.executeRound(foreign);
         assertFalse(_round(1).voided, "the losing side must not be able to cancel the round");
         assertFalse(_round(1).settled, "and must not settle it on a phase this market never bound to");
@@ -296,7 +297,7 @@ abstract contract UpDownOracleBindingTests is UpDownFixture {
         _betDown(bob, 1_000e18);
         _advance(P0);
 
-        UpDownMarketBase.Round memory r = _round(market.currentEpoch());
+        UpDownRoundEngine.Round memory r = _round(market.currentEpoch());
         vm.warp(r.lockTs);
         uint80 last = feed.setAnswer(81_000e8); // the bound phase's final print, on the boundary
 
@@ -359,7 +360,7 @@ abstract contract UpDownOracleBindingTests is UpDownFixture {
         _betUp(alice, 1_000e18);
         _betDown(bob, 1_000e18);
 
-        UpDownMarketBase.Round memory r1 = _round(1);
+        UpDownRoundEngine.Round memory r1 = _round(1);
         vm.warp(r1.lockTs);
         top.publish(P0, block.timestamp);
         vm.warp(uint256(r1.lockTs) + 1);

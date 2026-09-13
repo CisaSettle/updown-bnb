@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {UpDownFixture, UpDownErc20Fixture} from "./UpDownBase.t.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
+import {UpDownRoundEngine} from "../src/UpDownRoundEngine.sol";
 
 /// @dev Fuzz properties for the deployed ERC20 market.
 abstract contract UpDownFuzzTests is UpDownFixture {
@@ -43,7 +44,7 @@ abstract contract UpDownFuzzTests is UpDownFixture {
         _advance(P0);
         _advance(upWins ? P0 + 1e8 : P0 - 1e8);
 
-        UpDownMarketBase.Round memory r = _round(epoch);
+        UpDownRoundEngine.Round memory r = _round(epoch);
         uint256 losePool = upWins ? down : up;
         uint256 fee = (losePool * r.feeBps) / 10_000;
 
@@ -73,7 +74,7 @@ abstract contract UpDownFuzzTests is UpDownFixture {
             _advance(P0); // tie
         } else if (voidKind == 1) {
             // the feed is dead through the whole window, so the round times out into refunds
-            UpDownMarketBase.Round memory r = _round(market.currentEpoch());
+            UpDownRoundEngine.Round memory r = _round(market.currentEpoch());
             vm.warp(r.lockTs);
             uint80 rid = feed.setAnswerAt(P0 + 5e8, block.timestamp - MAX_AGE - 1);
             vm.warp(uint256(r.lockTs) + BUFFER + 1);

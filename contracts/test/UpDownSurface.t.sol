@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {UpDownBaseTest} from "./UpDownBase.t.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
+import {UpDownRoundEngine} from "../src/UpDownRoundEngine.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
 import {UpDownRegistry} from "../src/UpDownRegistry.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
@@ -75,7 +76,7 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         uint256[] memory e = new uint256[](1);
         e[0] = 1;
         vm.prank(alice);
-        vm.expectRevert(UpDownMarketBase.ZeroAddress.selector);
+        vm.expectRevert(UpDownRoundEngine.ZeroAddress.selector);
         market.claimTo(e, address(0));
     }
 
@@ -103,13 +104,13 @@ contract UpDownSurfaceTest is UpDownBaseTest {
     function test_recoverTokenRejectsTheSettlementAssetOnAnErc20Market() public {
         _betUp(alice, 1_000e18);
         vm.prank(owner);
-        vm.expectRevert(UpDownMarketBase.CannotRecoverAsset.selector);
+        vm.expectRevert(UpDownRoundEngine.CannotRecoverAsset.selector);
         market.recoverToken(address(usdt), treasury, 1);
     }
 
     function test_recoverTokenRejectsTheZeroRecipient() public {
         vm.prank(owner);
-        vm.expectRevert(UpDownMarketBase.ZeroAddress.selector);
+        vm.expectRevert(UpDownRoundEngine.ZeroAddress.selector);
         market.recoverToken(address(0), address(0), 1);
     }
 
@@ -128,7 +129,7 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         NoReceive sink = new NoReceive();
         vm.deal(address(market), 1 ether);
         vm.prank(owner);
-        vm.expectRevert(UpDownMarketBase.TransferFailed.selector);
+        vm.expectRevert(UpDownRoundEngine.TransferFailed.selector);
         market.recoverToken(address(0), address(sink), 1 ether);
         assertEq(address(market).balance, 1 ether, "a failed sweep must change nothing");
     }
@@ -205,11 +206,11 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         epochs[2] = 1;
         epochs[3] = 1; // duplicates must not confuse it
         epochs[4] = 99; // never opened
-        UpDownMarketBase.Round[] memory got = market.getRounds(epochs);
+        UpDownRoundEngine.Round[] memory got = market.getRounds(epochs);
 
         assertEq(got.length, epochs.length, "one entry per requested epoch, in order");
         for (uint256 i; i < epochs.length; ++i) {
-            UpDownMarketBase.Round memory one = market.getRound(epochs[i]);
+            UpDownRoundEngine.Round memory one = market.getRound(epochs[i]);
             assertEq(
                 keccak256(abi.encode(got[i])), keccak256(abi.encode(one)), "batch diverged from getRound"
             );
@@ -220,7 +221,7 @@ contract UpDownSurfaceTest is UpDownBaseTest {
     }
 
     function test_getRoundsWithAnEmptyArrayReturnsAnEmptyArray() public view {
-        UpDownMarketBase.Round[] memory got = market.getRounds(new uint256[](0));
+        UpDownRoundEngine.Round[] memory got = market.getRounds(new uint256[](0));
         assertEq(got.length, 0);
     }
 
@@ -231,7 +232,7 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         epochs[0] = 0; // epoch 0 never exists: epochs are 1-based
         epochs[1] = 2; // not opened yet: epoch 1 is the only live round
         epochs[2] = type(uint256).max;
-        UpDownMarketBase.Round[] memory got = market.getRounds(epochs);
+        UpDownRoundEngine.Round[] memory got = market.getRounds(epochs);
 
         assertEq(got.length, 3);
         for (uint256 i; i < 3; ++i) {
@@ -255,7 +256,7 @@ contract UpDownSurfaceTest is UpDownBaseTest {
             erc20.betUp(bettable, MIN_BET); // the named epoch takes the bet
 
             vm.prank(alice);
-            vm.expectRevert(UpDownMarketBase.WrongEpoch.selector);
+            vm.expectRevert(UpDownRoundEngine.WrongEpoch.selector);
             erc20.betUp(bettable + 1, MIN_BET); // and no other epoch does
 
             // safe: the loop runs three times, so the widening cannot truncate
@@ -310,7 +311,7 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         _advance(P0);
         _advance(P0); // closePrice == lockPrice: settled, and then voided as a tie
 
-        UpDownMarketBase.Round memory r = _round(1);
+        UpDownRoundEngine.Round memory r = _round(1);
         assertTrue(r.settled, "the tie really did record a close price");
         assertTrue(r.voided);
 
@@ -390,7 +391,7 @@ contract UpDownSurfaceTest is UpDownBaseTest {
 
     function test_genesisStartCannotRunTwice() public {
         vm.prank(owner);
-        vm.expectRevert(UpDownMarketBase.AlreadyStarted.selector);
+        vm.expectRevert(UpDownRoundEngine.AlreadyStarted.selector);
         market.genesisStart();
     }
 
@@ -414,11 +415,11 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         assertFalse(fresh.genesisStarted());
 
         vm.prank(alice);
-        vm.expectRevert(UpDownMarketBase.NotStarted.selector);
+        vm.expectRevert(UpDownRoundEngine.NotStarted.selector);
         fresh.betUp(1, MIN_BET);
 
         vm.prank(keeper);
-        vm.expectRevert(UpDownMarketBase.NotStarted.selector);
+        vm.expectRevert(UpDownRoundEngine.NotStarted.selector);
         fresh.executeRound(1);
 
         vm.prank(owner);
@@ -427,27 +428,27 @@ contract UpDownSurfaceTest is UpDownBaseTest {
 
         // and only once — the grid is anchored for the life of the market
         vm.prank(owner);
-        vm.expectRevert(UpDownMarketBase.AlreadyStarted.selector);
+        vm.expectRevert(UpDownRoundEngine.AlreadyStarted.selector);
         fresh.genesisStart();
     }
 
     function test_claimingAnEmptyEpochListReverts() public {
         uint256[] memory none = new uint256[](0);
         vm.prank(alice);
-        vm.expectRevert(UpDownMarketBase.EmptyInput.selector);
+        vm.expectRevert(UpDownRoundEngine.EmptyInput.selector);
         market.claim(none);
 
         vm.prank(alice);
-        vm.expectRevert(UpDownMarketBase.EmptyInput.selector);
+        vm.expectRevert(UpDownRoundEngine.EmptyInput.selector);
         market.claimTo(none, alice);
     }
 
     function test_constructorRejectsAnOutOfRangeInterval() public {
-        vm.expectRevert(UpDownMarketBase.InvalidInterval.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidInterval.selector);
         new UpDownMarketERC20(
             owner, address(feed), address(usdt), 59, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
         );
-        vm.expectRevert(UpDownMarketBase.InvalidInterval.selector);
+        vm.expectRevert(UpDownRoundEngine.InvalidInterval.selector);
         new UpDownMarketERC20(
             owner,
             address(feed),
@@ -610,7 +611,7 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         uint256[] memory e = new uint256[](1);
         e[0] = 1;
         vm.prank(carol);
-        vm.expectRevert(UpDownMarketBase.ZeroAddress.selector);
+        vm.expectRevert(UpDownRoundEngine.ZeroAddress.selector);
         market.claimFor(address(0), e);
 
         // carol has nothing of her own in this round
@@ -626,11 +627,11 @@ contract UpDownSurfaceTest is UpDownBaseTest {
 
     function test_everyZeroAddressDoorIsShut() public {
         // construction
-        vm.expectRevert(UpDownMarketBase.ZeroAddress.selector);
+        vm.expectRevert(UpDownRoundEngine.ZeroAddress.selector);
         new UpDownMarketERC20(
             owner, address(0), address(usdt), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
         );
-        vm.expectRevert(UpDownMarketBase.ZeroAddress.selector);
+        vm.expectRevert(UpDownRoundEngine.ZeroAddress.selector);
         new UpDownMarketERC20(
             owner, address(feed), address(0), INTERVAL, FEE_BPS, BUFFER, MAX_AGE, MIN_BET, MAX_BET, MAX_SIDE
         );
@@ -661,7 +662,7 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         vm.startPrank(owner);
         market.pause();
         market.unpause();
-        vm.expectRevert(UpDownMarketBase.ZeroAddress.selector);
+        vm.expectRevert(UpDownRoundEngine.ZeroAddress.selector);
         market.claimTreasury(address(0));
         vm.stopPrank();
 
@@ -695,7 +696,7 @@ contract UpDownSurfaceTest is UpDownBaseTest {
         );
         vm.warp(type(uint64).max);
         vm.prank(owner);
-        vm.expectRevert(UpDownMarketBase.TimestampOverflow.selector);
+        vm.expectRevert(UpDownRoundEngine.TimestampOverflow.selector);
         endOfTime.genesisStart();
         assertFalse(endOfTime.genesisStarted(), "a market must never open on an unrepresentable grid");
     }

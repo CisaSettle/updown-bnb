@@ -7,6 +7,12 @@ export interface RawDeployment {
   ethUsd10m: `0x${string}`
   bnbUsd1m: `0x${string}`
   bnbUsd10m: `0x${string}`
+  btcUsd1mTrade: `0x${string}`
+  btcUsd10mTrade: `0x${string}`
+  ethUsd1mTrade: `0x${string}`
+  ethUsd10mTrade: `0x${string}`
+  bnbUsd1mTrade: `0x${string}`
+  bnbUsd10mTrade: `0x${string}`
   btcFeed: `0x${string}`
   ethFeed: `0x${string}`
   bnbFeed: `0x${string}`

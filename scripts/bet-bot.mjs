@@ -21,6 +21,11 @@
  *   DEPLOYMENTS_PATH the chain-97 manifest     (default: contracts/deployments/97.json in the repo)
  *   MARKETS       csv of deployment keys       (default: all six markets)
  *   BET_MIN/MAX   stake range in USDT          (default: 3 / 12)
+ *   TRADE_MARKETS csv of order-book market keys to quote (default: none, e.g. btcUsd10mTrade)
+ *   TRADE_SEED_SHARES / TRADE_QUOTE_SHARES   shares minted per round / resting per side (default: 20 / 10)
+ *   TRADE_SPREAD_CENTS  half-spread around fair value                  (default: 3)
+ *   TRADE_VOL_ANNUAL    annualised volatility behind fair value        (default: 0.6)
+ *   TRADE_REQUOTE_CENTS / TRADE_MAX_REQUOTES  requote trigger and cap per live round (default: 6 / 2)
  *   FUNDER_KEY    optional key that tops the bot accounts up with gas when they run low
  *   MIN_GAS_BNB   gas floor that triggers a top-up or a loud warning   (default: 0.01)
  *   GAS_TOPUP_BNB target balance for a bot top-up                       (default: 0.05)
@@ -53,6 +58,7 @@ import { bscTestnet } from '../keeper/node_modules/viem/_esm/chains/index.js'
 import { allocateGasRefills, assignSides, selectGasRefills } from './lib/gas-refill.mjs'
 import { firstBetMinLeadReader, hasPlanningRunway, readBettableRound } from './lib/bet-window.mjs'
 import { TxOutbox } from './lib/tx-outbox.mjs'
+import { askOrder, bidOrder, endedOpenOrderIds, fairUpCents, needsRequote, openOrderIds, quoteTicks } from './lib/trade-maker.mjs'
 
 /**
  * Exit code for a configuration error that restarting cannot fix (sysexits.h EX_CONFIG).
@@ -105,6 +111,35 @@ const markets = MARKET_KEYS.map((key) => {
 // Reducing synthetic activity must not strand payouts from previously active markets.
 const claimMarkets = ALL_MARKETS.map((key) => ({ key, address: getAddress(dep[key]) }))
 const asset = getAddress(dep.usdt)
+/**
+ * Order-book markets. Off unless named: every quote, requote and cleanup is a transaction, and
+ * testnet gas comes from a captcha faucet. Each funded round costs roughly ten transactions.
+ */
+const tradeMarkets = (process.env.TRADE_MARKETS ?? '')
+  .split(',')
+  .map((k) => k.trim())
+  .filter(Boolean)
+  .map((key) => {
+    if (!dep[key]) {
+      console.error(`TRADE_MARKETS names ${key}, which the deployment manifest does not contain.`)
+      process.exit(EX_CONFIG)
+    }
+    return { key, address: getAddress(dep[key]) }
+  })
+const TRADE_SEED_SHARES = Number(process.env.TRADE_SEED_SHARES ?? '20')
+const TRADE_QUOTE_SHARES = Number(process.env.TRADE_QUOTE_SHARES ?? '10')
+const TRADE_SPREAD_CENTS = Number(process.env.TRADE_SPREAD_CENTS ?? '3')
+const TRADE_VOL_ANNUAL = Number(process.env.TRADE_VOL_ANNUAL ?? '0.6')
+const TRADE_REQUOTE_CENTS = Number(process.env.TRADE_REQUOTE_CENTS ?? '6')
+const TRADE_MAX_REQUOTES = Number(process.env.TRADE_MAX_REQUOTES ?? '2')
+if (
+  tradeMarkets.length &&
+  !(TRADE_SEED_SHARES >= 1 && TRADE_QUOTE_SHARES >= 1 && TRADE_SPREAD_CENTS >= 0 && TRADE_VOL_ANNUAL > 0 &&
+    TRADE_REQUOTE_CENTS >= 1 && TRADE_MAX_REQUOTES >= 0)
+) {
+  console.error('TRADE_* settings make no sense; see the header comment.')
+  process.exit(EX_CONFIG)
+}
 
 const BET_MIN = Number(process.env.BET_MIN ?? '3')
 const BET_MAX = Number(process.env.BET_MAX ?? '12')
@@ -189,6 +224,27 @@ const MARKET = parseAbi([
   'function betDown(uint256,uint256)',
   'function claim(uint256[])',
 ])
+const TRADE = parseAbi([
+  'struct Round { uint64 startTs; uint64 lockTs; uint64 closeTs; uint16 feeBps; uint16 bufferSeconds; bool locked; bool settled; bool voided; int256 lockPrice; int256 closePrice; uint80 lockOracleId; uint80 closeOracleId; uint32 oracleMaxAge; uint256 upAmount; uint256 downAmount; uint256 rewardBaseAmount; uint256 rewardPoolAmount; }',
+  'struct Order { address maker; uint8 kind; uint8 tick; uint64 prev; uint64 next; uint128 remaining; uint64 epoch; }',
+  'function currentEpoch() view returns (uint256)',
+  'function currentBettableEpoch() view returns (uint256)',
+  'function FIRST_BET_MIN_LEAD_SECONDS() view returns (uint256)',
+  'function maintenanceRequired() view returns (bool)',
+  'function getRound(uint256) view returns (Round)',
+  'function oracle() view returns (address)',
+  'function ledger(uint256,address) view returns (uint256 upShares, uint256 downShares, bool claimed)',
+  'function userOrders(address,uint256,uint256) view returns (uint256[] ids, Order[] orders, uint256 total)',
+  'function userEpochs(address,uint256,uint256) view returns (uint256[],uint256)',
+  'function pendingRedemption(uint256,address) view returns (uint256)',
+  'function cash(address) view returns (uint256)',
+  'function placeOrder(uint256 epoch, bool up, bool buy, uint256 price, uint256 shares, uint256 maxFills, bool rest) returns (uint256, uint256)',
+  'function cancelOrders(uint256[])',
+  'function redeem(uint256[])',
+])
+const AGGREGATOR = parseAbi([
+  'function latestRoundData() view returns (uint80, int256, uint256, uint256, uint80)',
+])
 const ERC20 = parseAbi([
   'function balanceOf(address) view returns (uint256)',
   'function allowance(address,address) view returns (uint256)',
@@ -263,6 +319,9 @@ async function send(account, address, abi, functionName, args, value, receiptTim
       const request = await client.prepareTransactionRequest({
         to: address, data: encodeFunctionData({ abi, functionName, args }), value,
       })
+      // An exact estimate can leave a closing SSTORE (the reentrancy guard's reset) under the
+      // 2300-gas sentry and revert out of gas. Same headroom the keeper adds.
+      if (request.gas) request.gas = (request.gas * 125n) / 100n
       return client.signTransaction(request)
     }, receiptTimeoutMs)
   })
@@ -751,6 +810,154 @@ async function tick(market) {
   }
 }
 
+// ── order-book markets ──────────────────────────────────────────────────────────────────────────
+/**
+ * Per round of each trade market: mint a small inventory before the strike (A buys Up, B buys
+ * Down at 50c, which is what makes the keeper lock the round), rest an ask from A and a bid from B
+ * around fair value, requote a bounded number of times while the round is live, and bring escrow
+ * and winnings home once rounds end. Two resting orders serve Up and Down traders on both sides.
+ */
+const tradePlans = new Map()
+const liveQuotes = new Map()
+const tradeRead = (market, fn, args = []) =>
+  pub.readContract({ address: market.address, abi: TRADE, functionName: fn, args })
+
+async function openTradeOrderIds(who, market, epoch) {
+  const [, , total] = await tradeRead(market, 'userOrders', [who.address, 0n, 0n])
+  const offset = total > 20n ? total - 20n : 0n
+  const [ids, orders] = await tradeRead(market, 'userOrders', [who.address, offset, 20n])
+  return openOrderIds(ids, orders, epoch)
+}
+
+/** Replace `who`'s resting order in `epoch` with a fresh one on `side` at `tick`. */
+async function requoteSide(who, market, epoch, side, tick, budgetMs) {
+  if (insolvent.has(who.address)) return
+  const open = await openTradeOrderIds(who, market, epoch)
+  if (open.length) await send(who, market.address, TRADE, 'cancelOrders', [open], undefined, budgetMs)
+  const [upShares, downShares] = await tradeRead(market, 'ledger', [epoch, who.address])
+  const shares = U(TRADE_QUOTE_SHARES)
+  const o = side === 'ask' ? askOrder(upShares, shares, tick) : bidOrder(downShares, shares, tick)
+  await ensureApproval(who, market)
+  await send(who, market.address, TRADE, 'placeOrder', [epoch, o.up, o.buy, BigInt(o.price), shares, 64n, true], undefined, budgetMs)
+}
+
+async function quoteRound(market, epoch, fair, budgetMs) {
+  const { askTick, bidTick } = quoteTicks(fair, TRADE_SPREAD_CENTS)
+  const results = await Promise.allSettled([
+    requoteSide(A, market, epoch, 'ask', askTick, budgetMs),
+    requoteSide(B, market, epoch, 'bid', bidTick, budgetMs),
+  ])
+  const failed = results.filter((r) => r.status === 'rejected')
+  if (failed.length) throw failed[0].reason
+  log(`${market.key} epoch ${epoch}: quoting Up ${bidTick}c / ${askTick}c (fair ${fair}c)`)
+}
+
+async function seedTradeRound(market) {
+  const read = (fn, args) => tradeRead(market, fn, args)
+  const [{ epoch, round, maintenanceRequired }, firstBetMinLeadSeconds] = await Promise.all([
+    readBettableRound(read),
+    firstBetMinLead(market.address, read),
+  ])
+  // An empty minute round admits its first order for only ~10 seconds; poll fast while one waits.
+  const dormantMinute = Number(round.lockTs - round.startTs) <= 60 && round.upAmount === 0n && !maintenanceRequired
+  if (dormantMinute) dormantMinuteMarkets.add(market.key)
+  else dormantMinuteMarkets.delete(market.key)
+  let plan = tradePlans.get(market.key)
+  if (plan?.epoch === epoch && plan.done) {
+    dormantMinuteMarkets.delete(market.key)
+    return
+  }
+  const t = await now()
+  if (!hasPlanningRunway(round, t, firstBetMinLeadSeconds, maintenanceRequired)) return
+  if (!plan || plan.epoch !== epoch) {
+    plan = { epoch, done: false }
+    tradePlans.set(market.key, plan)
+  }
+  if (insolvent.has(A.address) || insolvent.has(B.address)) return
+  // The chain, not this Map, says whether a previous attempt or a previous process already minted.
+  const [[aUp], [, bDown]] = await Promise.all([read('ledger', [epoch, A.address]), read('ledger', [epoch, B.address])])
+  const seed = U(TRADE_SEED_SHARES)
+  const budgetMs = Math.max(5_000, (Number(round.lockTs) - t - 5) * 1_000)
+  if (aUp === 0n && bDown === 0n) {
+    await Promise.all([ensureApproval(A, market), ensureApproval(B, market)])
+    if ((await openTradeOrderIds(A, market, epoch)).length === 0) {
+      await send(A, market.address, TRADE, 'placeOrder', [epoch, true, true, 50n, seed, 64n, true], undefined, budgetMs)
+    }
+    await send(B, market.address, TRADE, 'placeOrder', [epoch, false, true, 50n, seed, 64n, true], undefined, budgetMs)
+    log(`${market.key} epoch ${epoch}: minted ${TRADE_SEED_SHARES} pairs before the strike`)
+  }
+  await quoteRound(market, epoch, 50, budgetMs)
+  plan.done = true
+}
+
+async function requoteLiveRound(market) {
+  const live = (await tradeRead(market, 'currentEpoch')) - 1n
+  if (live < 1n) return
+  const round = await tradeRead(market, 'getRound', [live])
+  const t = await now()
+  const secondsLeft = Number(round.closeTs) - t
+  if (!round.locked || round.settled || round.voided || round.upAmount === 0n || secondsLeft <= 15) return
+  const oracle = await tradeRead(market, 'oracle')
+  const [, answer] = await pub.readContract({ address: oracle, abi: AGGREGATOR, functionName: 'latestRoundData' })
+  const fair = fairUpCents({
+    price: Number(answer),
+    strike: Number(round.lockPrice),
+    secondsLeft,
+    annualVol: TRADE_VOL_ANNUAL,
+  })
+  const key = `${market.key}:${live}`
+  const state = liveQuotes.get(key) ?? { fair: undefined, requotes: 0 }
+  liveQuotes.set(key, state)
+  for (const stale of liveQuotes.keys()) if (stale.startsWith(`${market.key}:`) && stale !== key) liveQuotes.delete(stale)
+  // The first live quote replaces the pre-strike one; later ones follow the price, within a cap.
+  if (state.fair !== undefined && (state.requotes >= TRADE_MAX_REQUOTES || !needsRequote(state.fair, fair, TRADE_REQUOTE_CENTS))) return
+  await quoteRound(market, live, fair, Math.max(5_000, (secondsLeft - 10) * 1_000))
+  if (state.fair !== undefined) state.requotes += 1
+  state.fair = fair
+}
+
+async function tradeTick(market) {
+  if (gasPaused) {
+    dormantMinuteMarkets.delete(market.key)
+    return
+  }
+  await seedTradeRound(market)
+  await requoteLiveRound(market)
+}
+
+/** Cancel orders of rounds that can no longer trade, then redeem whatever resolved rounds owe. */
+async function tradeCleanup(who, market) {
+  if (insolvent.has(who.address)) return
+  const [, , total] = await tradeRead(market, 'userOrders', [who.address, 0n, 0n])
+  const t = await now()
+  if (total > 0n) {
+    const offset = total > 50n ? total - 50n : 0n
+    const [ids, orders] = await tradeRead(market, 'userOrders', [who.address, offset, 50n])
+    const epochs = [...new Set(orders.filter((o) => o.remaining > 0n).map((o) => o.epoch))]
+    const rounds = await Promise.all(epochs.map((e) => tradeRead(market, 'getRound', [e])))
+    const ended = endedOpenOrderIds(ids, orders, new Map(epochs.map((e, i) => [e, rounds[i].closeTs])), t)
+    if (ended.length) {
+      await send(who, market.address, TRADE, 'cancelOrders', [ended])
+      log(`${market.key}: cancelled ${ended.length} expired order(s) for ${who.address.slice(0, 8)}`)
+    }
+  }
+  const [, count] = await tradeRead(market, 'userEpochs', [who.address, 0n, 0n])
+  if (count === 0n) return
+  const offset = count > CLAIM_WINDOW ? count - CLAIM_WINDOW : 0n
+  const [epochs] = await tradeRead(market, 'userEpochs', [who.address, offset, CLAIM_WINDOW])
+  const [pending, cash] = await Promise.all([
+    pub.multicall({
+      multicallAddress: MULTICALL,
+      contracts: epochs.map((e) => ({ address: market.address, abi: TRADE, functionName: 'pendingRedemption', args: [e, who.address] })),
+    }),
+    tradeRead(market, 'cash', [who.address]),
+  ])
+  const due = epochs.filter((_, i) => pending[i].status === 'success' && pending[i].result > 0n)
+  if (!due.length && cash === 0n) return
+  await send(who, market.address, TRADE, 'redeem', [due.length ? due : [epochs[epochs.length - 1]]])
+  log(`${market.key}: redeemed ${due.length} round(s) for ${who.address.slice(0, 8)}`)
+}
+
 // ── startup ─────────────────────────────────────────────────────────────────────────────────────
 const chain = await pub.getChainId()
 if (chain !== 97) {
@@ -783,7 +990,7 @@ if (A.address === B.address || FUNDER?.address === A.address || FUNDER?.address 
   process.exit(EX_CONFIG)
 }
 
-log(`bet bot on chain 97 · ${markets.map((m) => m.key).join(', ')}`)
+log(`bet bot on chain 97 · ${markets.map((m) => m.key).join(', ')}${tradeMarkets.length ? ` · quoting ${tradeMarkets.map((m) => m.key).join(', ')}` : ''}`)
 log(`accounts ${A.address} / ${B.address}${FUNDER ? ` · gas funder ${FUNDER.address}` : ''}`)
 
 await keeperGasGuard()
@@ -792,7 +999,7 @@ for (const who of [A, B]) {
   if (stopping) break
   if (insolvent.has(who.address)) continue
   await faucetTopUp(who)
-  for (const market of markets) {
+  for (const market of [...markets, ...tradeMarkets]) {
     if (stopping) break
     try {
       await ensureApproval(who, market)
@@ -823,6 +1030,14 @@ for (;;) {
       log(`${market.key}: tick error: ${short(e)}`)
     }
   }
+  for (const market of tradeMarkets) {
+    if (stopping) break
+    try {
+      await tradeTick(market)
+    } catch (e) {
+      log(`${market.key}: trade tick error: ${short(e)}`)
+    }
+  }
   // Roughly once a minute, off the hot path: refresh gas before attempting token transactions,
   // then sweep claims before requesting more test USDT. The sweep lives here, not on
   // plan completion, so sit-outs, missed windows, stalls and restarts still collect. Each probe
@@ -848,6 +1063,14 @@ for (;;) {
           await collect(who, market)
         } catch (e) {
           log(`${market.key}: collect failed: ${short(e)}`)
+        }
+      }
+      for (const market of tradeMarkets) {
+        if (stopping) break
+        try {
+          await tradeCleanup(who, market)
+        } catch (e) {
+          log(`${market.key}: trade cleanup failed: ${short(e)}`)
         }
       }
     }

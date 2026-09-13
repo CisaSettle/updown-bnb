@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {UpDownMarketBase} from "../src/UpDownMarketBase.sol";
+import {UpDownRoundEngine} from "../src/UpDownRoundEngine.sol";
 import {UpDownMarketERC20} from "../src/UpDownMarketERC20.sol";
 import {UpDownRegistry} from "../src/UpDownRegistry.sol";
 import {MockAggregator} from "./mocks/MockAggregator.sol";
@@ -85,7 +86,7 @@ contract UpDownOwnershipTest is Test {
 
     function test_ownershipTransferIsTwoStepsOnErc20Market() public {
         _assertTwoStepHandover(
-            Ownable2Step(address(erc20)), abi.encodeCall(UpDownMarketBase.setParams, (400, BUFFER))
+            Ownable2Step(address(erc20)), abi.encodeCall(UpDownRoundEngine.setParams, (400, BUFFER))
         );
         assertEq(erc20.feeBps(), 400, "the accepted owner's call did not take effect");
     }
@@ -133,7 +134,7 @@ contract UpDownOwnershipTest is Test {
     /// @dev Both markets and the registry declare their own `OwnershipCannotBeRenounced()`. A
     ///      custom-error selector is the hash of its signature, so one value covers all three.
     function _cannotRenounce() internal pure returns (bytes4) {
-        return UpDownMarketBase.OwnershipCannotBeRenounced.selector;
+        return UpDownRoundEngine.OwnershipCannotBeRenounced.selector;
     }
 
     function _assertRenounceIsDisabled(Ownable2Step target) internal {
