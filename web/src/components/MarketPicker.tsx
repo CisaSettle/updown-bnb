@@ -23,6 +23,7 @@ export function MarketPicker({
   onSelect,
   isLoading,
   collectable,
+  quoted,
 }: {
   markets: Market[]
   selected?: Market
@@ -33,6 +34,8 @@ export function MarketPicker({
    * Positive-only: membership means a fresh read said so; absence means nothing either way.
    */
   collectable?: ReadonlySet<string>
+  /** Trade markets (lowercased addresses) with a funded round, marked so a reader can find a live book. */
+  quoted?: ReadonlySet<string>
 }) {
   const lang = useLang()
   const tabs = useRef<Array<HTMLButtonElement | null>>([])
@@ -116,6 +119,16 @@ export function MarketPicker({
             <span className={`mt-0.5 block break-words text-xs ${active ? 'opacity-80' : 'text-slate-500 dark:text-slate-400'}`}>
               {t(lang, ui.marketSubtitle(formatInterval(m.interval, lang), assetLabel(m)))}
             </span>
+            {quoted?.has(m.address.toLowerCase()) ? (
+              <span
+                className={`mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold ${
+                  active ? 'text-emerald-300 dark:text-emerald-700' : 'text-emerald-700 dark:text-emerald-400'
+                }`}
+              >
+                <span aria-hidden="true" className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500" />
+                {t(lang, ui.marketPicker.quoted)}
+              </span>
+            ) : null}
           </button>
         )
       })}

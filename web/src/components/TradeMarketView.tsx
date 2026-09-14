@@ -22,7 +22,7 @@ import { Explain } from './Explain'
 import { PriceBlock } from './LiveRoundCard'
 import { PriceChart } from './PriceChart'
 import { SkeletonCard } from './Skeleton'
-import { OrderBook, SharePriceBoard } from './TradeBook'
+import { OrderBook } from './TradeBook'
 import { TradePanel } from './TradePanel'
 import { TradePositionsPanel } from './TradePositionsPanel'
 
@@ -222,13 +222,13 @@ export function TradeMarketView({ market, feedName }: { market: Market; feedName
                 limit={feedHistory.limit}
                 isLoading={feedHistory.isLoading}
                 feedName={feedName}
+                kind="trade"
+                quiet={round !== undefined && round.upAmount === 0n}
               />
             ) : null}
           </div>
 
           <div className="min-w-0 space-y-4 lg:border-l lg:border-slate-200 lg:pl-8 dark:lg:border-slate-800">
-            <SharePriceBoard bestBid={best.bestBid} bestAsk={best.bestAsk} known={depth !== undefined} selected={side} onSelect={setSide} />
-            <OrderBook book={book} side={side} decimals={token.decimals} />
             <TradePanel
               market={market.address}
               config={config}
@@ -236,6 +236,9 @@ export function TradeMarketView({ market, feedName }: { market: Market; feedName
               tradeable={selected ? tradeable : false}
               closing={closing}
               book={book}
+              bestBid={best.bestBid}
+              bestAsk={best.bestAsk}
+              bookKnown={depth !== undefined}
               token={token}
               freeUp={account.upShares}
               freeDown={account.downShares}
@@ -244,6 +247,7 @@ export function TradeMarketView({ market, feedName }: { market: Market; feedName
               onSide={setSide}
               onDone={refreshAll}
             />
+            <OrderBook book={book} side={side} decimals={token.decimals} />
             <div className="card-muted p-3">
               <Explain summary={t(lang, ui.tradeCard.explainTitle)}>
                 <p>{t(lang, ui.tradeExplain(feePct))}</p>

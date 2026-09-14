@@ -233,6 +233,7 @@ export const marketPicker = {
     zh: '注册表里没有找到已启用的市场。',
   },
   collectableDot: { en: 'Money to collect in this market', zh: '这个市场有可领的钱' },
+  quoted: { en: 'Live quotes', zh: '有报价' },
 } satisfies Record<string, Text>
 
 /** `1m rounds · settles in USDT` / `1 分钟一轮 · 用 USDT 结算`. */
@@ -1059,6 +1060,52 @@ export function staleCandlesNote(budget: string): Text {
   }
 }
 
+/**
+ * The chart's notes where the pool's "refunded in full" is not what trade mode does: an unpriced
+ * or tied trade round voids and every share redeems at half a token.
+ */
+export function tradeStaleCandlesNote(budget: string): Text {
+  return {
+    en: `The feed has been quiet past this round's ${budget} oracle budget: a boundary landing now cannot be priced at all, and that round is voided — every share redeems for 0.50 USDT.`,
+    zh: `喂价安静的时间已经超过本轮 ${budget}的预言机时限：现在落下的边界时刻根本定不出价格，那一轮会作废，每份按 0.50 USDT 兑付。`,
+  }
+}
+
+export const tradeChart = {
+  noPrintRefund: {
+    en: 'No usable print exists at or before this round’s boundary: once its settlement window elapses, the round is voided and every share redeems for 0.50 USDT.',
+    zh: '本轮边界时刻之前（含那一刻）不存在可用报价：等它的结算时限过去，这一轮作废，每份按 0.50 USDT 兑付。',
+  },
+  neverLocked: {
+    en: ' Its settlement window elapsed with no strike recorded, so there is no reference line: the round is voided and every share redeems for 0.50 USDT.',
+    zh: '它的结算时限已经过去，却没有记下任何行权价，所以没有基准线可画：这一轮作废，每份按 0.50 USDT 兑付。',
+  },
+  limitFeedStart: {
+    en: 'That is the whole history this feed has, and it begins after this round’s boundary — so no print exists at or before it. A boundary with no usable print cannot be settled; the round is voided and every share redeems for 0.50 USDT.',
+    zh: '这就是这个喂价的全部历史，而它的起点在本轮边界时刻之后——所以边界时刻之前（含那一刻）根本不存在任何报价。没有可用报价的边界无法结算：这一轮作废，每份按 0.50 USDT 兑付。',
+  },
+  nothingToPlot: {
+    en: 'There is nothing to plot until the oracle publishes an answer. Until then no round can be priced, and a round whose boundary passes without a print is voided — every share redeems for 0.50 USDT.',
+    zh: '在预言机发出第一笔报价之前，没有东西可画。在那之前任何轮次都定不出价格，而边界时刻过去时仍然没有报价的轮次会作废，每份按 0.50 USDT 兑付。',
+  },
+  dashedAfter: {
+    en: ' oracle budget. A boundary landing in one of them cannot be priced at all — not stale, but absent — so that round is voided and every share redeems for 0.50 USDT.',
+    zh: '预言机时限的部分。落在这些区间里的边界时刻根本定不出价格——不是价格滞后，而是压根没有——所以那一轮作废，每份按 0.50 USDT 兑付。',
+  },
+  noStrikeBefore: {
+    en: ' This round is trading before its strike — the strike is the feed print at or before ',
+    zh: '本轮还没到确定行权价的时刻——它的行权价是 ',
+  },
+  quietBook: {
+    en: ' Nobody has traded this round yet, so the keeper is not publishing prints for it: its strike is recorded only once shares exist.',
+    zh: '这一轮还没有人成交，keeper 不会为它推送喂价：要等有份额成交之后，行权价才会被记录。',
+  },
+} satisfies Record<string, Text>
+
+export function feedSilentFor(ago: string): Text {
+  return { en: ` Last print: ${ago} ago.`, zh: `最近一笔报价在 ${ago}前。` }
+}
+
 export function feedQuietNow(ago: string): Text {
   return {
     en: ` The feed is in that state right now: nothing has printed for ${ago}.`,
@@ -1191,6 +1238,7 @@ export const tradeCard = {
   sell: { en: 'Sell', zh: '卖出' },
   implied: { en: 'implied chance', zh: '隐含概率' },
   noOffers: { en: 'no offers', zh: '暂无报价' },
+  spread: { en: 'Spread', zh: '价差' },
   bookPrice: { en: 'Price', zh: '价格' },
   bookShares: { en: 'Shares', zh: '份数' },
   bookAsks: { en: 'Offers to sell', zh: '卖单' },
@@ -1236,13 +1284,21 @@ export const tradePanel = {
   price: { en: 'Limit price (¢)', zh: '限价（美分）' },
   freeShares: { en: 'Free shares:', zh: '可用份数：' },
   fillsNow: { en: 'Fills now', zh: '立即成交' },
-  avgPrice: { en: 'Average price', zh: '成交均价' },
   fee: { en: 'Taker fee', zh: '吃单手续费' },
   rests: { en: 'Waits on the book', zh: '挂单等待成交' },
   notPlaced: { en: 'Not placed (past the price limit)', zh: '不下单（超出价格限制）' },
   cost: { en: 'Estimated cost', zh: '预计花费' },
   proceeds: { en: 'Estimated proceeds now', zh: '预计立即到手' },
   placing: { en: 'Placing order…', zh: '下单中…' },
+  max: { en: 'Max', zh: '最大' },
+  available: { en: 'Available', zh: '可用' },
+  holding: { en: 'Holding', zh: '持有' },
+  sharesUnit: { en: 'shares', zh: '份' },
+  ifWins: { en: 'If it wins', zh: '猜对可得' },
+  avgPrice: { en: 'Avg. price', zh: '成交均价' },
+  priceStepDown: { en: 'One cent lower', zh: '降低 1 美分' },
+  priceStepUp: { en: 'One cent higher', zh: '提高 1 美分' },
+  chance: { en: 'Implied chance', zh: '隐含概率' },
   limitNote: {
     en: 'Estimated from the book as read a moment ago. Anything that crosses the book fills at the resting price; the rest waits on the book until it fills or you cancel it.',
     zh: '按刚才读到的订单簿估算。能和订单簿成交的部分按对方挂单价成交；剩下的挂在订单簿上，直到成交或你撤单。',
@@ -1277,8 +1333,8 @@ export const tradeReason = {
     zh: '这个市场已暂停，不接受新的订单。撤单和兑付份额照常可用。',
   },
   closed: {
-    en: 'This round is not taking orders right now — its strike is being recorded, or it is about to close. Pick the other round or wait a moment.',
-    zh: '这一轮现在不接单——要么正在记录行权价，要么马上到期。换另一轮，或者稍等一下。',
+    en: 'This round is not taking orders right now: its strike is being recorded, it is about to close, or — in a market nobody has traded yet — it is too close to its strike for a first order. Pick the other round or wait for the next one.',
+    zh: '这一轮现在不接单：可能正在记录行权价、马上到期，或者这个市场还没人交易、离确定行权价太近，接不了第一单。换另一轮，或者等下一轮。',
   },
   enterShares: { en: 'Enter a number of shares.', zh: '填一个份数。' },
   invalidShares: { en: 'That is not a valid number of shares.', zh: '这不是一个有效的份数。' },

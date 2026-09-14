@@ -371,3 +371,25 @@ export function markValue(upShares: bigint, downShares: bigint, bestBid: number,
   if (downShares > 0n && prices.down.sell === undefined) return undefined
   return sharesCost(upShares, prices.up.sell ?? 0) + sharesCost(downShares, prices.down.sell ?? 0)
 }
+
+// ── ticket shortcuts ──────────────────────────────────────────────────────────────────────────
+
+/** `+10` on the shares box: add whole shares to whatever parses, keeping at most two decimals. */
+export function bumpSharesInput(input: string, add: number): string {
+  const current = Number(input.trim())
+  const base = Number.isFinite(current) && current > 0 ? current : 0
+  return String(Math.round((base + add) * 100) / 100)
+}
+
+/** `−` / `+` on the limit price: one cent, clamped to 1..99; an empty box starts from `fallback`. */
+export function stepPriceInput(input: string, delta: number, fallback = 50): string {
+  const parsed = parsePriceInput(input)
+  const next = (parsed ?? fallback) + (parsed === undefined ? 0 : delta)
+  return String(Math.min(PRICE_TICKS - 1, Math.max(1, next)))
+}
+
+/** `25%` / `50%` / `Max` of the free shares, floored to the 0.01-share grid. */
+export function shareFraction(freeShares: bigint, percent: number, shareUnit: bigint): bigint {
+  const raw = (freeShares * BigInt(percent)) / 100n
+  return shareUnit > 0n ? raw - (raw % shareUnit) : raw
+}

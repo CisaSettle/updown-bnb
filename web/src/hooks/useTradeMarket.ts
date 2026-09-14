@@ -150,3 +150,24 @@ export function useTradeAccount(market: Address | undefined, user: Address | und
     }
   }, [query.data, query.refetch])
 }
+
+/**
+ * Trade markets with a funded round right now (lowercased addresses). A funded round is what
+ * makes the keeper publish a strike, so these are the markets someone is actually trading or
+ * quoting; the rest have an empty book and no strike until the first fill.
+ */
+export function useTradeActivity(markets: readonly { address: Address }[]) {
+  const query = useReadContracts({
+    contracts: markets.map((m) => ({ chainId: CHAIN_ID, address: m.address, abi, functionName: 'maintenanceRequired' }) as const),
+    query: { enabled: markets.length > 0, refetchInterval: 30_000, staleTime: 15_000 },
+  })
+  const active = useMemo(() => {
+    const out = new Set<string>()
+    query.data?.forEach((r, i) => {
+      const m = markets[i]
+      if (m && r.status === 'success' && r.result === true) out.add(m.address.toLowerCase())
+    })
+    return out
+  }, [query.data, markets])
+  return { active, loaded: query.data !== undefined }
+}

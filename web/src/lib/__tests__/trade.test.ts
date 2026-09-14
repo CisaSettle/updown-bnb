@@ -18,6 +18,9 @@ import {
   tradeRoundOptions,
   validateTradeForm,
   type TradeFormState,
+  bumpSharesInput,
+  shareFraction,
+  stepPriceInput,
 } from '../trade'
 
 const ONE = 10n ** 18n
@@ -250,5 +253,28 @@ describe('positions and writes', () => {
       expect(names.has(name), name).toBe(true)
       expect(errorCopy(name), name).not.toEqual(ERROR_TEXT.unnamedRevert)
     }
+  })
+})
+
+describe('order ticket shortcuts', () => {
+  it('adds whole shares to what is typed, starting from zero when the box is empty or invalid', () => {
+    expect(bumpSharesInput('', 10)).toBe('10')
+    expect(bumpSharesInput('2.5', 1)).toBe('3.5')
+    expect(bumpSharesInput('abc', 100)).toBe('100')
+    expect(bumpSharesInput('0.07', 0.01)).toBe('0.08')
+  })
+
+  it('steps the limit price one cent inside 1..99, and starts an empty box at 50', () => {
+    expect(stepPriceInput('', 1)).toBe('50')
+    expect(stepPriceInput('53', -1)).toBe('52')
+    expect(stepPriceInput('99', 1)).toBe('99')
+    expect(stepPriceInput('1', -1)).toBe('1')
+  })
+
+  it('takes a fraction of free shares on the 0.01-share grid', () => {
+    const unit = 10n ** 16n
+    expect(shareFraction(10n ** 18n, 25, unit)).toBe(25n * unit)
+    expect(shareFraction(333n * unit, 50, unit)).toBe(166n * unit)
+    expect(shareFraction(333n * unit, 100, unit)).toBe(333n * unit)
   })
 })

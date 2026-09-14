@@ -23,6 +23,7 @@ import { useHistory } from './hooks/useHistory'
 import { useLiveRounds } from './hooks/useRound'
 import { useMarketConfig } from './hooks/useMarketConfig'
 import { useMarkets, type Market } from './hooks/useMarkets'
+import { useTradeActivity } from './hooks/useTradeMarket'
 import { useOraclePrice } from './hooks/useOraclePrice'
 import { useOracleSeries } from './hooks/useOracleSeries'
 import { usePositions } from './hooks/usePositions'
@@ -43,7 +44,8 @@ const FaqPage = lazy(() => import('./components/FaqPage').then((m) => ({ default
 const ChangelogPage = lazy(() => import('./components/ChangelogPage').then((m) => ({ default: m.ChangelogPage })))
 
 const SELECTED_KEY = 'updown.market'
-const TRADE_SELECTED_KEY = 'updown.tradeMarket'
+// v2: the first release stored whatever market was open by default, not only an explicit pick.
+const TRADE_SELECTED_KEY = 'updown.tradeMarket.v2'
 const MODE_KEY = 'updown.mode'
 
 /**
@@ -255,18 +257,23 @@ export default function App() {
     [markets, selectedAddress],
   )
 
+  const tradeActivity = useTradeActivity(tradeMarkets)
+  // An explicit pick wins; otherwise open a market with a live book rather than an empty one. The
+  // automatic choice is kept once made, so a quiet moment between rounds does not flip the page.
+  const [autoTrade, setAutoTrade] = useState<string | undefined>(undefined)
+  const firstActive = tradeMarkets.find((m) => tradeActivity.active.has(m.address.toLowerCase()))?.address
+  useEffect(() => {
+    if (!autoTrade && firstActive) setAutoTrade(firstActive)
+  }, [autoTrade, firstActive])
   const selectedTrade = useMemo(
-    () => tradeMarkets.find((m) => m.address.toLowerCase() === tradeAddress?.toLowerCase()) ?? tradeMarkets[0],
-    [tradeMarkets, tradeAddress],
+    () =>
+      tradeMarkets.find((m) => m.address.toLowerCase() === (tradeAddress ?? autoTrade)?.toLowerCase()) ?? tradeMarkets[0],
+    [tradeMarkets, tradeAddress, autoTrade],
   )
 
   useEffect(() => {
     if (selected) writeStored(SELECTED_KEY, selected.address)
   }, [selected])
-
-  useEffect(() => {
-    if (selectedTrade) writeStored(TRADE_SELECTED_KEY, selectedTrade.address)
-  }, [selectedTrade])
 
   const onMode = (next: MarketKind) => {
     setStoredMode(next)
@@ -332,8 +339,12 @@ export default function App() {
             <MarketPicker
               markets={tradeMarkets}
               selected={selectedTrade}
-              onSelect={(m) => setTradeAddress(m.address)}
+              onSelect={(m) => {
+                setTradeAddress(m.address)
+                writeStored(TRADE_SELECTED_KEY, m.address)
+              }}
               isLoading={isLoading}
+              quoted={tradeActivity.active}
             />
           ) : (
             <MarketPicker

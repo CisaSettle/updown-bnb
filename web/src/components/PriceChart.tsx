@@ -70,6 +70,10 @@ export interface PriceChartProps {
   isLoading?: boolean
   /** What the feed is, in words: a relay feed on testnet, Chainlink on mainnet. */
   feedName: Text
+  /** Pool rounds refund stakes; trade rounds void to 0.50 per share. Picks the notes that say which. */
+  kind?: 'pool' | 'trade'
+  /** Trade only: the round holds no shares yet, so a silent feed is expected rather than alarming. */
+  quiet?: boolean
 }
 
 /**
@@ -191,7 +195,10 @@ export function PriceChart({
   limit,
   isLoading = false,
   feedName,
+  kind = 'pool',
+  quiet = false,
 }: PriceChartProps) {
+  const trade = kind === 'trade'
   const lang = useLang()
   const [choice, setChoice] = useState<'auto' | 'candles' | 'line'>('auto')
 
@@ -579,7 +586,7 @@ export function PriceChart({
           */}
           {isLoading ? null : series.latest ? (
             <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-slate-600 dark:text-slate-300">
-              {t(lang, limit === 'feed-start' ? ui.chart.noPrintRefund : ui.chart.noPrintUncertain)}
+              {t(lang, limit === 'feed-start' ? (trade ? ui.tradeChart.noPrintRefund : ui.chart.noPrintRefund) : ui.chart.noPrintUncertain)}
             </p>
           ) : null}
         </div>
@@ -610,7 +617,7 @@ export function PriceChart({
         ) : (
           <>
             <strong>{t(lang, ui.chart.neverLockedBold)}</strong>
-            {t(lang, ui.chart.neverLocked)}
+            {t(lang, trade ? ui.tradeChart.neverLocked : ui.chart.neverLocked)}
           </>
         )}
       </p>
@@ -621,10 +628,17 @@ export function PriceChart({
         and under a capped history walk it is not entitled to promise any refund.
       */}
       {hasSomething && health === 'stale' && series.latest ? (
-        <p className="mt-1 text-[11px] leading-relaxed text-rose-700 dark:text-rose-400">
-          {t(lang, ui.staleCandlesNote(budgetText))}
-          {t(lang, ui.feedQuietNow(formatAgo(ageSeconds, lang)))}
-        </p>
+        trade && quiet ? (
+          <p className="mt-1 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400">
+            {t(lang, ui.tradeChart.quietBook)}
+            {t(lang, ui.feedSilentFor(formatAgo(ageSeconds, lang)))}
+          </p>
+        ) : (
+          <p className="mt-1 text-[11px] leading-relaxed text-rose-700 dark:text-rose-400">
+            {t(lang, trade ? ui.tradeStaleCandlesNote(budgetText) : ui.staleCandlesNote(budgetText))}
+            {t(lang, ui.feedQuietNow(formatAgo(ageSeconds, lang)))}
+          </p>
+        )
       ) : null}
 
       <Explain summary={t(lang, ui.chart.howToRead)}>
@@ -657,17 +671,19 @@ export function PriceChart({
             {t(
               lang,
               limit === 'feed-start'
-                ? ui.chart.limitFeedStart
+                ? trade
+                  ? ui.tradeChart.limitFeedStart
+                  : ui.chart.limitFeedStart
                 : limit === 'phase-start'
                   ? ui.chart.limitPhaseStart
                   : ui.chart.limitReadCap,
             )}
           </p>
         ) : null}
-        {!hasSomething && !isLoading && !series.latest ? <p>{t(lang, ui.chart.nothingToPlot)}</p> : null}
+        {!hasSomething && !isLoading && !series.latest ? <p>{t(lang, trade ? ui.tradeChart.nothingToPlot : ui.chart.nothingToPlot)}</p> : null}
         {frame.strikeState === 'pending' ? (
           <p>
-            {t(lang, ui.noStrikeNote.before)}
+            {t(lang, trade ? ui.tradeChart.noStrikeBefore : ui.noStrikeNote.before)}
             <span className="num">{formatTime(frame.lockTs, lang)}</span>
             {t(lang, ui.noStrikeNote.after)}
           </p>
@@ -687,7 +703,7 @@ export function PriceChart({
             <strong>{t(lang, ui.chart.dashedBold)}</strong>
             {t(lang, ui.dashedNote.middle)}
             <span className="num">{budgetText}</span>
-            {t(lang, ui.dashedNote.after)}
+            {t(lang, trade ? ui.tradeChart.dashedAfter : ui.dashedNote.after)}
           </p>
         ) : null}
         {view === 'candles' ? (
