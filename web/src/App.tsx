@@ -11,7 +11,6 @@ import { PositionsPanel } from './components/PositionsPanel'
 import { RoundProof } from './components/RoundProof'
 import { SkeletonCard } from './components/Skeleton'
 import { TestnetBanner } from './components/TestnetBanner'
-import { TradeMarketView } from './components/TradeMarketView'
 import { DemoWalletPanel } from './components/DemoWalletPanel'
 import { Toaster } from './components/Toaster'
 import * as ui from './content/ui'
@@ -42,6 +41,7 @@ import type { MarketKind } from './lib/trade'
  */
 const FaqPage = lazy(() => import('./components/FaqPage').then((m) => ({ default: m.FaqPage })))
 const ChangelogPage = lazy(() => import('./components/ChangelogPage').then((m) => ({ default: m.ChangelogPage })))
+const TradeMarketView = lazy(() => import('./components/TradeMarketView').then((m) => ({ default: m.TradeMarketView })))
 
 const SELECTED_KEY = 'updown.market'
 // v2: the first release stored whatever market was open by default, not only an explicit pick.
@@ -208,6 +208,8 @@ function MarketView({ market }: { market: Market }) {
         priceDecimals={oracle.decimals}
         now={now}
         isLoading={history.isLoading}
+        error={history.error}
+        onRetry={history.refetch}
       />
 
       <footer className="pb-10 text-xs text-slate-500 dark:text-slate-400">
@@ -242,7 +244,7 @@ export default function App() {
   const lang = useLang()
   const route = useRoute()
   const { address } = useAccount()
-  const { markets, tradeMarkets, isLoading, usingFallback, error } = useMarkets()
+  const { markets, tradeMarkets, isLoading, usingFallback, error } = useMarkets(route.name === 'trade')
   const [selectedAddress, setSelectedAddress] = useState<string | undefined>(() => readStored(SELECTED_KEY))
   const [tradeAddress, setTradeAddress] = useState<string | undefined>(() => readStored(TRADE_SELECTED_KEY))
   const [storedMode, setStoredMode] = useState<MarketKind>(() => (readStored(MODE_KEY) === 'trade' ? 'trade' : 'pool'))
@@ -257,7 +259,7 @@ export default function App() {
     [markets, selectedAddress],
   )
 
-  const tradeActivity = useTradeActivity(tradeMarkets)
+  const tradeActivity = useTradeActivity(tradeMarkets, route.name === 'trade' && mode === 'trade')
   // An explicit pick wins; otherwise open a market with a live book rather than an empty one. The
   // automatic choice is kept once made, so a quiet moment between rounds does not flip the page.
   const [autoTrade, setAutoTrade] = useState<string | undefined>(undefined)
@@ -367,7 +369,9 @@ export default function App() {
             <SkeletonCard />
           ) : mode === 'trade' && selectedTrade ? (
             <div role="tabpanel" id={MARKET_PANEL_ID} aria-labelledby={marketTabId(selectedTrade.address)}>
-              <TradeMarketView key={selectedTrade.address} market={selectedTrade} feedName={FEED_NAME} />
+              <Suspense fallback={<SkeletonCard />}>
+                <TradeMarketView key={selectedTrade.address} market={selectedTrade} feedName={FEED_NAME} />
+              </Suspense>
             </div>
           ) : selected ? (
             <div role="tabpanel" id={MARKET_PANEL_ID} aria-labelledby={marketTabId(selected.address)}>

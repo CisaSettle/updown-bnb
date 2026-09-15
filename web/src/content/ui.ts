@@ -799,6 +799,8 @@ export function claimAllTitle(args: { batch: number; collectable: number; remain
 // ── history ─────────────────────────────────────────────────────────────────────────────────────
 
 export const history = {
+  readFailed: { en: 'Could not load round history. Try again.', zh: '暂时无法读取历史轮次，请重试。' },
+  refreshFailed: { en: 'History could not refresh. Showing the last loaded rounds.', zh: '历史轮次刷新失败，当前显示上次读取的记录。' },
   heading: { en: 'Recent rounds', zh: '最近的轮次' },
   empty: {
     en: 'No completed rounds yet. The first result appears one interval after the market opens.',

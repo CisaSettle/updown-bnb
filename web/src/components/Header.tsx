@@ -28,7 +28,7 @@ export function Header({
         language toggle is always present — and a non-wrapping row would not overflow gracefully:
         it would force the whole page wider than the viewport and clip every card below.
       */}
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-2 gap-y-2 px-4 py-3 sm:gap-x-3 sm:px-6">
+      <div className="mx-auto grid max-w-6xl grid-cols-[1fr_auto] items-center gap-x-2 gap-y-2 px-4 py-3 sm:flex sm:flex-wrap sm:gap-x-3 sm:px-6">
         <a href="#/" className="flex min-w-0 items-center gap-2.5 rounded-xl">
           <span
             aria-hidden="true"
@@ -44,7 +44,7 @@ export function Header({
           </div>
         </a>
 
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5 sm:gap-2">
+        <div className="col-span-2 row-start-2 flex flex-wrap items-center justify-end gap-1.5 sm:ml-auto sm:gap-2">
           <a
             href={CHANGELOG_HASH}
             aria-current={onChangelog ? 'page' : undefined}
@@ -77,6 +77,8 @@ export function Header({
           */}
           <LangToggle lang={lang} onChange={setLang} className="h-10 items-center" />
           <ThemeToggle pref={themePref} onCycle={onCycleTheme} />
+        </div>
+        <div className="col-start-2 row-start-1 sm:order-last">
           <ConnectButton />
         </div>
       </div>

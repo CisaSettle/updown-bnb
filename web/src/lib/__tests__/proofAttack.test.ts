@@ -1,3 +1,4 @@
+import { reverted } from './oracleFixtures'
 /**
  * The panel must never show a pass the chain would not.
  *
@@ -38,7 +39,7 @@ interface Feed {
 /** One `useReadContracts` entry, exactly as wagmi shapes it (`allowFailure` defaults to true). */
 function readRound(feed: Feed, id: bigint): unknown {
   const r = feed.rounds.get(id.toString())
-  if (!r) return { status: 'failure', error: new Error('No data present') }
+  if (!r) return reverted()
   return { status: 'success', result: [r.idEcho, r.answer, BigInt(r.updatedAt), BigInt(r.updatedAt), r.idEcho] }
 }
 
@@ -146,6 +147,16 @@ const AFTER: [bigint, bigint, bigint, number] = [11n, 11n, PRICE + 5n, Number(BO
 const AFTER_LATEST = { id: 11n, answer: PRICE + 5n, updatedAt: Number(BOUNDARY) + 20 }
 
 describe('the panel cannot show a pass the chain would not', () => {
+  it('never verifies a boundary using an unread successor after a transport failure', () => {
+    const feed = feedOf([[10n, 10n, PRICE, Number(BOUNDARY) - 30], AFTER], AFTER_LATEST)
+    const reports = proofReportsFromReads({
+      boundaries: [lockSpec(10n)], oracleMaxAge: MAX_AGE, nowSeconds: NOW, priceDecimals: 8,
+      ids: [10n, 11n],
+      results: [readRound(feed, 10n), { status: 'failure', error: new Error('HTTP 429') }],
+    })
+    expect(combineOutcomes(reports)).toBe('incomplete')
+  })
+
   it('passes the honest round — otherwise the rest of this file proves nothing', () => {
     const feed = feedOf([[10n, 10n, PRICE, Number(BOUNDARY) - 30], AFTER], AFTER_LATEST)
     expect(assertNoFalsePass(feed, [lockSpec(10n)])).toBe('verified')

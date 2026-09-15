@@ -7,6 +7,7 @@ function render(
   rows: Array<{ epoch: bigint; round: ReturnType<typeof round> }>,
   now: number,
   lang: Lang = 'en',
+  error?: Error,
 ) {
   return renderIn(
     lang,
@@ -18,6 +19,8 @@ function render(
       priceDecimals={8}
       now={now}
       isLoading={false}
+      error={error}
+      onRetry={() => {}}
     />,
   )
 }
@@ -26,6 +29,23 @@ function render(
 const stranded = round({ locked: true, lockPrice: 100_000_000_000n })
 
 describe('HistoryPanel', () => {
+  it('distinguishes an initial read failure from an empty history in both languages', () => {
+    for (const lang of ['en', 'zh'] as const) {
+      const html = render([], START, lang, new Error('network timeout'))
+      expect(html).toContain('role="alert"')
+      expect(html).toContain(lang === 'en' ? 'Could not load round history' : '暂时无法读取历史轮次')
+      expect(html).toContain(lang === 'en' ? 'Retry' : '重试')
+      expect(html).not.toContain(lang === 'en' ? 'No completed rounds yet' : '还没有跑完的轮次')
+    }
+  })
+
+  it('preserves loaded rows but labels them stale when refresh fails', () => {
+    const html = render([{ epoch: 41n, round: stranded }], START, 'en', new Error('offline'))
+    expect(html).toContain('Showing the last loaded rounds')
+    expect(html).toContain('>#41<')
+    expect(html).toContain('tabindex="0"')
+  })
+
   it('calls a round refundable once its settlement window has elapsed', () => {
     // On chain at this second: refundable() is true and claim() pays the full stake back. The
     // positions table already says "Refunded" and offers Collect for this very epoch.

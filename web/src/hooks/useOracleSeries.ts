@@ -8,6 +8,7 @@ import {
   cachedPrints,
   historyFloorId,
   historyLimit,
+  hasTransientPrintFailures,
   mergePrintReads,
   planPrintReads,
   prunePrintCache,
@@ -90,9 +91,14 @@ export function useOracleSeries(
           args: [id],
         }) as const,
     ),
-    // Immutable data: once a round id has an answer it keeps it forever, so there is nothing to
-    // refetch and nothing to expire.
-    query: { enabled: enabled && ids.length > 0, staleTime: Infinity, gcTime: 5 * 60_000 },
+    // Successful prints are immutable. Transport failures are not missing oracle rounds:
+    // retry them at a bounded cadence, including partial multicall failures.
+    query: {
+      enabled: enabled && ids.length > 0,
+      staleTime: (q) => hasTransientPrintFailures(q.state.data) ? 0 : Infinity,
+      gcTime: 5 * 60_000,
+      refetchInterval: (q) => q.state.status === 'error' || hasTransientPrintFailures(q.state.data) ? 10_000 : false,
+    },
   })
 
   const results = query.data as readonly unknown[] | undefined
@@ -104,12 +110,19 @@ export function useOracleSeries(
     setCache((prev) => mergePrintReads({ cache: prev, ids, results }))
   }, [results, ids])
 
+  // Keep the series reference stable between prints. A clock tick changes the cursor, not every
+  // candle and price-domain calculation. Future prints become visible exactly at their timestamp,
+  // and a backwards clock correction hides them again.
+  const allPrints = useMemo(() => cachedPrints(cache, Infinity), [cache])
+  const cutoff = allPrints.reduce((ts, print) => print.updatedAt <= nowSeconds ? Math.max(ts, print.updatedAt) : ts, 0)
+  const prints = useMemo(() => allPrints.filter((print) => print.updatedAt <= cutoff), [allPrints, cutoff])
+
   return useMemo(
     () => ({
-      prints: cachedPrints(cache, Math.floor(nowSeconds)),
+      prints,
       limit: enabled ? historyLimit({ latestRoundId, cache, maxPrints }) : 'none',
       isLoading: ids.length > 0 && query.isLoading,
     }),
-    [cache, enabled, latestRoundId, maxPrints, ids.length, query.isLoading, nowSeconds],
+    [cache, prints, enabled, latestRoundId, maxPrints, ids.length, query.isLoading],
   )
 }

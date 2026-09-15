@@ -12,6 +12,7 @@
  * ids in total, and page backwards `READ_BATCH` at a time. A chart is not worth hundreds of
  * sequential RPC calls.
  */
+import { oracleReadStatus } from './oracleRead'
 import { firstRoundOfPhase, isUsablePrint, phaseOf, toPrint, type OraclePrint } from './settlement'
 
 /** Hard cap on how many prints back the chart will ever walk. */
@@ -70,9 +71,16 @@ type EntryStatus = 'success' | 'failure' | 'missing'
  * because the whole batch has not come back.
  */
 function readEntry(results: readonly unknown[] | undefined, index: number): { status: EntryStatus; result?: unknown } {
-  const item = results?.[index] as { status?: string; result?: unknown } | undefined
-  if (!item || typeof item.status !== 'string') return { status: 'missing' }
-  return item.status === 'success' ? { status: 'success', result: item.result } : { status: 'failure' }
+  const item = results?.[index] as { status?: string; result?: unknown; error?: unknown } | undefined
+  const status = oracleReadStatus(item)
+  if (status === 'success') return { status: 'success', result: item?.result }
+  if (status === 'reverted') return { status: 'failure' }
+  return { status: 'missing' }
+}
+
+/** A partial transport failure must remain retryable, even though multicall resolved its promise. */
+export function hasTransientPrintFailures(results: readonly unknown[] | undefined): boolean {
+  return Boolean(results?.some((_, index) => readEntry(results, index).status === 'missing'))
 }
 
 /**

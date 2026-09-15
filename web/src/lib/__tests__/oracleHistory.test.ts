@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { reverted } from './oracleFixtures'
 import {
   cachedPrints,
+  hasTransientPrintFailures,
   historyFloorId,
   historyLimit,
   mergePrintReads,
@@ -20,7 +22,7 @@ const ok = (id: bigint, answer: bigint, updatedAt: number) => ({
   status: 'success',
   result: [id, answer, BigInt(updatedAt), BigInt(updatedAt), id],
 })
-const reverted = () => ({ status: 'failure', error: new Error('No data present') })
+
 
 const cacheOf = (entries: [bigint, OraclePrint | null][]): PrintCache =>
   new Map(entries.map(([id, value]) => [id.toString(), value]))
@@ -74,6 +76,31 @@ describe('planPrintReads', () => {
 })
 
 describe('mergePrintReads', () => {
+  it('keeps transient failures unknown and recovers their prices after the RPC returns', () => {
+    const failure = { status: 'failure', error: new Error('HTTP 429 / network timeout') }
+    const results = [ok(2n, 100n, NOW), failure]
+    const cache = mergePrintReads({ cache: new Map(), ids: [2n, 1n], results })
+    expect(cache.has('1')).toBe(false)
+    expect(historyLimit({ latestRoundId: 2n, cache })).toBe('loading')
+    expect(hasTransientPrintFailures(results)).toBe(true)
+    expect(planPrintReads({ latestRoundId: 2n, cache })).toEqual([1n])
+    const recovered = mergePrintReads({ cache, ids: [1n], results: [ok(1n, 90n, NOW - 10)] })
+    expect(cachedPrints(recovered, NOW)).toHaveLength(2)
+    expect(historyLimit({ latestRoundId: 2n, cache: recovered })).toBe('feed-start')
+  })
+
+  it('does not mistake a reverted aggregate call for a missing oracle print', () => {
+    const results = [reverted('aggregate3')]
+    expect(mergePrintReads({ cache: new Map(), ids: [1n], results }).size).toBe(0)
+    expect(hasTransientPrintFailures(results)).toBe(true)
+  })
+
+  it('stops retrying only confirmed per-print results', () => {
+    expect(hasTransientPrintFailures([ok(1n, 10n, NOW), reverted()])).toBe(false)
+    expect(hasTransientPrintFailures(undefined)).toBe(false)
+    expect(hasTransientPrintFailures([{ status: 'failure' }])).toBe(true)
+  })
+
   it('keeps a usable print and remembers a reverted id as having no price', () => {
     const merged = mergePrintReads({
       cache: new Map(),

@@ -18,6 +18,16 @@
   ::selection {
     @apply bg-brand/30;
   }
+  summary {
+    @apply min-h-6 py-1;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, ::before, ::after {
+      animation: none !important;
+      transition: none !important;
+    }
+  }
 }
 
 @layer components {

@@ -17,6 +17,7 @@
  *   - `incomplete` a check could not be run at all. NOT a pass. Never rendered as one.
  */
 import { formatPrice, formatTime } from './format'
+import { oracleReadStatus } from './oracleRead'
 import type { Text } from './i18n'
 import type { Round } from './market'
 import { pick } from './read'
@@ -520,8 +521,7 @@ export function proofReportsFromReads(args: {
   const raw = new Map<string, OraclePrint>()
   const completed = new Set<string>()
   ids.forEach((id, i) => {
-    const status = (results?.[i] as { status?: string } | undefined)?.status
-    if (status === 'success' || status === 'failure') completed.add(id.toString())
+    if (oracleReadStatus(results?.[i]) !== 'unread') completed.add(id.toString())
     const print = toPrint(pick(results, i))
     if (!print) return
     raw.set(id.toString(), print)

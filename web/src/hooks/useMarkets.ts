@@ -85,7 +85,7 @@ export function normalizeMarkets(
   return out
 }
 
-export function useMarkets() {
+export function useMarkets(active = true) {
   const enabled = !isPlaceholderDeployment
   const query = useReadContract({
     chainId: CHAIN_ID,
@@ -93,7 +93,7 @@ export function useMarkets() {
     abi: upDownRegistryAbi,
     functionName: 'allMarkets',
     query: {
-      enabled,
+      enabled: enabled && active,
       // The registry only changes when the owner registers or disables a market.
       refetchInterval: 120_000,
       staleTime: 60_000,

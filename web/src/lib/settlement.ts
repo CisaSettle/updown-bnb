@@ -16,6 +16,7 @@
 import type { Text } from './i18n'
 import { isExpired, type Round } from './market'
 import { asBigInt, asNumber, pick } from './read'
+import { oracleReadStatus } from './oracleRead'
 
 /** `roundId = phaseId << PHASE_SHIFT | aggregatorRoundId`. */
 export const PHASE_SHIFT = 64n
@@ -222,8 +223,7 @@ export function boundaryProofFromReads(args: {
   const successorChecked = successorCandidates(candidateId ?? UINT80_MAX).every((id) => {
     const index = ids.indexOf(id)
     if (index < 0) return false
-    const status = (results?.[index] as { status?: string } | undefined)?.status
-    return status === 'success' || status === 'failure'
+    return oracleReadStatus(results?.[index]) !== 'unread'
   })
   return proveBoundaryPrice({
     targetTs,

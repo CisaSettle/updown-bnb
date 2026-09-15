@@ -156,10 +156,10 @@ export function useTradeAccount(market: Address | undefined, user: Address | und
  * makes the keeper publish a strike, so these are the markets someone is actually trading or
  * quoting; the rest have an empty book and no strike until the first fill.
  */
-export function useTradeActivity(markets: readonly { address: Address }[]) {
+export function useTradeActivity(markets: readonly { address: Address }[], activeView = true) {
   const query = useReadContracts({
     contracts: markets.map((m) => ({ chainId: CHAIN_ID, address: m.address, abi, functionName: 'maintenanceRequired' }) as const),
-    query: { enabled: markets.length > 0, refetchInterval: 30_000, staleTime: 15_000 },
+    query: { enabled: activeView && markets.length > 0, refetchInterval: 30_000, staleTime: 15_000 },
   })
   const active = useMemo(() => {
     const out = new Set<string>()

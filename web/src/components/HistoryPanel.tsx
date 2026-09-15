@@ -75,6 +75,8 @@ export function HistoryPanel({
   priceDecimals,
   now,
   isLoading,
+  error,
+  onRetry,
 }: {
   rows: HistoryRow[]
   /** The market these rows belong to, so a row can name the call that produced its numbers. */
@@ -86,6 +88,8 @@ export function HistoryPanel({
   /** Chain clock, in seconds. A refund by elapsed window can only be judged against a clock. */
   now: number
   isLoading: boolean
+  error?: unknown
+  onRetry?: () => void
 }) {
   const lang = useLang()
   // Which row is showing its evidence. One at a time: a row's proof is a handful of chain reads,
@@ -117,12 +121,18 @@ export function HistoryPanel({
       </div>
 
       <div className="p-5">
+        {error ? (
+          <div role="alert" className="mb-3 text-sm text-rose-700 dark:text-rose-400">
+            <p>{t(lang, rows.length > 0 ? ui.history.refreshFailed : ui.history.readFailed)}</p>
+            {onRetry ? <button type="button" className="btn-secondary mt-2" onClick={onRetry}>{t(lang, ui.app.retry)}</button> : null}
+          </div>
+        ) : null}
         {isLoading && rows.length === 0 ? (
           <SkeletonRows rows={5} />
         ) : rows.length === 0 ? (
-          <p className="text-sm text-slate-600 dark:text-slate-300">{t(lang, ui.history.empty)}</p>
+          error ? null : <p className="text-sm text-slate-600 dark:text-slate-300">{t(lang, ui.history.empty)}</p>
         ) : (
-          <div className="-mx-5 overflow-x-auto px-5">
+          <div className="-mx-5 overflow-x-auto px-5" role="region" aria-label={t(lang, ui.history.heading)} tabIndex={0}>
             <table className="w-full min-w-[760px] text-sm">
               <caption className="sr-only">{t(lang, ui.history.caption)}</caption>
               <thead>

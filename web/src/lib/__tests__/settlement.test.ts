@@ -1,3 +1,4 @@
+import { reverted } from './oracleFixtures'
 import { describe, expect, it } from 'vitest'
 import type { Round } from '../market'
 import {
@@ -344,11 +345,21 @@ describe('the boundary mirror the card actually runs, from raw feed reads', () =
       results: ids.map((id) =>
         Object.hasOwn(rounds, id.toString())
           ? cell(rounds[id.toString()])
-          : { status: 'failure', error: new Error('No data present') },
+          : reverted(),
       ),
     })
     return { ids, proof, view: priceView({ round: round(), nowSeconds: now, livePrice: live, boundary: proof }) }
   }
+
+  it('keeps the boundary unresolved when the successor read failed on the network', () => {
+    const proof = boundaryProofFromReads({
+      targetTs: CLOSE_TS, oracleMaxAge: MAX_AGE, nowSeconds: now,
+      candidateId: 7n, ids: [7n, 8n],
+      results: [cell(tuple(7n, settling, printedAt)), { status: 'failure', error: new Error('timeout') }],
+    })
+    expect(proof.status).toBe('unresolved')
+    expect(priceView({ round: round(), nowSeconds: now, livePrice: live, boundary: proof }).kind).toBe('pending')
+  })
 
   it('proves the settling print while the feed is healthy', () => {
     const latest = tuple(7n, settling, printedAt)
