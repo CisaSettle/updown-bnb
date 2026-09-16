@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, type ReactNode } from 'react'
 import { erc20Abi } from 'viem'
 import * as ui from '../content/ui'
 import { activeChain } from '../config/chains'
@@ -9,7 +9,7 @@ import type { TradeConfig } from '../hooks/useTradeMarket'
 import { useTradeWriter } from '../hooks/useTradeWriter'
 import { allowanceFor, type AllowanceMode } from '../lib/bet'
 import { formatAmount, formatAmountWithSymbol, toInputValue } from '../lib/format'
-import { t, useLang } from '../lib/i18n'
+import { t, useLang, type Text } from '../lib/i18n'
 import { rovingIndex } from '../lib/roving'
 import {
   MARKET_SLIPPAGE_CENTS,
@@ -20,10 +20,31 @@ import {
   stepPriceInput,
   validateTradeForm,
   type OrderType,
+  type PlaceOrderArgs,
   type ShareBook,
 } from '../lib/trade'
 
 type Side = 'up' | 'down'
+
+/**
+ * How a hybrid market takes over submission. The ticket — validation, quote, approval, copy — is
+ * the same product in both modes; only the last step differs, because a hybrid order is signed and
+ * handed to a sequencer rather than sent as a transaction. Absent on a trade market, which sends
+ * `placeOrder` itself.
+ */
+export interface ExternalPlaceOrder {
+  busy: boolean
+  /** The button's label while `busy` — "Waiting for your signature…", not "Placing order…". */
+  busyLabel: Text
+  /** The submit label, replacing "Buy UP · 3 USDT" when a signature is what is being asked for. */
+  submitLabel?: Text
+  /** Resolves true when the ticket should clear, i.e. the order was accepted. */
+  submit: (args: PlaceOrderArgs) => Promise<boolean>
+  /** Rendered under the button: what the sequencer said, and what the batch is doing. */
+  note?: ReactNode
+  /** Blocks submission with this reason (the sequencer being unreachable, say). */
+  blocked?: Text
+}
 
 /** Arrow-key roving for a small radiogroup, shared by every control on the ticket. */
 function useRoving<T>(values: readonly T[], value: T, onChange: (v: T) => void) {
@@ -104,6 +125,7 @@ export function TradePanel({
   side,
   onSide,
   onDone,
+  placeOrder,
 }: {
   market: Address
   config: TradeConfig
@@ -122,6 +144,7 @@ export function TradePanel({
   side: Side
   onSide: (side: Side) => void
   onDone: () => void
+  placeOrder?: ExternalPlaceOrder
 }) {
   const lang = useLang()
   const { isConnected, wrongChain, isSwitching, switchToActiveChain } = useActiveChain()
@@ -161,8 +184,9 @@ export function TradePanel({
     [epoch, side, buy, type, sharesInput, priceInput, book, config, token, isConnected, wrongChain, tradeable, closing, freeShares, cash],
   )
   const { quote, args } = validation
-  const busy = busyKey !== null
+  const busy = busyKey !== null || (placeOrder?.busy ?? false)
   const needsApproval = validation.ok && buy && quote !== undefined && token.allowance < quote.maxPay
+  const blocked = placeOrder?.blocked
 
   async function onApprove() {
     if (!quote) return
@@ -185,6 +209,10 @@ export function TradePanel({
 
   async function onSubmit() {
     if (!validation.ok || !args) return
+    if (placeOrder) {
+      if (await placeOrder.submit(args)) setSharesInput('')
+      return
+    }
     await run('order', ui.tradeAction(buy, side), () => send(market, { functionName: 'placeOrder', args }), () => {
       setSharesInput('')
       token.refetch()
@@ -454,14 +482,16 @@ export function TradePanel({
           <button
             type="button"
             className={`w-full py-3 text-base ${side === 'up' ? 'btn-up' : 'btn-down'}`}
-            disabled={!validation.ok || busy}
+            disabled={!validation.ok || busy || blocked !== undefined}
             onClick={() => void onSubmit()}
           >
             {busyKey === 'order' ? (
               t(lang, ui.tradePanel.placing)
+            ) : placeOrder?.busy ? (
+              t(lang, placeOrder.busyLabel)
             ) : (
               <>
-                {t(lang, ui.tradeAction(buy, side))}
+                {t(lang, placeOrder?.submitLabel ?? ui.tradeAction(buy, side))}
                 {quote && validation.ok ? (
                   <span className="num font-semibold opacity-90">· {formatAmountWithSymbol(quote.total, token.decimals, token.symbol)}</span>
                 ) : null}
@@ -470,7 +500,11 @@ export function TradePanel({
           </button>
         )}
 
-        {!validation.ok && validation.reason ? (
+        {blocked ? (
+          <p role="status" className="text-xs font-medium text-amber-700 dark:text-amber-400">
+            {t(lang, blocked)}
+          </p>
+        ) : !validation.ok && validation.reason ? (
           <p role="status" className="text-xs font-medium text-amber-700 dark:text-amber-400">
             {t(lang, validation.reason)}
           </p>
@@ -479,6 +513,8 @@ export function TradePanel({
             {t(lang, type === 'market' ? ui.marketOrderNote(MARKET_SLIPPAGE_CENTS) : ui.tradePanel.limitNote)}
           </p>
         ) : null}
+
+        {placeOrder?.note}
       </div>
     </div>
   )

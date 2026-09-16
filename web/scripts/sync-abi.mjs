@@ -5,7 +5,7 @@ import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('../../', import.meta.url))
-const names = ['RelayAggregator', 'TestUSDT', 'UpDownMarketERC20', 'UpDownRegistry', 'UpDownTradeMarket']
+const names = ['RelayAggregator', 'TestUSDT', 'UpDownMarketERC20', 'UpDownRegistry', 'UpDownTradeMarket', 'UpDownHybridMarket']
 // Read all inputs before writing, so a missing artifact cannot leave a partial update.
 const outputs = names.map((name) => {
   const source = `contracts/out/${name}.sol/${name}.json`

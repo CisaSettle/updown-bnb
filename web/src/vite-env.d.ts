@@ -18,6 +18,13 @@ declare const __DEPLOYMENT__: {
   ethUsd10mTrade?: `0x${string}`
   bnbUsd1mTrade?: `0x${string}`
   bnbUsd10mTrade?: `0x${string}`
+  // Hybrid markets (off-chain book, on-chain settlement). Same rule as the trade keys above.
+  btcUsd1mHybrid?: `0x${string}`
+  btcUsd10mHybrid?: `0x${string}`
+  ethUsd1mHybrid?: `0x${string}`
+  ethUsd10mHybrid?: `0x${string}`
+  bnbUsd1mHybrid?: `0x${string}`
+  bnbUsd10mHybrid?: `0x${string}`
   btcFeed: `0x${string}`
   ethFeed: `0x${string}`
   bnbFeed: `0x${string}`
@@ -40,6 +47,8 @@ interface ImportMetaEnv {
   readonly VITE_REGISTRY_ADDRESS?: string
   readonly VITE_USDT_ADDRESS?: string
   readonly VITE_EXPLORER_URL?: string
+  /** Base URL of the hybrid market's sequencer. Defaults to `http://127.0.0.1:8787`. */
+  readonly VITE_SEQUENCER_URL?: string
 }
 
 interface ImportMeta {

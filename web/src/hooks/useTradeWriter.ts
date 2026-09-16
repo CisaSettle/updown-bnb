@@ -4,8 +4,21 @@ import { useAccount, usePublicClient } from 'wagmi'
 import { upDownTradeMarketAbi } from '../abi'
 import { activeChain, CHAIN_ID } from '../config/chains'
 import type { Address } from '../config/deployment'
+import type { Text } from '../lib/i18n'
 import { padTradeGas, type PlaceOrderArgs } from '../lib/trade'
 import { useTxRunner } from './useTxRunner'
+
+/**
+ * The write surface `TradePositionsPanel` needs, so the same panel serves the trade market and the
+ * hybrid market: both answer `redeem(epochs)` and `withdraw()` with identical signatures, only the
+ * ABI behind them differs.
+ */
+export interface PositionsWriter {
+  run: (key: string, name: Text, send: () => Promise<Hash>, onSuccess?: () => void) => Promise<boolean>
+  busyKey: string | null
+  redeem: (epochs: readonly bigint[]) => Promise<Hash>
+  withdraw: () => Promise<Hash>
+}
 
 export type TradeCall =
   | { functionName: 'placeOrder'; args: PlaceOrderArgs }

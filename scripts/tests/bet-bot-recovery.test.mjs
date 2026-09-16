@@ -8,6 +8,8 @@ import * as viem from '../../keeper/node_modules/viem/_esm/index.js'
 import * as gas from '../lib/gas-refill.mjs'
 import * as window from '../lib/bet-window.mjs'
 import * as tradeMaker from '../lib/trade-maker.mjs'
+import * as hybridMaker from '../lib/hybrid-maker.mjs'
+import * as hybridOrder from '../lib/hybrid-order.mjs'
 import * as chains from '../../keeper/node_modules/viem/_esm/chains/index.js'
 
 // Execute the real startup and polling loop against an in-memory chain. No keys, RPC or timers.
@@ -97,6 +99,9 @@ async function runBot(recovery) {
     './lib/gas-refill.mjs': gas,
     './lib/bet-window.mjs': window,
     './lib/trade-maker.mjs': tradeMaker,
+    // Pure helpers, no network: the hybrid path stays dormant without HYBRID_MARKETS.
+    './lib/hybrid-maker.mjs': hybridMaker,
+    './lib/hybrid-order.mjs': hybridOrder,
   }
   const executable = source
     .replace(/^#!.*\n/, '')

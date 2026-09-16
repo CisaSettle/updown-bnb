@@ -31,6 +31,14 @@ const OPTIONAL_ADDRESS_KEYS = [
   'ethUsd10mTrade',
   'bnbUsd1mTrade',
   'bnbUsd10mTrade',
+  // Hybrid (off-chain book, on-chain settlement) markets. Absent until they are deployed; the UI
+  // hides hybrid mode then, exactly as it hides trade mode.
+  'btcUsd1mHybrid',
+  'btcUsd10mHybrid',
+  'ethUsd1mHybrid',
+  'ethUsd10mHybrid',
+  'bnbUsd1mHybrid',
+  'bnbUsd10mHybrid',
   'btcFeed',
   'ethFeed',
   'bnbFeed',

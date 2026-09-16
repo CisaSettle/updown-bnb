@@ -1,9 +1,10 @@
+import type { ReactNode } from 'react'
 import { useAccount } from 'wagmi'
 import * as ui from '../content/ui'
 import type { Address } from '../config/deployment'
 import type { SettlementToken } from '../hooks/useSettlementToken'
 import type { OpenOrder, TradePosition } from '../hooks/useTradePositions'
-import { useTradeWriter } from '../hooks/useTradeWriter'
+import { useTradeWriter, type PositionsWriter } from '../hooks/useTradeWriter'
 import { humanizeError } from '../lib/errors'
 import { formatAmount, formatAmountWithSymbol } from '../lib/format'
 import { t, useLang, type Text } from '../lib/i18n'
@@ -40,6 +41,9 @@ export function TradePositionsPanel({
   error,
   onRetry,
   onDone,
+  writer,
+  ordersSlot,
+  ordersCount,
 }: {
   market: Address
   positions: TradePosition[]
@@ -52,17 +56,34 @@ export function TradePositionsPanel({
   error?: Error
   onRetry: () => void
   onDone: () => void
+  /**
+   * Who signs `redeem` and `withdraw`. Left out on a trade market, where this panel owns its own
+   * trade-ABI writer; supplied by the hybrid view, whose market answers the same two calls on a
+   * different ABI.
+   */
+  writer?: PositionsWriter
+  /** Replaces the on-chain open-orders table — the hybrid market's orders live in the sequencer. */
+  ordersSlot?: ReactNode
+  /** Open orders behind `ordersSlot`, so the empty state stays truthful. Defaults to `orders`. */
+  ordersCount?: number
 }) {
   const lang = useLang()
   const { isConnected } = useAccount()
-  const { send, run, busyKey } = useTradeWriter()
+  const tradeWriter = useTradeWriter()
+  const { run, busyKey } = writer ?? tradeWriter
   const busy = busyKey !== null
   const d = token.decimals
+  const openOrders = ordersCount ?? orders.length
 
   const redeem = (epochs: bigint[], key: string, title: Text) =>
-    void run(key, title, () => send(market, { functionName: 'redeem', args: [epochs] }), onDone)
+    void run(
+      key,
+      title,
+      () => (writer ? writer.redeem(epochs) : tradeWriter.send(market, { functionName: 'redeem', args: [epochs] })),
+      onDone,
+    )
   const cancel = (ids: bigint[], key: string, title: Text) =>
-    void run(key, title, () => send(market, { functionName: 'cancelOrders', args: [ids] }), onDone)
+    void run(key, title, () => tradeWriter.send(market, { functionName: 'cancelOrders', args: [ids] }), onDone)
 
   return (
     <section className="card" aria-label={t(lang, ui.tradePositions.heading)}>
@@ -108,7 +129,14 @@ export function TradePositionsPanel({
               type="button"
               className="btn-secondary ml-auto !px-3 !py-1.5 text-xs"
               disabled={busy}
-              onClick={() => void run('withdraw', ui.tradePositions.withdrawTx, () => send(market, { functionName: 'withdraw' }), onDone)}
+              onClick={() =>
+                void run(
+                  'withdraw',
+                  ui.tradePositions.withdrawTx,
+                  () => (writer ? writer.withdraw() : tradeWriter.send(market, { functionName: 'withdraw' })),
+                  onDone,
+                )
+              }
             >
               {t(lang, ui.tradePositions.withdraw)}
             </button>
@@ -119,7 +147,7 @@ export function TradePositionsPanel({
           <p className="text-sm text-slate-600 dark:text-slate-300">{t(lang, ui.tradePositions.connect)}</p>
         ) : null}
 
-        {isConnected && !error && !isLoading && positions.length === 0 && orders.length === 0 && cash === 0n ? (
+        {isConnected && !error && !isLoading && positions.length === 0 && openOrders === 0 && cash === 0n ? (
           <p className="text-sm text-slate-600 dark:text-slate-300">{t(lang, ui.tradePositions.empty)}</p>
         ) : null}
 
@@ -194,7 +222,7 @@ export function TradePositionsPanel({
           </div>
         ) : null}
 
-        {orders.length > 0 ? (
+        {ordersSlot ?? (orders.length > 0 ? (
           <div>
             <div className="flex flex-wrap items-center gap-3">
               <h3 className="text-sm font-bold">{t(lang, ui.tradePositions.ordersHeading)}</h3>
@@ -251,7 +279,7 @@ export function TradePositionsPanel({
               </table>
             </div>
           </div>
-        ) : null}
+        ) : null)}
       </div>
     </section>
   )

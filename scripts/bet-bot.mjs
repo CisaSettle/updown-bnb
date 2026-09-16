@@ -26,6 +26,10 @@
  *   TRADE_SPREAD_CENTS  half-spread around fair value                  (default: 3)
  *   TRADE_VOL_ANNUAL    annualised volatility behind fair value        (default: 0.6)
  *   TRADE_REQUOTE_CENTS / TRADE_MAX_REQUOTES  requote trigger and cap per live round (default: 6 / 2)
+ *   HYBRID_MARKETS csv of hybrid (sequencer) market keys to quote      (default: none)
+ *   SEQUENCER_URL  the updown-sequencer this bot signs orders to (default: http://127.0.0.1:8787)
+ *   HYBRID_ORDER_TTL_SECONDS  how long a signed quote rests before it expires (default: 120,
+ *                 clamped to 3000 — the sequencer refuses orders with a longer remaining life)
  *   FUNDER_KEY    optional key that tops the bot accounts up with gas when they run low
  *   MIN_GAS_BNB   gas floor that triggers a top-up or a loud warning   (default: 0.01)
  *   GAS_TOPUP_BNB target balance for a bot top-up                       (default: 0.05)
@@ -59,6 +63,8 @@ import { allocateGasRefills, assignSides, selectGasRefills } from './lib/gas-ref
 import { firstBetMinLeadReader, hasPlanningRunway, readBettableRound } from './lib/bet-window.mjs'
 import { TxOutbox } from './lib/tx-outbox.mjs'
 import { askOrder, bidOrder, endedOpenOrderIds, fairUpCents, needsRequote, openOrderIds, quoteTicks } from './lib/trade-maker.mjs'
+import { cancelMessage, randomSalt, signOrder } from './lib/hybrid-order.mjs'
+import { dropClosedEpochs, isSkippable, errorCode, placedQuote, forgetQuote, quoteOrder, rememberQuote, requoteReason, tradeableEpochs } from './lib/hybrid-maker.mjs'
 
 /**
  * Exit code for a configuration error that restarting cannot fix (sysexits.h EX_CONFIG).
@@ -126,6 +132,33 @@ const tradeMarkets = (process.env.TRADE_MARKETS ?? '')
     }
     return { key, address: getAddress(dep[key]) }
   })
+/**
+ * Hybrid markets. Same shape as `TRADE_MARKETS`, but the orders are signed messages the sequencer
+ * holds: quoting costs no gas, and only a fill reaches the chain — as one `settleMatch` sent by
+ * the operator (scripts/hybrid-settler.mjs), never by this bot.
+ */
+const hybridMarkets = (process.env.HYBRID_MARKETS ?? '')
+  .split(',')
+  .map((k) => k.trim())
+  .filter(Boolean)
+  .map((key) => {
+    if (!dep[key]) {
+      console.error(`HYBRID_MARKETS names ${key}, which the deployment manifest does not contain.`)
+      process.exit(EX_CONFIG)
+    }
+    return { key, address: getAddress(dep[key]) }
+  })
+const SEQUENCER_URL = (process.env.SEQUENCER_URL ?? 'http://127.0.0.1:8787').replace(/\/+$/, '')
+/**
+ * The sequencer rejects an order with more than an hour of life left (`too_long_lived`), so the
+ * clamp is the bot's, not the operator's: a generous TTL here must degrade to a long-but-accepted
+ * quote, never to a market that silently stops quoting.
+ */
+const HYBRID_ORDER_TTL_SECONDS = Math.min(3_000, Number(process.env.HYBRID_ORDER_TTL_SECONDS ?? '120'))
+if (hybridMarkets.length && !(HYBRID_ORDER_TTL_SECONDS >= 30)) {
+  console.error('HYBRID_ORDER_TTL_SECONDS must be at least 30 seconds.')
+  process.exit(EX_CONFIG)
+}
 const TRADE_SEED_SHARES = Number(process.env.TRADE_SEED_SHARES ?? '20')
 const TRADE_QUOTE_SHARES = Number(process.env.TRADE_QUOTE_SHARES ?? '10')
 const TRADE_SPREAD_CENTS = Number(process.env.TRADE_SPREAD_CENTS ?? '3')
@@ -241,6 +274,18 @@ const TRADE = parseAbi([
   'function placeOrder(uint256 epoch, bool up, bool buy, uint256 price, uint256 shares, uint256 maxFills, bool rest) returns (uint256, uint256)',
   'function cancelOrders(uint256[])',
   'function redeem(uint256[])',
+])
+/** The settlement half of the hybrid market: reads, redeem and withdraw. Orders never come here. */
+const HYBRID = parseAbi([
+  'struct Round { uint64 startTs; uint64 lockTs; uint64 closeTs; uint16 feeBps; uint16 bufferSeconds; bool locked; bool settled; bool voided; int256 lockPrice; int256 closePrice; uint80 lockOracleId; uint80 closeOracleId; uint32 oracleMaxAge; uint256 upAmount; uint256 downAmount; uint256 rewardBaseAmount; uint256 rewardPoolAmount; }',
+  'function getRound(uint256) view returns (Round)',
+  'function oracle() view returns (address)',
+  'function ledger(uint256,address) view returns (uint256 upShares, uint256 downShares, bool claimed)',
+  'function userEpochs(address,uint256,uint256) view returns (uint256[],uint256)',
+  'function pendingRedemption(uint256,address) view returns (uint256)',
+  'function cash(address) view returns (uint256)',
+  'function redeem(uint256[])',
+  'function withdraw()',
 ])
 const AGGREGATOR = parseAbi([
   'function latestRoundData() view returns (uint80, int256, uint256, uint256, uint80)',
@@ -958,6 +1003,149 @@ async function tradeCleanup(who, market) {
   log(`${market.key}: redeemed ${due.length} round(s) for ${who.address.slice(0, 8)}`)
 }
 
+// ── hybrid (sequencer) markets ──────────────────────────────────────────────────────────────────
+/**
+ * Per tradeable epoch of each hybrid market: one resting ask from A and one resting bid from B,
+ * at the same prices the on-chain maker would show. The difference is where the order lives — a
+ * signed message the sequencer holds, matched off chain and settled by the operator's
+ * `settleMatch` — so quoting costs no gas and a requote is a cancel plus a POST, not two
+ * transactions. The bot still needs the token approved: a fill pulls the maker's USDT directly.
+ *
+ * Every quote carries an expiry, and the sequencer purges it. That is the safety net this side of
+ * the book has instead of a cancel transaction: if this process dies, its orders stop resting
+ * within `HYBRID_ORDER_TTL_SECONDS` rather than sitting at a stale price until the round closes.
+ */
+const hybridQuotes = new Map()
+const hybridSkips = new Set()
+const hybridRead = (market, fn, args = []) =>
+  pub.readContract({ address: market.address, abi: HYBRID, functionName: fn, args })
+
+async function sequencerCall(path, init) {
+  const response = await fetch(`${SEQUENCER_URL}${path}`, init)
+  const text = await response.text()
+  return { ok: response.ok, status: response.status, body: text ? JSON.parse(text) : undefined }
+}
+const sequencerPost = (path, payload) =>
+  sequencerCall(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+
+/**
+ * Report a transient rejection once.
+ *
+ * `unfunded`, `insufficient_shares`, `not_tradeable` and `stale_snapshot` describe the moment, not
+ * a fault: the next cycle usually clears them. Logged on every tick they would bury everything
+ * else in the journal, so the same side keeps one line until it succeeds again.
+ */
+function skipOnce(key, message) {
+  if (hybridSkips.has(key)) return
+  hybridSkips.add(key)
+  log(message)
+}
+
+/** Fair Up cents for one epoch: 50 before the strike exists, the walk's probability after it. */
+async function hybridFair(market, epoch, t) {
+  const round = await hybridRead(market, 'getRound', [BigInt(epoch)])
+  if (!round.locked) return 50
+  const oracle = await hybridRead(market, 'oracle')
+  const [, answer] = await pub.readContract({ address: oracle, abi: AGGREGATOR, functionName: 'latestRoundData' })
+  return fairUpCents({
+    price: Number(answer),
+    strike: Number(round.lockPrice),
+    secondsLeft: Number(round.closeTs) - t,
+    annualVol: TRADE_VOL_ANNUAL,
+  })
+}
+
+/** Keep `who`'s resting order on `side` of `epoch` current. Returns why it was replaced, or nothing. */
+async function quoteHybridSide(who, market, epoch, side, tick, fair, t) {
+  if (insolvent.has(who.address)) return undefined
+  const placed = placedQuote(hybridQuotes, market.key, epoch, side)
+  const reason = requoteReason(placed, { fair, thresholdCents: TRADE_REQUOTE_CENTS, now: t })
+  if (!reason) return undefined
+
+  if (placed) {
+    // The sequencer owns the book: forget the hash whatever the cancel says, or a stale entry
+    // would keep this side from ever being quoted again.
+    forgetQuote(hybridQuotes, market.key, epoch, side)
+    const signature = await who.signMessage({ message: cancelMessage(placed.hash) })
+    const cancelled = await sequencerPost('/v1/orders/cancel', { market: market.address, hash: placed.hash, signature })
+    if (!cancelled.ok && errorCode(cancelled.body) !== 'not_open') {
+      log(`${market.key} epoch ${epoch}: ${side} cancel refused (${cancelled.status}) ${errorCode(cancelled.body) ?? ''}`)
+    }
+  }
+
+  const [upShares, downShares] = await hybridRead(market, 'ledger', [BigInt(epoch), who.address])
+  const order = quoteOrder({
+    maker: who.address,
+    epoch,
+    side,
+    upShares,
+    downShares,
+    shares: U(TRADE_QUOTE_SHARES),
+    tick,
+    now: t,
+    ttlSeconds: HYBRID_ORDER_TTL_SECONDS,
+    salt: randomSalt(),
+  })
+  const signature = await signOrder(who, bscTestnet.id, market.address, order)
+  const skipKey = `${market.key}:${epoch}:${side}`
+  const placedNow = await sequencerPost('/v1/orders', { market: market.address, order, signature, rest: true, max_fills: 64 })
+  if (!placedNow.ok) {
+    if (isSkippable(placedNow.body)) {
+      skipOnce(skipKey, `${market.key} epoch ${epoch}: ${side} skipped — ${errorCode(placedNow.body)}`)
+      return undefined
+    }
+    throw new Error(`${side} order refused (${placedNow.status}): ${JSON.stringify(placedNow.body)}`)
+  }
+  hybridSkips.delete(skipKey)
+  rememberQuote(hybridQuotes, market.key, epoch, side, { hash: placedNow.body.hash, fair, expiry: order.expiry })
+  return reason
+}
+
+async function hybridTick(market) {
+  if (gasPaused) return
+  const listing = await sequencerCall('/v1/markets')
+  if (!listing.ok) throw new Error(`sequencer /v1/markets answered ${listing.status}`)
+  const epochs = tradeableEpochs(listing.body, market.address)
+  dropClosedEpochs(hybridQuotes, market.key, epochs.map((e) => e.epoch))
+  const t = await now()
+  for (const { epoch } of epochs) {
+    const fair = await hybridFair(market, epoch, t)
+    const { askTick, bidTick } = quoteTicks(fair, TRADE_SPREAD_CENTS)
+    const quoted = []
+    for (const [who, side, tick] of [[A, 'ask', askTick], [B, 'bid', bidTick]]) {
+      const reason = await quoteHybridSide(who, market, epoch, side, tick, fair, t)
+      if (reason) quoted.push(`${side} ${tick}c (${reason})`)
+    }
+    if (quoted.length) log(`${market.key} epoch ${epoch}: quoting ${quoted.join(', ')} · fair ${fair}c`)
+  }
+}
+
+/** Bring resolved rounds and maker proceeds home. Resting orders expire on their own. */
+async function hybridCleanup(who, market) {
+  if (insolvent.has(who.address)) return
+  const [[, count], cash] = await Promise.all([
+    hybridRead(market, 'userEpochs', [who.address, 0n, 0n]),
+    hybridRead(market, 'cash', [who.address]),
+  ])
+  const withdrawCash = async () => {
+    if (cash === 0n) return
+    await send(who, market.address, HYBRID, 'withdraw', [])
+    log(`${market.key}: withdrew maker proceeds for ${who.address.slice(0, 8)}`)
+  }
+  if (count === 0n) return withdrawCash()
+  const offset = count > CLAIM_WINDOW ? count - CLAIM_WINDOW : 0n
+  const [epochs] = await hybridRead(market, 'userEpochs', [who.address, offset, CLAIM_WINDOW])
+  const pending = await pub.multicall({
+    multicallAddress: MULTICALL,
+    contracts: epochs.map((e) => ({ address: market.address, abi: HYBRID, functionName: 'pendingRedemption', args: [e, who.address] })),
+  })
+  const due = epochs.filter((_, i) => pending[i].status === 'success' && pending[i].result > 0n)
+  // `redeem` pays the shares and the credited cash in one transfer, so it subsumes `withdraw`.
+  if (!due.length) return withdrawCash()
+  await send(who, market.address, HYBRID, 'redeem', [due])
+  log(`${market.key}: redeemed ${due.length} round(s) for ${who.address.slice(0, 8)}`)
+}
+
 // ── startup ─────────────────────────────────────────────────────────────────────────────────────
 const chain = await pub.getChainId()
 if (chain !== 97) {
@@ -990,7 +1178,7 @@ if (A.address === B.address || FUNDER?.address === A.address || FUNDER?.address 
   process.exit(EX_CONFIG)
 }
 
-log(`bet bot on chain 97 · ${markets.map((m) => m.key).join(', ')}${tradeMarkets.length ? ` · quoting ${tradeMarkets.map((m) => m.key).join(', ')}` : ''}`)
+log(`bet bot on chain 97 · ${markets.map((m) => m.key).join(', ')}${tradeMarkets.length ? ` · quoting ${tradeMarkets.map((m) => m.key).join(', ')}` : ''}${hybridMarkets.length ? ` · hybrid ${hybridMarkets.map((m) => m.key).join(', ')} via ${SEQUENCER_URL}` : ''}`)
 log(`accounts ${A.address} / ${B.address}${FUNDER ? ` · gas funder ${FUNDER.address}` : ''}`)
 
 await keeperGasGuard()
@@ -999,7 +1187,7 @@ for (const who of [A, B]) {
   if (stopping) break
   if (insolvent.has(who.address)) continue
   await faucetTopUp(who)
-  for (const market of [...markets, ...tradeMarkets]) {
+  for (const market of [...markets, ...tradeMarkets, ...hybridMarkets]) {
     if (stopping) break
     try {
       await ensureApproval(who, market)
@@ -1038,6 +1226,14 @@ for (;;) {
       log(`${market.key}: trade tick error: ${short(e)}`)
     }
   }
+  for (const market of hybridMarkets) {
+    if (stopping) break
+    try {
+      await hybridTick(market)
+    } catch (e) {
+      log(`${market.key}: hybrid tick error: ${short(e)}`)
+    }
+  }
   // Roughly once a minute, off the hot path: refresh gas before attempting token transactions,
   // then sweep claims before requesting more test USDT. The sweep lives here, not on
   // plan completion, so sit-outs, missed windows, stalls and restarts still collect. Each probe
@@ -1071,6 +1267,14 @@ for (;;) {
           await tradeCleanup(who, market)
         } catch (e) {
           log(`${market.key}: trade cleanup failed: ${short(e)}`)
+        }
+      }
+      for (const market of hybridMarkets) {
+        if (stopping) break
+        try {
+          await hybridCleanup(who, market)
+        } catch (e) {
+          log(`${market.key}: hybrid cleanup failed: ${short(e)}`)
         }
       }
     }

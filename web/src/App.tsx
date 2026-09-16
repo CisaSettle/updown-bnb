@@ -42,10 +42,12 @@ import type { MarketKind } from './lib/trade'
 const FaqPage = lazy(() => import('./components/FaqPage').then((m) => ({ default: m.FaqPage })))
 const ChangelogPage = lazy(() => import('./components/ChangelogPage').then((m) => ({ default: m.ChangelogPage })))
 const TradeMarketView = lazy(() => import('./components/TradeMarketView').then((m) => ({ default: m.TradeMarketView })))
+const HybridMarketView = lazy(() => import('./components/HybridMarketView').then((m) => ({ default: m.HybridMarketView })))
 
 const SELECTED_KEY = 'updown.market'
 // v2: the first release stored whatever market was open by default, not only an explicit pick.
 const TRADE_SELECTED_KEY = 'updown.tradeMarket.v2'
+const HYBRID_SELECTED_KEY = 'updown.hybridMarket'
 const MODE_KEY = 'updown.mode'
 
 /**
@@ -64,6 +66,13 @@ function readStored(key: string): string | undefined {
   } catch {
     return undefined
   }
+}
+
+/** The remembered mode, narrowed — a stored value for a kind this deployment has no market for
+ * falls back to the pool page in `mode` below. */
+function readMode(key: string): MarketKind {
+  const raw = readStored(key)
+  return raw === 'trade' || raw === 'hybrid' ? raw : 'pool'
 }
 
 function writeStored(key: string, value: string) {
@@ -244,12 +253,20 @@ export default function App() {
   const lang = useLang()
   const route = useRoute()
   const { address } = useAccount()
-  const { markets, tradeMarkets, isLoading, usingFallback, error } = useMarkets(route.name === 'trade')
+  const { markets, tradeMarkets, hybridMarkets, isLoading, usingFallback, error } = useMarkets(route.name === 'trade')
   const [selectedAddress, setSelectedAddress] = useState<string | undefined>(() => readStored(SELECTED_KEY))
   const [tradeAddress, setTradeAddress] = useState<string | undefined>(() => readStored(TRADE_SELECTED_KEY))
-  const [storedMode, setStoredMode] = useState<MarketKind>(() => (readStored(MODE_KEY) === 'trade' ? 'trade' : 'pool'))
-  // Trade mode exists only once a trade market does; until then the page is the pool page, unchanged.
-  const mode: MarketKind = storedMode === 'trade' && tradeMarkets.length > 0 ? 'trade' : 'pool'
+  const [hybridAddress, setHybridAddress] = useState<string | undefined>(() => readStored(HYBRID_SELECTED_KEY))
+  const [storedMode, setStoredMode] = useState<MarketKind>(() => readMode(MODE_KEY))
+  // A mode exists only once a market of its kind does; with neither, the page is the pool page it
+  // was before order books existed — same picker, same card, no switch at all.
+  const modes = useMemo<MarketKind[]>(() => {
+    const out: MarketKind[] = ['pool']
+    if (tradeMarkets.length > 0) out.push('trade')
+    if (hybridMarkets.length > 0) out.push('hybrid')
+    return out
+  }, [tradeMarkets.length, hybridMarkets.length])
+  const mode: MarketKind = modes.includes(storedMode) ? storedMode : 'pool'
   // Money won in one market must be findable from every other tab — this is what puts the dot on.
   // Paused on the FAQ route, which exists precisely so nothing polls behind it.
   const collectableMarkets = useCollectableMarkets(markets, address, route.name === 'trade')
@@ -271,6 +288,10 @@ export default function App() {
     () =>
       tradeMarkets.find((m) => m.address.toLowerCase() === (tradeAddress ?? autoTrade)?.toLowerCase()) ?? tradeMarkets[0],
     [tradeMarkets, tradeAddress, autoTrade],
+  )
+  const selectedHybrid = useMemo(
+    () => hybridMarkets.find((m) => m.address.toLowerCase() === hybridAddress?.toLowerCase()) ?? hybridMarkets[0],
+    [hybridMarkets, hybridAddress],
   )
 
   useEffect(() => {
@@ -335,9 +356,19 @@ export default function App() {
         <main className="mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-6">
           {showTestnetHelpers ? <DemoWalletPanel /> : null}
 
-          {tradeMarkets.length > 0 ? <ModeSwitch mode={mode} onChange={onMode} /> : null}
+          {modes.length > 1 ? <ModeSwitch mode={mode} modes={modes} onChange={onMode} /> : null}
 
-          {mode === 'trade' ? (
+          {mode === 'hybrid' ? (
+            <MarketPicker
+              markets={hybridMarkets}
+              selected={selectedHybrid}
+              onSelect={(m) => {
+                setHybridAddress(m.address)
+                writeStored(HYBRID_SELECTED_KEY, m.address)
+              }}
+              isLoading={isLoading}
+            />
+          ) : mode === 'trade' ? (
             <MarketPicker
               markets={tradeMarkets}
               selected={selectedTrade}
@@ -367,6 +398,12 @@ export default function App() {
 
           {isLoading ? (
             <SkeletonCard />
+          ) : mode === 'hybrid' && selectedHybrid ? (
+            <div role="tabpanel" id={MARKET_PANEL_ID} aria-labelledby={marketTabId(selectedHybrid.address)}>
+              <Suspense fallback={<SkeletonCard />}>
+                <HybridMarketView key={selectedHybrid.address} market={selectedHybrid} feedName={FEED_NAME} />
+              </Suspense>
+            </div>
           ) : mode === 'trade' && selectedTrade ? (
             <div role="tabpanel" id={MARKET_PANEL_ID} aria-labelledby={marketTabId(selectedTrade.address)}>
               <Suspense fallback={<SkeletonCard />}>

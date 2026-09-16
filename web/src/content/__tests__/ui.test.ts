@@ -102,6 +102,11 @@ const PARAMETERISED: Array<[string, Text]> = [
   ['tradeShareLimits', ui.tradeShareLimits('1', '10,000')],
   ['tradeCashLine', ui.tradeCashLine('12 USDT')],
   ['redeemRoundTx', ui.redeemRoundTx(41n, 'zh')],
+  ['hybridExplain', ui.hybridExplain('3')],
+  ['hybridRejected', ui.hybridRejected(ui.hybridReason('unfunded', 'zh'))],
+  ['hybridFilled', ui.hybridFilled('3', '57¢')],
+  ['hybridRestingLine', ui.hybridRestingLine('3', '57¢')],
+  ['hybridOrdersAria', ui.hybridOrdersAria('BTC/USD 1m Hybrid')],
   ...(
     [
       'boundary',

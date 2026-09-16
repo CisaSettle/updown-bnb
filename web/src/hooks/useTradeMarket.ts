@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { zeroAddress } from 'viem'
+import { zeroAddress, type Abi } from 'viem'
 import { useReadContracts } from 'wagmi'
 import { upDownTradeMarketAbi } from '../abi'
 import { CHAIN_ID } from '../config/chains'
@@ -7,7 +7,12 @@ import type { Address } from '../config/deployment'
 import { toRound, type Round } from '../lib/market'
 import { asAddress, asBigInt, asBigIntArray, asBool, asNumber, pick } from '../lib/read'
 
-const abi = upDownTradeMarketAbi
+/**
+ * The order-book market ABI these hooks read through. It is a parameter rather than a constant
+ * because the hybrid market answers the same round, config, ledger and cash views with the same
+ * signatures — only its book and its orders live off chain — so one set of reads serves both.
+ */
+const defaultAbi = upDownTradeMarketAbi as Abi
 
 export interface TradeConfig {
   interval: number
@@ -28,7 +33,7 @@ export interface TradeConfig {
 }
 
 /** A trade market's parameters plus the epoch pointers, on the same cadence as the pool config. */
-export function useTradeConfig(market: Address | undefined) {
+export function useTradeConfig(market: Address | undefined, abi: Abi = defaultAbi) {
   const query = useReadContracts({
     contracts: [
       { chainId: CHAIN_ID, address: market, abi, functionName: 'interval' },
@@ -84,7 +89,7 @@ export interface TradeRoundRead {
 }
 
 /** The two rounds that can be trading at once — `bettable - 1` and `bettable` — with `isTradeable`. */
-export function useTradeRounds(market: Address | undefined, bettableEpoch: bigint | undefined) {
+export function useTradeRounds(market: Address | undefined, bettableEpoch: bigint | undefined, abi: Abi = defaultAbi) {
   const b = bettableEpoch ?? 0n
   const prev = b > 0n ? b - 1n : 0n
   const query = useReadContracts({
@@ -115,6 +120,7 @@ export interface TradeBookRead {
 
 /** `depth(epoch)`: open size per Up-cent tick on both sides. Best prices are derived from it. */
 export function useTradeBook(market: Address | undefined, epoch: bigint | undefined) {
+  const abi = defaultAbi
   const query = useReadContracts({
     contracts: [{ chainId: CHAIN_ID, address: market, abi, functionName: 'depth', args: [epoch ?? 0n] }],
     query: { enabled: Boolean(market) && epoch !== undefined, refetchInterval: 3_000, staleTime: 1_500 },
@@ -130,7 +136,12 @@ export function useTradeBook(market: Address | undefined, epoch: bigint | undefi
 }
 
 /** The wallet's free shares in one round and its uncollected maker proceeds. */
-export function useTradeAccount(market: Address | undefined, user: Address | undefined, epoch: bigint | undefined) {
+export function useTradeAccount(
+  market: Address | undefined,
+  user: Address | undefined,
+  epoch: bigint | undefined,
+  abi: Abi = defaultAbi,
+) {
   const query = useReadContracts({
     contracts: [
       { chainId: CHAIN_ID, address: market, abi, functionName: 'ledger', args: [epoch ?? 0n, user ?? zeroAddress] },
@@ -157,6 +168,7 @@ export function useTradeAccount(market: Address | undefined, user: Address | und
  * quoting; the rest have an empty book and no strike until the first fill.
  */
 export function useTradeActivity(markets: readonly { address: Address }[], activeView = true) {
+  const abi = defaultAbi
   const query = useReadContracts({
     contracts: markets.map((m) => ({ chainId: CHAIN_ID, address: m.address, abi, functionName: 'maintenanceRequired' }) as const),
     query: { enabled: activeView && markets.length > 0, refetchInterval: 30_000, staleTime: 15_000 },

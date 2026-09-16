@@ -1218,8 +1218,10 @@ export const mode = {
   label: { en: 'Market type', zh: '市场类型' },
   pool: { en: 'Pool', zh: '奖池模式' },
   trade: { en: 'Trade', zh: '交易模式' },
+  hybrid: { en: 'Hybrid', zh: '混合模式' },
   poolHint: { en: 'bet into the pool, paid at settlement', zh: '押注进奖池，结算时赔付' },
   tradeHint: { en: 'buy and sell shares before expiry', zh: '到期前随时买卖份额' },
+  hybridHint: { en: 'sign orders, no gas until they fill', zh: '签名下单，成交前不花 gas' },
 } satisfies Record<string, Text>
 
 export const tradeCard = {
@@ -1414,4 +1416,116 @@ export function tradeCashLine(amount: string): Text {
 
 export function redeemRoundTx(epoch: bigint, lang: Lang): Text {
   return { en: `Redeem round ${roundNo(epoch, lang)}`, zh: `兑付${roundNo(epoch, lang)}` }
+}
+
+// ── hybrid mode (off-chain book, on-chain settlement) ───────────────────────────────────────────
+
+/**
+ * 混合模式 keeps the trade-mode product word for word — UP and DOWN shares priced in cents, the
+ * same ladder, the same redeem — and changes only how an order gets there: the reader signs it
+ * instead of sending it, a sequencer matches it, and an operator settles the fills on chain. The
+ * copy below is about that one difference, so nothing else has to be said twice.
+ */
+export const hybrid = {
+  signOrder: { en: 'Sign order', zh: '签名下单' },
+  signing: { en: 'Waiting for your signature…', zh: '等待钱包签名…' },
+  sending: { en: 'Sending to the sequencer…', zh: '正在发给撮合服务…' },
+  sent: { en: 'Order sent to the sequencer.', zh: '订单已发给撮合服务。' },
+  settling: { en: 'Settling on chain…', zh: '正在链上结算…' },
+  settled: { en: 'Settled on chain.', zh: '已在链上结算。' },
+  settleFailed: {
+    en: 'The settlement transaction reverted. Nothing moved — sign the order again.',
+    zh: '结算交易失败回滚。没有任何资金变动——重新签一次单。',
+  },
+  resting: { en: 'Waiting on the book. Cancel it any time, for free.', zh: '已挂在订单簿上等成交。随时可以免费撤单。' },
+  noGasNote: {
+    en: 'Signing an order costs no gas and moves nothing. Money moves only when a fill is settled on chain, straight from your approved balance.',
+    zh: '签名下单不花 gas，也不会动任何资金。只有成交在链上结算时才会从你已授权的余额里扣款。',
+  },
+  bookLive: { en: 'Live book', zh: '实时订单簿' },
+  bookPolling: {
+    en: 'Not connected to the sequencer — this book is the last one read, and new orders will not be accepted.',
+    zh: '没有连上撮合服务——这是最后一次读到的订单簿，现在也下不了新单。',
+  },
+  sequencerDown: {
+    en: 'The sequencer is unreachable, so no new order can be signed. Your shares, your proceeds and cancelling on chain are unaffected.',
+    zh: '连不上撮合服务，现在没法签新的单。你的份额、成交款和链上撤单都不受影响。',
+  },
+  ordersHeading: { en: 'Open orders', zh: '当前挂单' },
+  ordersOffline: {
+    en: 'Could not read your open orders from the sequencer. Anything you signed can still be revoked on chain.',
+    zh: '读不到撮合服务里的挂单。你签过的单子仍然可以在链上撤销。',
+  },
+  colOrder: { en: 'Order', zh: '订单' },
+  colFilled: { en: 'Filled', zh: '已成交' },
+  cancel: { en: 'Cancel', zh: '撤单' },
+  cancelAll: { en: 'Cancel all', zh: '全部撤单' },
+  cancelling: { en: 'Cancelling…', zh: '撤单中…' },
+  cancelSign: { en: 'Cancel order', zh: '撤单' },
+  cancelled: { en: 'Order cancelled.', zh: '订单已撤销。' },
+  cancelOnChain: { en: 'Cancel on chain', zh: '链上撤单' },
+  cancelOnChainTx: { en: 'Revoke order on chain', zh: '在链上撤销订单' },
+  cancelOnChainNote: {
+    en: 'Cancelling off chain is free and instant. Cancelling on chain costs gas and is final — use it if the sequencer is down.',
+    zh: '链下撤单免费、即时。链上撤单要花 gas，但是终局的——撮合服务连不上时用它。',
+  },
+  explainTitle: { en: 'How hybrid mode works', zh: '混合模式怎么玩' },
+  footer: {
+    en: 'The order book is kept off chain by a sequencer; custody and settlement stay in the contract. Your signature is what authorises a fill, and one UP share plus one DOWN share is always backed by exactly 1 USDT held by the contract. Nothing here is financial advice.',
+    zh: '订单簿由链下的撮合服务维护，托管和结算仍然在合约里。你的签名是成交的唯一授权，一份 UP 加一份 DOWN 永远由合约里正好 1 USDT 担保。本页内容不构成任何投资建议。',
+  },
+} satisfies Record<string, Text>
+
+export function hybridExplain(feePct: string): Text {
+  return {
+    en: `Each round has an UP share and a DOWN share, priced in cents of the 1 USDT a winning share pays. You sign an order instead of sending a transaction: it costs no gas, a sequencer matches it against the book, and an operator settles the fills on chain from the balance you approved. A fill pays a ${feePct}% taker fee only when it takes an order off the book; an order that waits pays none. You can revoke a signed order off chain for free, or on chain if the sequencer is unreachable.`,
+    zh: `每一轮有 UP 和 DOWN 两种份额，价格是赢家兑付的 1 USDT 的美分数。你签一个订单，而不是发一笔交易：签名不花 gas，撮合服务把它和订单簿撮合，再由运营方在链上从你授权的余额里结算。吃掉订单簿上现成单子的成交要付 ${feePct}% 吃单手续费，挂着等成交的单子不收。签过的单子可以免费在链下撤销；撮合服务连不上时也可以在链上撤销。`,
+  }
+}
+
+/** `Rejected: the balance does not cover this order` — the sequencer's own code, in plain words. */
+export function hybridRejected(reason: string): Text {
+  return { en: `Rejected: ${reason}`, zh: `被拒绝：${reason}` }
+}
+
+/**
+ * The sequencer's error codes. Anything unmapped falls back to the code itself, which is still more
+ * use to a reader than "something went wrong".
+ */
+export function hybridReason(code: string, lang: Lang): string {
+  const map: Record<string, Text> = {
+    unfunded: {
+      en: 'your approved balance does not cover this order',
+      zh: '你已授权的余额不够这笔订单',
+    },
+    stale_snapshot: {
+      en: 'the sequencer is re-reading the chain — try again in a moment',
+      zh: '撮合服务正在重新读取链上状态——过一会儿再试',
+    },
+    insufficient_shares: { en: 'you do not hold that many free shares', zh: '你的可用份数不够' },
+    invalid_price: { en: 'the price must be a whole cent from 1 to 99', zh: '价格必须是 1 到 99 之间的整数美分' },
+    invalid_shares: { en: 'that share amount is outside the market limits', zh: '这个份数超出了市场限制' },
+    expired: { en: 'the order expired before it arrived', zh: '订单还没到就过期了' },
+    not_tradeable: { en: 'this round is not taking orders', zh: '这一轮不接单' },
+    wrong_signer: { en: 'the signature is not from the order maker', zh: '签名和下单地址对不上' },
+    invalid_signature: { en: 'the signature could not be verified', zh: '签名验证不通过' },
+    duplicate: { en: 'that order was already sent', zh: '这笔订单已经发过了' },
+    unknown_market: { en: 'the sequencer does not serve this market', zh: '撮合服务没有这个市场' },
+    unreachable: { en: 'the sequencer is unreachable', zh: '连不上撮合服务' },
+  }
+  const text = map[code]
+  return text ? text[lang] : code
+}
+
+/** `Filled 3 shares at 57¢` — what the sequencer reported back, in the reader's own units. */
+export function hybridFilled(shares: string, price: string): Text {
+  return { en: `Filled ${shares} shares at ${price}.`, zh: `已成交 ${shares} 份，成交价 ${price}。` }
+}
+
+export function hybridRestingLine(shares: string, price: string): Text {
+  return { en: `${shares} shares waiting at ${price}.`, zh: `${shares} 份挂在 ${price} 等成交。` }
+}
+
+export function hybridOrdersAria(marketLabel: string): Text {
+  return { en: `${marketLabel} open orders`, zh: `${marketLabel} 当前挂单` }
 }

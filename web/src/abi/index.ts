@@ -4,8 +4,17 @@ import { upDownRegistryAbi } from './UpDownRegistry'
 import { testUSDTAbi } from './TestUSDT'
 import { relayAggregatorAbi } from './RelayAggregator'
 import { upDownTradeMarketAbi } from './UpDownTradeMarket'
+import { upDownHybridMarketAbi } from './UpDownHybridMarket'
 
-export { upDownMarketERC20Abi, upDownRegistryAbi, upDownTradeMarketAbi, testUSDTAbi, relayAggregatorAbi, erc20Abi }
+export {
+  upDownMarketERC20Abi,
+  upDownRegistryAbi,
+  upDownTradeMarketAbi,
+  upDownHybridMarketAbi,
+  testUSDTAbi,
+  relayAggregatorAbi,
+  erc20Abi,
+}
 
 /** Shared views for the USDT markets. */
 export const marketViewAbi = upDownMarketERC20Abi
@@ -68,6 +77,7 @@ export const allErrorsAbi: Abi = (() => {
   for (const abi of [
     upDownMarketERC20Abi,
     upDownTradeMarketAbi,
+    upDownHybridMarketAbi,
     upDownRegistryAbi,
     testUSDTAbi,
     relayAggregatorAbi,

@@ -17,6 +17,12 @@ export interface Deployment {
   ethUsd10mTrade: Address
   bnbUsd1mTrade: Address
   bnbUsd10mTrade: Address
+  btcUsd1mHybrid: Address
+  btcUsd10mHybrid: Address
+  ethUsd1mHybrid: Address
+  ethUsd10mHybrid: Address
+  bnbUsd1mHybrid: Address
+  bnbUsd10mHybrid: Address
   btcFeed: Address
   ethFeed: Address
   bnbFeed: Address
@@ -47,6 +53,12 @@ export const deployment: Deployment = {
   ethUsd10mTrade: raw.ethUsd10mTrade ?? zeroAddress,
   bnbUsd1mTrade: raw.bnbUsd1mTrade ?? zeroAddress,
   bnbUsd10mTrade: raw.bnbUsd10mTrade ?? zeroAddress,
+  btcUsd1mHybrid: raw.btcUsd1mHybrid ?? zeroAddress,
+  btcUsd10mHybrid: raw.btcUsd10mHybrid ?? zeroAddress,
+  ethUsd1mHybrid: raw.ethUsd1mHybrid ?? zeroAddress,
+  ethUsd10mHybrid: raw.ethUsd10mHybrid ?? zeroAddress,
+  bnbUsd1mHybrid: raw.bnbUsd1mHybrid ?? zeroAddress,
+  bnbUsd10mHybrid: raw.bnbUsd10mHybrid ?? zeroAddress,
   registry: envAddress(import.meta.env.VITE_REGISTRY_ADDRESS) ?? raw.registry,
   usdt: envAddress(import.meta.env.VITE_USDT_ADDRESS) ?? raw.usdt,
 }
@@ -79,4 +91,23 @@ export const TRADE_MARKET_KEYS = [
  */
 export const tradeMarketAddresses: ReadonlySet<string> = new Set(
   TRADE_MARKET_KEYS.map((k) => deployment[k].toLowerCase()).filter((a) => a !== zeroAddress),
+)
+
+/** Deployment keys of the hybrid (off-chain book, on-chain settlement) markets, in picker order. */
+export const HYBRID_MARKET_KEYS = [
+  'btcUsd1mHybrid',
+  'btcUsd10mHybrid',
+  'ethUsd1mHybrid',
+  'ethUsd10mHybrid',
+  'bnbUsd1mHybrid',
+  'bnbUsd10mHybrid',
+] as const satisfies ReadonlyArray<keyof Deployment>
+
+/**
+ * Lowercased addresses of every deployed hybrid market. A hybrid market shares the registry with
+ * the pool and trade markets but has no `placeOrder` at all — its book lives in the sequencer — so
+ * it must never be driven with either of the other contracts' calls.
+ */
+export const hybridMarketAddresses: ReadonlySet<string> = new Set(
+  HYBRID_MARKET_KEYS.map((k) => deployment[k].toLowerCase()).filter((a) => a !== zeroAddress),
 )

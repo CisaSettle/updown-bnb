@@ -55,6 +55,7 @@ jobs:
           STRICT_DEPLOYMENT: '1'
           VITE_CHAIN_ID: ${{ github.event.inputs.chain_id || '97' }}
           VITE_BASE_PATH: /
+          VITE_SEQUENCER_URL: https://updown-seq.bluffking.ai
           VITE_WALLETCONNECT_PROJECT_ID: ${{ vars.WALLETCONNECT_PROJECT_ID }}
           # A repository VARIABLE, never a secret: it ships in the bundle by construction, which is
           # exactly why no credential may travel this path. Unset ⇒ the app installs no error

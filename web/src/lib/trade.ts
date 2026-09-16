@@ -30,17 +30,31 @@ export function padTradeGas(estimate: bigint): bigint {
 
 // ── market classification ─────────────────────────────────────────────────────────────────────
 
-export type MarketKind = 'pool' | 'trade'
+export type MarketKind = 'pool' | 'trade' | 'hybrid'
+
+const NO_ADDRESSES: ReadonlySet<string> = new Set()
 
 /**
- * Pool or trade. The registry lists both kinds side by side and the two contracts share no betting
- * calls, so a trade market must never reach the pool UI. The deployment file is authoritative;
- * the registry label ("BTC/USD 1m Trade") is the fallback for a market the file does not name.
+ * Pool, trade or hybrid. The registry lists all three kinds side by side and no two of the contracts
+ * share their betting calls, so a market must never reach the wrong UI. The deployment file is
+ * authoritative; the registry label ("BTC/USD 1m Trade", "BTC/USD 1m Hybrid") is the fallback for a
+ * market the file does not name.
  */
-export function marketKind(address: string, label: string | undefined, tradeAddresses: ReadonlySet<string>): MarketKind {
-  if (tradeAddresses.has(address.toLowerCase())) return 'trade'
-  return label !== undefined && /(^|\s)trade$/i.test(label.trim()) ? 'trade' : 'pool'
+export function marketKind(
+  address: string,
+  label: string | undefined,
+  tradeAddresses: ReadonlySet<string>,
+  hybridAddresses: ReadonlySet<string> = NO_ADDRESSES,
+): MarketKind {
+  const a = address.toLowerCase()
+  if (hybridAddresses.has(a)) return 'hybrid'
+  if (tradeAddresses.has(a)) return 'trade'
+  const name = label?.trim()
+  if (name === undefined) return 'pool'
+  if (/(^|\s)hybrid$/i.test(name)) return 'hybrid'
+  return /(^|\s)trade$/i.test(name) ? 'trade' : 'pool'
 }
+
 
 // ── order kinds ───────────────────────────────────────────────────────────────────────────────
 

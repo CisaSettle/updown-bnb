@@ -3,7 +3,13 @@ import { zeroAddress } from 'viem'
 import { useReadContract } from 'wagmi'
 import { upDownRegistryAbi } from '../abi'
 import { CHAIN_ID } from '../config/chains'
-import { deployment, isPlaceholderDeployment, tradeMarketAddresses, type Address } from '../config/deployment'
+import {
+  deployment,
+  hybridMarketAddresses,
+  isPlaceholderDeployment,
+  tradeMarketAddresses,
+  type Address,
+} from '../config/deployment'
 import { marketKind, type MarketKind } from '../lib/trade'
 
 export interface Market {
@@ -14,7 +20,7 @@ export interface Market {
   enabled: boolean
   label: string
   isNative: boolean
-  /** Pool (parimutuel) or trade (order book). The two contracts share no betting calls. */
+  /** Pool (parimutuel), trade (on-chain order book) or hybrid (off-chain book). No shared calls. */
   kind: MarketKind
 }
 
@@ -41,6 +47,13 @@ export function fallbackMarkets(): Market[] {
     { address: deployment.ethUsd10mTrade, asset: deployment.usdt, oracle: deployment.ethFeed, interval: 600, label: 'ETH/USD 10m Trade' },
     { address: deployment.bnbUsd1mTrade, asset: deployment.usdt, oracle: deployment.bnbFeed, interval: 60, label: 'BNB/USD 1m Trade' },
     { address: deployment.bnbUsd10mTrade, asset: deployment.usdt, oracle: deployment.bnbFeed, interval: 600, label: 'BNB/USD 10m Trade' },
+    // Hybrid markets: the book is the sequencer's, settlement is on chain. Zero until deployed.
+    { address: deployment.btcUsd1mHybrid, asset: deployment.usdt, oracle: deployment.btcFeed, interval: 60, label: 'BTC/USD 1m Hybrid' },
+    { address: deployment.btcUsd10mHybrid, asset: deployment.usdt, oracle: deployment.btcFeed, interval: 600, label: 'BTC/USD 10m Hybrid' },
+    { address: deployment.ethUsd1mHybrid, asset: deployment.usdt, oracle: deployment.ethFeed, interval: 60, label: 'ETH/USD 1m Hybrid' },
+    { address: deployment.ethUsd10mHybrid, asset: deployment.usdt, oracle: deployment.ethFeed, interval: 600, label: 'ETH/USD 10m Hybrid' },
+    { address: deployment.bnbUsd1mHybrid, asset: deployment.usdt, oracle: deployment.bnbFeed, interval: 60, label: 'BNB/USD 1m Hybrid' },
+    { address: deployment.bnbUsd10mHybrid, asset: deployment.usdt, oracle: deployment.bnbFeed, interval: 600, label: 'BNB/USD 10m Hybrid' },
   ]
   return raw
     .filter((m) => m.address.toLowerCase() !== zeroAddress)
@@ -48,7 +61,7 @@ export function fallbackMarkets(): Market[] {
       ...m,
       enabled: true,
       isNative: m.asset.toLowerCase() === zeroAddress,
-      kind: marketKind(m.address, m.label, tradeMarketAddresses),
+      kind: marketKind(m.address, m.label, tradeMarketAddresses, hybridMarketAddresses),
     }))
 }
 
@@ -64,6 +77,7 @@ export interface RawMarketInfo {
 export function normalizeMarkets(
   list: readonly RawMarketInfo[],
   tradeAddresses: ReadonlySet<string> = tradeMarketAddresses,
+  hybridAddresses: ReadonlySet<string> = hybridMarketAddresses,
 ): Market[] {
   const out: Market[] = []
   for (const m of list) {
@@ -79,10 +93,21 @@ export function normalizeMarkets(
       enabled: Boolean(m.enabled),
       label,
       isNative: asset.toLowerCase() === zeroAddress,
-      kind: marketKind(address, label, tradeAddresses),
+      kind: marketKind(address, label, tradeAddresses, hybridAddresses),
     })
   }
   return out
+}
+
+/**
+ * Hybrid markets are deployed by the sequencer operator and may not (yet) be in the on-chain
+ * registry, whose owner registers markets separately. The deployment manifest is authoritative
+ * for them, so any manifest hybrid market the registry does not list is appended as enabled.
+ */
+export function withManifestHybrids(fromRegistry: Market[]): Market[] {
+  const seen = new Set(fromRegistry.map((m) => m.address.toLowerCase()))
+  const extra = fallbackMarkets().filter((m) => m.kind === 'hybrid' && !seen.has(m.address.toLowerCase()))
+  return extra.length === 0 ? fromRegistry : [...fromRegistry, ...extra]
 }
 
 export function useMarkets(active = true) {
@@ -104,7 +129,7 @@ export function useMarkets(active = true) {
   const { markets, usingFallback } = useMemo(() => {
     if (!enabled) return { markets: [] as Market[], usingFallback: false }
     const raw = query.data as readonly RawMarketInfo[] | undefined
-    if (raw && raw.length > 0) return { markets: normalizeMarkets(raw), usingFallback: false }
+    if (raw && raw.length > 0) return { markets: withManifestHybrids(normalizeMarkets(raw)), usingFallback: false }
     if (query.isError || (query.isFetched && (!raw || raw.length === 0))) {
       const fallback = fallbackMarkets()
       return { markets: fallback, usingFallback: fallback.length > 0 }
@@ -115,11 +140,14 @@ export function useMarkets(active = true) {
   // `markets` stays pool-only, exactly what every pool consumer read before trade markets existed.
   const enabledMarkets = useMemo(() => markets.filter((m) => m.enabled && m.kind === 'pool'), [markets])
   const tradeMarkets = useMemo(() => markets.filter((m) => m.enabled && m.kind === 'trade'), [markets])
+  const hybridMarkets = useMemo(() => markets.filter((m) => m.enabled && m.kind === 'hybrid'), [markets])
 
   return {
     markets: enabledMarkets,
     /** Enabled order-book markets. Empty until they are deployed, which hides trade mode entirely. */
     tradeMarkets,
+    /** Enabled hybrid markets. Empty until they are deployed, which hides hybrid mode entirely. */
+    hybridMarkets,
     allMarkets: markets,
     isLoading: enabled && query.isLoading,
     /** True when the registry could not be used and we are showing the deployment-file fallback. */
