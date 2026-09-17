@@ -13,6 +13,7 @@ import {
   orderView,
   padTradeGas,
   quoteOrder,
+  bookLadder,
   shareBook,
   sharePrices,
   tradeRoundOptions,
@@ -85,6 +86,45 @@ describe('the mirrored book', () => {
       { price: 62, size: 3n * ONE },
     ])
     expect(down.bids.map((l) => l.price)).toEqual([55, 50])
+  })
+
+  it('carries the cumulative cost of sweeping to each level, one scale for both sides', () => {
+    // Up asks 45¢×5 then 50¢×5: 2.25 to take the first level, 4.75 to take both.
+    const ladder = bookLadder(shareBook(BIDS, ASKS, true), 6)
+    expect(ladder.asks.map((r) => [r.price, r.total])).toEqual([
+      [50, 475n * UNIT],
+      [45, 225n * UNIT],
+    ])
+    expect(ladder.bids.map((r) => [r.price, r.total])).toEqual([
+      [40, 200n * UNIT],
+      [38, 314n * UNIT],
+    ])
+    // The deepest rung on either side fills its bar; the rest are drawn against that same number.
+    expect(ladder.asks[0].depth).toBe(1)
+    expect(ladder.bids[ladder.bids.length - 1].depth).toBeCloseTo(0.661, 3)
+  })
+
+  it('draws the two best prices either side of the spread, and says how wide it is', () => {
+    const ladder = bookLadder(shareBook(BIDS, ASKS, true), 6)
+    // Asks run worst-first so the list reads down into the spread; bids run best-first out of it.
+    expect(ladder.asks[ladder.asks.length - 1].price).toBe(45)
+    expect(ladder.bids[0].price).toBe(40)
+    expect(ladder.spread).toBe(5)
+    expect(ladder.spreadPct).toBeCloseTo((5 / 42.5) * 100, 6)
+  })
+
+  it('keeps the nearest rows only, and says nothing about a spread one side does not quote', () => {
+    const deep = bookLadder(shareBook(levels({ 40: 5, 38: 3, 30: 1 }), ASKS, true), 2)
+    expect(deep.bids.map((r) => r.price)).toEqual([40, 38])
+
+    const oneSided = bookLadder(shareBook(BIDS, levels({}), true), 6)
+    expect(oneSided.asks).toEqual([])
+    expect(oneSided.spread).toBeUndefined()
+    expect(oneSided.spreadPct).toBeUndefined()
+    expect(oneSided.bids[0].depth).toBeGreaterThan(0)
+
+    const nothing = bookLadder(undefined, 6)
+    expect(nothing).toEqual({ asks: [], bids: [], spread: undefined, spreadPct: undefined })
   })
 
   it('prices both shares from the Up best bid and ask', () => {

@@ -129,10 +129,12 @@ describe('LiveRoundCard — the betting round after a stalled keeper', () => {
     // anchors on the bettable round — and must judge staleness by that round's own `oracleMaxAge`,
     // not by a fallback. Here the round's budget is 90s and the newest print is 120s old, so the
     // hold across it is a stretch the contract could not price, and the line has to say so.
+    // `SOL` has no reference spot pair, so the card opens on the oracle line rather than the live
+    // view — which is where the budget this test is about is drawn.
     const html = renderIn(
       'en',
       <LiveRoundCard
-        label="BTC/USD 5m"
+        label="SOL/USD 5m"
         config={config}
         bettable={round({
           startTs: BigInt(START),

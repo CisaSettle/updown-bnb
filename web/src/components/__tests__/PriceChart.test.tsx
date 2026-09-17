@@ -40,6 +40,8 @@ function render(args: {
   now?: number
   limit?: HistoryLimit
   lang?: Lang
+  /** A market label. Passing one with a known asset is what opens the live view by default. */
+  pair?: string
 }) {
   const now = args.now ?? START + 120
   const frame = chartFrame({ live: args.live, bettable: args.bettable, now, interval: INTERVAL })
@@ -54,6 +56,7 @@ function render(args: {
       interval={INTERVAL}
       limit={args.limit ?? 'feed-start'}
       feedName={FEED}
+      pair={args.pair}
     />,
   )
 }
@@ -283,5 +286,32 @@ describe('PriceChart in 中文', () => {
     const html = render({ live: liveRound(), prints: sparsePrints(), now: START + 92, lang: 'zh' })
     expect(html).toContain('1 分 32 秒前')
     expect(html).not.toContain('1m 32s ago')
+  })
+})
+
+/** The chart-style button that is currently pressed, by its label. */
+const openedOn = (html: string): string | undefined =>
+  [...html.matchAll(/<button[^>]*aria-pressed="true"[^>]*>([^<]+)<\/button>/g)]
+    .map((m) => m[1])
+    .find((label) => ['Line', 'Candles', 'Live'].includes(label))
+
+describe('PriceChart — which view opens first', () => {
+  it('opens on 实时 for a market with a reference pair, because that is the price right now', () => {
+    // The oracle prints every few seconds to a minute; a trader deciding UP or DOWN with two
+    // minutes left is asking where the price is, and the live line is the only view that answers.
+    const html = render({ live: liveRound(), prints: densePrints(), pair: 'BTC/USD 5m' })
+    expect(openedOn(html)).toBe('Live')
+    expect(html).toContain('draws a reference exchange price at second resolution')
+  })
+
+  it('opens on the oracle’s own view when the asset has no reference pair to draw', () => {
+    // Nothing to subscribe to: the live view would be the oracle poll wearing a live badge.
+    expect(openedOn(render({ live: liveRound(), prints: densePrints(), pair: 'SOL/USD 5m' }))).toBe('Candles')
+    expect(openedOn(render({ live: liveRound(), prints: sparsePrints(), pair: 'SOL/USD 5m' }))).toBe('Line')
+  })
+
+  it('still offers all three views whichever one opened', () => {
+    const html = render({ live: liveRound(), prints: densePrints(), pair: 'BTC/USD 5m' })
+    for (const label of ['Line', 'Candles', 'Live']) expect(html).toContain(`>${label}</button>`)
   })
 })

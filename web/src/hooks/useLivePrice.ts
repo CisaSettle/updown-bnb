@@ -14,6 +14,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { createLiveFeed, type LiveFeedState, type LivePoint, type LiveSocketHandlers } from '../lib/liveChart'
 
+/**
+ * The last buffer each symbol held, kept across mounts so flipping 实时 → K 线 → 实时 redraws the
+ * minute the trader was already looking at instead of an empty plot. It is a cache of a public
+ * price feed and nothing else: bounded by the feed's own buffer window, dropped on reload, and
+ * re-trimmed against the clock on the way back in, so a tab left for an hour seeds nothing.
+ */
+const BUFFERS = new Map<string, readonly LivePoint[]>()
+
 export interface LivePriceFeed {
   points: readonly LivePoint[]
   latest?: LivePoint
@@ -42,15 +50,30 @@ export function useLivePrice(args: {
       setState(IDLE)
       return
     }
+    const key = args.symbol ?? 'oracle'
+    const controller = typeof AbortController === 'undefined' ? undefined : new AbortController()
     const feed = createLiveFeed({
       symbol: args.symbol,
-      onState: (next: LiveFeedState) =>
-        setState({ points: next.points, latest: next.latest, connected: next.connected, fallback: next.fallback }),
+      seed: BUFFERS.get(key),
+      onState: (next: LiveFeedState) => {
+        BUFFERS.set(key, next.points)
+        setState({ points: next.points, latest: next.latest, connected: next.connected, fallback: next.fallback })
+      },
       deps: {
         now: () => Date.now(),
         setTimer: (fn, ms) => setTimeout(fn, ms),
         clearTimer: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
         fallbackPrice: () => fallbackRef.current,
+        // Public, key-less, CORS-open REST — and aborted with the view, so a chart the trader has
+        // already flipped away from cannot land a response on a feed that is gone.
+        fetchHistory:
+          typeof fetch === 'undefined'
+            ? undefined
+            : async (url: string) => {
+                const response = await fetch(url, { signal: controller?.signal })
+                if (!response.ok) throw new Error(`history ${response.status}`)
+                return await response.text()
+              },
         open: (url, handlers: LiveSocketHandlers) => {
           if (typeof WebSocket === 'undefined') throw new Error('no WebSocket')
           const socket = new WebSocket(url)
@@ -75,7 +98,10 @@ export function useLivePrice(args: {
       },
     })
     feed.start()
-    return () => feed.stop()
+    return () => {
+      feed.stop()
+      controller?.abort()
+    }
   }, [args.active, args.symbol])
 
   return state

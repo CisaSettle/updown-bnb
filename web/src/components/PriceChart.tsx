@@ -233,7 +233,14 @@ function StrikeMark({
       >
         {formatPrice(strike, decimals)}
       </text>
-      <text x={PLOT.x0 + 3} y={strikeY - 4} fontSize={FONT.label} className="fill-slate-900 font-bold dark:fill-slate-100">
+      {/* Pinned to the top of the frame the word would sit on top of the ● live badge; it goes below
+          the line there instead. */}
+      <text
+        x={PLOT.x0 + 3}
+        y={strikeY - PLOT.y0 < 20 ? strikeY + 14 : strikeY - 4}
+        fontSize={FONT.label}
+        className="fill-slate-900 font-bold dark:fill-slate-100"
+      >
         {t(lang, ui.chart.axisStrike)}
       </text>
     </>
@@ -318,7 +325,11 @@ function LiveView({
 
   const x = linearScale({ min: win.startTs, max: win.endTs }, [PLOT.x0, PLOT.x1])
   const y = domain ? linearScale(domain, [PLOT.y1, PLOT.y0]) : () => (PLOT.y0 + PLOT.y1) / 2
-  const strikeY = strikePrice !== undefined && domain ? y(strikePrice) : undefined
+  // `liveDomain` stops short of a strike far from this minute's prices, so the line keeps its
+  // height. Pinned to the frame the strike still reads correctly: every price on screen is on one
+  // side of it, and `WinZones` tints the whole plot that side.
+  const strikeY =
+    strikePrice !== undefined && domain ? Math.min(PLOT.y1, Math.max(PLOT.y0, y(strikePrice))) : undefined
 
   const xy = points.map((p) => ({ x: Math.max(PLOT.x0, x(p.ts)), y: y(p.price) }))
   const line = smoothPath(xy)
@@ -569,7 +580,16 @@ export function PriceChart({
   }, [prints, frame.startTs, frame.endTs, decimals])
 
   const { series, bucketSec, candles, readiness } = model
-  const view = choice === 'auto' ? (readiness.ok ? 'candles' : 'line') : choice
+
+  // The reference pair, resolved before the default view is picked: an asset with no spot symbol
+  // has no live view worth opening, and falls back to the oracle's own picture.
+  const liveSymbol = useMemo(() => binanceSymbol(pair), [pair])
+
+  // 实时 is the default where there is a reference feed. A trader opening this card is deciding UP
+  // or DOWN on a round that ends in minutes, and the oracle prints every few seconds to a minute:
+  // the step and the candles are the settlement truth, but the live line is the one that answers
+  // "where is it right now". Both stay one click away, and the choice sticks once made.
+  const view = choice === 'auto' ? (liveSymbol ? 'live' : readiness.ok ? 'candles' : 'line') : choice
 
   const strikePrice = frame.strike !== undefined ? Number(frame.strike) / 10 ** decimals : undefined
   const domain = useMemo(() => {
@@ -595,7 +615,7 @@ export function PriceChart({
   // The live view's own feed. It is subscribed only while that view is the one on screen, and the
   // oracle price the card already polls is what it draws if the exchange socket cannot be reached.
   const liveFeed = useLivePrice({
-    symbol: useMemo(() => binanceSymbol(pair), [pair]),
+    symbol: liveSymbol,
     active: view === 'live',
     fallbackPrice: series.latest?.price,
   })

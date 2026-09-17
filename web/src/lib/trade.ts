@@ -100,6 +100,71 @@ export function shareBook(bidSizes: readonly bigint[], askSizes: readonly bigint
   return { asks: upBids.map(mirror), bids: upAsks.map(mirror) }
 }
 
+/** One rung of the drawn ladder: the level, what it costs to sweep to it, and its share of the bar. */
+export interface BookRung extends BookLevel {
+  /** Cumulative cost from the best price out to this rung, in token units: Σ price × size / 100. */
+  total: bigint
+  /** This rung's `total` against the deepest rung drawn, 0–1 — the width of its depth bar. */
+  depth: number
+}
+
+export interface BookLadder {
+  /** Offers to sell, drawn top-down: the furthest from the spread first, the best just above it. */
+  asks: BookRung[]
+  /** Offers to buy, best first, drawn straight down from the spread. */
+  bids: BookRung[]
+  /** Best ask − best bid, in cents. Absent unless both sides quote. */
+  spread?: number
+  /** That spread against the midpoint, in percent — how wide it is, not just how many cents. */
+  spreadPct?: number
+}
+
+/**
+ * The book as it is drawn: the nearest `rows` levels a side, each carrying the **cumulative** cost
+ * of sweeping to it.
+ *
+ * Cumulative is the number that answers a trader's actual question — not "how many shares rest at
+ * 47¢" but "what does it cost to buy everything down to 47¢" — and it is what the depth bar is
+ * drawn from, so the bars grow away from the spread the way every exchange ladder does.
+ */
+export function bookLadder(book: ShareBook | undefined, rows: number): BookLadder {
+  const rung = (levels: readonly BookLevel[]): BookRung[] => {
+    const out: BookRung[] = []
+    let total = 0n
+    for (const level of levels.slice(0, Math.max(0, rows))) {
+      total += (level.size * BigInt(Math.max(0, Math.round(level.price)))) / 100n
+      out.push({ ...level, total, depth: 0 })
+    }
+    return out
+  }
+
+  const asks = rung(book?.asks ?? [])
+  const bids = rung(book?.bids ?? [])
+  // One scale for both sides, so a wall on one side reads as a wall rather than as a full bar.
+  const deepest = [asks[asks.length - 1]?.total ?? 0n, bids[bids.length - 1]?.total ?? 0n].reduce(
+    (m, v) => (v > m ? v : m),
+    0n,
+  )
+  const scale = (rungs: BookRung[]) => {
+    for (const r of rungs) r.depth = deepest > 0n ? Number((r.total * 1000n) / deepest) / 1000 : 0
+    return rungs
+  }
+  scale(asks)
+  scale(bids)
+
+  const bestAsk = asks[0]?.price
+  const bestBid = bids[0]?.price
+  const spread = bestAsk !== undefined && bestBid !== undefined ? bestAsk - bestBid : undefined
+  const mid = bestAsk !== undefined && bestBid !== undefined ? (bestAsk + bestBid) / 2 : undefined
+  return {
+    // Top of the list is the worst ask, so the two best prices meet at the spread row.
+    asks: asks.reverse(),
+    bids,
+    spread,
+    spreadPct: spread !== undefined && mid !== undefined && mid > 0 ? (spread / mid) * 100 : undefined,
+  }
+}
+
 /** Best Up bid / ask in Up cents from `depth`, 0 when that side is empty — same as `bestPrices`. */
 export function bestFromDepth(bidSizes: readonly bigint[], askSizes: readonly bigint[]): { bestBid: number; bestAsk: number } {
   let bestBid = 0

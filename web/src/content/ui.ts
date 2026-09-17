@@ -1259,6 +1259,12 @@ export const tradeCard = {
   spread: { en: 'Spread', zh: '价差' },
   bookPrice: { en: 'Price', zh: '价格' },
   bookShares: { en: 'Shares', zh: '份数' },
+  /** Cumulative cost of sweeping the book out to that row — the column every exchange ladder ends on. */
+  bookTotal: { en: 'Total', zh: '累计' },
+  bookTotalTitle: {
+    en: 'What it costs to take every offer from the best price out to this one.',
+    zh: '从最优价一路吃到这一行，总共要花多少。',
+  },
   bookAsks: { en: 'Offers to sell', zh: '卖单' },
   bookBids: { en: 'Offers to buy', zh: '买单' },
   bookEmpty: {
