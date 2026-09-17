@@ -213,6 +213,7 @@ export function LiveRoundCard({
       limit={history.limit}
       isLoading={history.isLoading}
       feedName={feedName}
+      pair={label}
     />
   ) : null
 

@@ -864,6 +864,20 @@ export const chart = {
     en: 'This feed has not printed often enough for candles to have bodies — see the note below.',
     zh: '这个喂价的报价太稀疏，K 线画出来没有实体——见下面的说明。',
   },
+  live: { en: 'Live', zh: '实时' },
+  liveTitle: {
+    en: 'The reference exchange price, second by second — a picture of the move, not the series this round settles on.',
+    zh: '逐秒的参考交易所价格——用来看走势，不是本轮据以结算的那条序列。',
+  },
+  liveWaiting: { en: 'Waiting for the first tick…', zh: '正在等待第一笔成交…' },
+  liveFallbackNote: {
+    en: 'Exchange reference price unavailable — showing the oracle price instead.',
+    zh: '参考交易所价不可用，显示预言机价。',
+  },
+  liveNote: {
+    en: 'This view draws a reference exchange price at second resolution so the last minute of movement is readable against the strike. The round still settles on the oracle series above — the two are not the same number, and only the oracle decides the payout.',
+    zh: '这个视图画的是逐秒的参考交易所价格，方便看清最近一分钟的走势与行权价的关系。本轮仍然按上面那条预言机序列结算——两者不是同一个数字，决定赔付的只有预言机。',
+  },
   upWinsHere: { en: '▲ UP wins here', zh: '▲ 这一侧 UP 赢' },
   downWinsHere: { en: '▼ DOWN wins here', zh: '▼ 这一侧 DOWN 赢' },
   axisStrike: { en: 'strike', zh: '行权价' },

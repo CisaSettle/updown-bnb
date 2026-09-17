@@ -222,6 +222,7 @@ export function TradeMarketView({ market, feedName }: { market: Market; feedName
                 limit={feedHistory.limit}
                 isLoading={feedHistory.isLoading}
                 feedName={feedName}
+                pair={market.label}
                 kind="trade"
                 quiet={round !== undefined && round.upAmount === 0n}
               />

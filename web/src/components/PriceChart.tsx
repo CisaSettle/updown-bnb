@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import * as ui from '../content/ui'
 import { Explain } from './Explain'
 import { formatPrice, formatPriceNumber, formatTime } from '../lib/format'
-import { t, useLang, type Text } from '../lib/i18n'
+import { t, useLang, type Lang, type Text } from '../lib/i18n'
 import {
   buildSeries,
   bucketCandles,
@@ -21,6 +21,17 @@ import {
   type ChartFrame,
   type StepSegment,
 } from '../lib/chart'
+import {
+  areaPath,
+  binanceSymbol,
+  formatClock,
+  liveDomain,
+  liveTimeTicks,
+  liveWindow,
+  smoothPath,
+  windowPoints,
+} from '../lib/liveChart'
+import { useLivePrice, type LivePriceFeed } from '../hooks/useLivePrice'
 import type { HistoryLimit } from '../lib/oracleHistory'
 import type { OraclePrint } from '../lib/settlement'
 
@@ -70,6 +81,12 @@ export interface PriceChartProps {
   isLoading?: boolean
   /** What the feed is, in words: a relay feed on testnet, Chainlink on mainnet. */
   feedName: Text
+  /**
+   * The market's label — `BTC/USD 1m`, `ETH/USD 10m Hybrid`. Only the asset is read from it, to
+   * pick the reference spot symbol the **live** view subscribes to. An unknown asset simply has no
+   * reference feed, and the live view falls back to the oracle price rather than guessing a pair.
+   */
+  pair?: string
   /** Pool rounds refund stakes; trade rounds void to 0.50 per share. Picks the notes that say which. */
   kind?: 'pool' | 'trade'
   /** Trade only: the round holds no shares yet, so a silent feed is expected rather than alarming. */
@@ -141,6 +158,346 @@ function PlateLabel({
   )
 }
 
+/**
+ * The two regions the money is decided by: above the strike UP wins, below it DOWN wins.
+ *
+ * Extracted so the live view draws them from exactly the same code as the oracle views — on a
+ * different scale, but never a different rule about which side is which.
+ */
+function WinZones({ strikeY, lang }: { strikeY: number; lang: Lang }) {
+  return (
+    <>
+      <rect
+        x={PLOT.x0}
+        y={PLOT.y0}
+        width={PLOT.x1 - PLOT.x0}
+        height={Math.max(0, strikeY - PLOT.y0)}
+        className="fill-emerald-500/10"
+      />
+      <rect
+        x={PLOT.x0}
+        y={strikeY}
+        width={PLOT.x1 - PLOT.x0}
+        height={Math.max(0, PLOT.y1 - strikeY)}
+        className="fill-rose-500/10"
+      />
+      {strikeY - PLOT.y0 > 22 ? (
+        <PlateLabel
+          x={PLOT.x1 - 2}
+          y={PLOT.y0 + 14}
+          text={t(lang, ui.chart.upWinsHere)}
+          className="fill-emerald-700 dark:fill-emerald-400"
+        />
+      ) : null}
+      {PLOT.y1 - strikeY > 22 ? (
+        <PlateLabel
+          x={PLOT.x1 - 2}
+          y={PLOT.y1 - 5}
+          text={t(lang, ui.chart.downWinsHere)}
+          className="fill-rose-700 dark:fill-rose-400"
+        />
+      ) : null}
+    </>
+  )
+}
+
+/** The strike itself: the dashed line, its value on the axis, and the word for it. */
+function StrikeMark({
+  strikeY,
+  strike,
+  decimals,
+  lang,
+}: {
+  strikeY: number
+  strike: bigint
+  decimals: number
+  lang: Lang
+}) {
+  return (
+    <>
+      <line
+        x1={PLOT.x0}
+        x2={PLOT.x1}
+        y1={strikeY}
+        y2={strikeY}
+        strokeWidth={1.2}
+        strokeDasharray="5 3"
+        className="stroke-slate-900 dark:stroke-slate-100"
+      />
+      <text
+        x={VIEW_W - 2}
+        y={strikeY + 4}
+        fontSize={FONT.strikeValue}
+        textAnchor="end"
+        className="fill-slate-900 font-mono font-bold dark:fill-slate-100"
+      >
+        {formatPrice(strike, decimals)}
+      </text>
+      <text x={PLOT.x0 + 3} y={strikeY - 4} fontSize={FONT.label} className="fill-slate-900 font-bold dark:fill-slate-100">
+        {t(lang, ui.chart.axisStrike)}
+      </text>
+    </>
+  )
+}
+
+/** A vertical boundary — lock or settle — with its word and, where there is a row for it, its time. */
+function BoundaryMark({
+  cx,
+  label,
+  time,
+  anchor,
+}: {
+  cx: number
+  label: string
+  time?: string
+  anchor: 'middle' | 'end'
+}) {
+  return (
+    <>
+      <line
+        x1={cx}
+        x2={cx}
+        y1={PLOT.y0}
+        y2={PLOT.y1}
+        strokeWidth={1}
+        strokeDasharray="3 2"
+        className="stroke-slate-500 dark:stroke-slate-400"
+      />
+      <text x={cx} y={PLOT.y1 + 15} fontSize={FONT.label} textAnchor={anchor} className="fill-slate-500 dark:fill-slate-400">
+        {label}
+      </text>
+      {time !== undefined ? (
+        <text
+          x={cx}
+          y={PLOT.y1 + 29}
+          fontSize={FONT.time}
+          textAnchor={anchor}
+          className="fill-slate-400 font-mono dark:fill-slate-500"
+        >
+          {time}
+        </text>
+      ) : null}
+    </>
+  )
+}
+
+/**
+ * The live view: the last minute of the **reference exchange price**, second by second.
+ *
+ * It is mounted only while the trader is looking at it, and unmounting it is what closes the
+ * socket — see `useLivePrice`. The strike and the two win zones are drawn from the same frame and
+ * the same components as the oracle views, because the one thing this view is for is reading the
+ * live price against the line that decides the round. Everything else about it is a picture: the
+ * round still settles on the oracle series, and the note under the chart says so.
+ */
+function LiveView({
+  frame,
+  decimals,
+  strikePrice,
+  feed,
+  now,
+  lang,
+  feedLabel,
+}: {
+  frame: ChartFrame
+  decimals: number
+  strikePrice?: number
+  feed: LivePriceFeed
+  now: number
+  lang: Lang
+  feedLabel: string
+}) {
+  const gradientId = `live-fill-${useId().replace(/:/g, '')}`
+
+  // The clock the window ends on is the later of the page's own tick and the newest trade: a trade
+  // stamped a beat ahead of a slightly slow local clock must not be drawn outside the plot.
+  const nowMs = Math.max(Math.floor(now) * 1000, feed.latest?.ts ?? 0)
+  const win = liveWindow({ now: nowMs })
+  const points = windowPoints(feed.points, win)
+  const domain = liveDomain(points, { strike: strikePrice })
+
+  const x = linearScale({ min: win.startTs, max: win.endTs }, [PLOT.x0, PLOT.x1])
+  const y = domain ? linearScale(domain, [PLOT.y1, PLOT.y0]) : () => (PLOT.y0 + PLOT.y1) / 2
+  const strikeY = strikePrice !== undefined && domain ? y(strikePrice) : undefined
+
+  const xy = points.map((p) => ({ x: Math.max(PLOT.x0, x(p.ts)), y: y(p.price) }))
+  const line = smoothPath(xy)
+  const area =
+    xy.length > 1 ? areaPath(line, { firstX: xy[0].x, lastX: xy[xy.length - 1].x, baselineY: PLOT.y1 }) : ''
+
+  const last = points[points.length - 1]
+  const lastX = last !== undefined ? Math.max(PLOT.x0, x(last.ts)) : undefined
+  const lastY = last !== undefined ? y(last.price) : undefined
+  // The pill is clamped inside the plot: at the top or the bottom of the range it would otherwise
+  // hang off the frame, and the latest price is the number this view exists to show.
+  const pillY = lastY === undefined ? undefined : Math.min(PLOT.y1 - 8, Math.max(PLOT.y0 + 8, lastY))
+  const pillText = last !== undefined ? formatPriceNumber(last.price) : undefined
+  const pillW = pillText === undefined ? 0 : Math.min(VIEW_W - PLOT.x1 - 5, plateWidth(pillText, FONT.tick))
+  // Bold mono digits run wider than `plateWidth` estimates and the axis gutter is exactly one
+  // label wide, so the text is squeezed to the pill instead of spilling past the frame.
+  const pillTextW = pillText === undefined ? 0 : Math.max(8, pillW - 6)
+
+  const ticks = (domain ? niceTicks(domain, 3) : []).filter(
+    (tick) =>
+      (strikeY === undefined || Math.abs(y(tick) - strikeY) > 14) &&
+      // the latest-price pill owns its slice of the axis
+      (pillY === undefined || Math.abs(y(tick) - pillY) > 12),
+  )
+  const timeTicks = liveTimeTicks(win)
+
+  const boundary = (ts: number, label: string) => {
+    const ms = ts * 1000
+    if (ms < win.startTs || ms > win.endTs) return null
+    return <BoundaryMark cx={x(ms)} label={label} anchor="middle" />
+  }
+
+  return (
+    <svg
+      viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
+      className="mt-2 h-auto w-full"
+      role="img"
+      aria-label={t(
+        lang,
+        ui.chartAria({
+          from: formatClock(win.startTs),
+          to: formatClock(win.endTs),
+          strike: frame.strike !== undefined ? formatPrice(frame.strike, decimals) : undefined,
+          feed: feedLabel,
+        }),
+      )}
+    >
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" className="text-sky-500 dark:text-sky-400" stopColor="currentColor" stopOpacity="0.28" />
+          <stop offset="100%" className="text-sky-500 dark:text-sky-400" stopColor="currentColor" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+
+      {strikeY !== undefined ? <WinZones strikeY={strikeY} lang={lang} /> : null}
+
+      {ticks.map((tick) => (
+        <g key={tick}>
+          <line
+            x1={PLOT.x0}
+            x2={PLOT.x1}
+            y1={y(tick)}
+            y2={y(tick)}
+            strokeWidth={0.5}
+            className="stroke-slate-300 dark:stroke-slate-700"
+          />
+          <text
+            x={VIEW_W - 2}
+            y={y(tick) + 4}
+            fontSize={FONT.tick}
+            textAnchor="end"
+            className="fill-slate-500 font-mono dark:fill-slate-400"
+          >
+            {formatPriceNumber(tick)}
+          </text>
+        </g>
+      ))}
+
+      {area ? <path d={area} fill={`url(#${gradientId})`} stroke="none" /> : null}
+      {line ? (
+        <path
+          d={line}
+          fill="none"
+          strokeWidth={1.8}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="stroke-sky-600 dark:stroke-sky-400"
+        />
+      ) : null}
+
+      {strikeY !== undefined && frame.strike !== undefined ? (
+        <StrikeMark strikeY={strikeY} strike={frame.strike} decimals={decimals} lang={lang} />
+      ) : null}
+
+      {boundary(frame.lockTs, t(lang, frame.strikeState === 'set' ? ui.chart.axisLocked : ui.chart.axisLock))}
+      {frame.closeTs !== undefined ? boundary(frame.closeTs, t(lang, ui.chart.axisSettles)) : null}
+
+      {/* ── the latest price: the dot on the line, and its pill on the axis ─────────────── */}
+      {lastX !== undefined && lastY !== undefined && pillY !== undefined && pillText !== undefined ? (
+        <>
+          <line
+            x1={lastX}
+            x2={PLOT.x1}
+            y1={lastY}
+            y2={pillY}
+            strokeWidth={0.6}
+            strokeDasharray="2 2"
+            className="stroke-sky-500/60 dark:stroke-sky-400/60"
+          />
+          <circle cx={lastX} cy={lastY} r={5} className="fill-sky-500/25 dark:fill-sky-400/25" />
+          <circle
+            cx={lastX}
+            cy={lastY}
+            r={2.6}
+            strokeWidth={1}
+            className="fill-sky-600 stroke-white dark:fill-sky-400 dark:stroke-slate-900"
+          />
+          <rect
+            x={PLOT.x1 + 2}
+            y={pillY - 8}
+            width={pillW}
+            height={16}
+            rx={8}
+            className="fill-sky-600 dark:fill-sky-500"
+          />
+          <text
+            x={PLOT.x1 + 2 + pillW / 2}
+            y={pillY + 4}
+            fontSize={FONT.tick}
+            textAnchor="middle"
+            textLength={pillTextW}
+            lengthAdjust="spacingAndGlyphs"
+            className="fill-white font-mono font-bold"
+          >
+            {pillText}
+          </text>
+        </>
+      ) : (
+        <text x={(PLOT.x0 + PLOT.x1) / 2} y={(PLOT.y0 + PLOT.y1) / 2} fontSize={FONT.label} textAnchor="middle" className="fill-slate-400 dark:fill-slate-500">
+          {t(lang, ui.chart.liveWaiting)}
+        </text>
+      )}
+
+      {/* ── the live badge ──────────────────────────────────────────────────────────────── */}
+      <g>
+        <rect x={PLOT.x0 + 2} y={PLOT.y0 + 1} width={plateWidth(t(lang, ui.chart.live), FONT.label) + 8} height={16} rx={8} className="fill-white/75 dark:fill-slate-900/75" />
+        <circle
+          cx={PLOT.x0 + 9}
+          cy={PLOT.y0 + 9}
+          r={2.4}
+          className={
+            feed.connected
+              ? 'fill-emerald-500 dark:fill-emerald-400'
+              : feed.fallback
+                ? 'fill-amber-500 dark:fill-amber-400'
+                : 'fill-slate-400 dark:fill-slate-500'
+          }
+        />
+        <text x={PLOT.x0 + 15} y={PLOT.y0 + 13} fontSize={FONT.label} className="fill-slate-600 dark:fill-slate-300">
+          {t(lang, ui.chart.live)}
+        </text>
+      </g>
+
+      {timeTicks.map((ts) => (
+        <text
+          key={ts}
+          x={x(ts)}
+          y={PLOT.y1 + 29}
+          fontSize={FONT.time}
+          textAnchor="middle"
+          className="fill-slate-400 font-mono dark:fill-slate-500"
+        >
+          {formatClock(ts)}
+        </text>
+      ))}
+    </svg>
+  )
+}
+
 function CandleMarks({
   candles,
   x,
@@ -197,10 +554,11 @@ export function PriceChart({
   feedName,
   kind = 'pool',
   quiet = false,
+  pair,
 }: PriceChartProps) {
   const trade = kind === 'trade'
   const lang = useLang()
-  const [choice, setChoice] = useState<'auto' | 'candles' | 'line'>('auto')
+  const [choice, setChoice] = useState<'auto' | 'candles' | 'line' | 'live'>('auto')
 
   const model = useMemo(() => {
     const series = buildSeries({ prints, startTs: frame.startTs, endTs: frame.endTs, decimals })
@@ -233,6 +591,14 @@ export function PriceChart({
     [frame.startTs, frame.endTs],
   )
   const y = useMemo(() => (domain ? linearScale(domain, [PLOT.y1, PLOT.y0]) : () => (PLOT.y0 + PLOT.y1) / 2), [domain])
+
+  // The live view's own feed. It is subscribed only while that view is the one on screen, and the
+  // oracle price the card already polls is what it draws if the exchange socket cannot be reached.
+  const liveFeed = useLivePrice({
+    symbol: useMemo(() => binanceSymbol(pair), [pair]),
+    active: view === 'live',
+    fallbackPrice: series.latest?.price,
+  })
 
   const hasSomething = series.points.length > 0 || series.carry !== undefined
   const strikeY = strikePrice !== undefined && domain ? y(strikePrice) : undefined
@@ -322,11 +688,34 @@ export function PriceChart({
             >
               {t(lang, ui.chart.candles)}
             </button>
+            <button
+              type="button"
+              onClick={() => setChoice('live')}
+              aria-pressed={view === 'live'}
+              title={t(lang, ui.chart.liveTitle)}
+              className={`rounded px-2.5 py-1 text-[11px] font-semibold ${
+                view === 'live'
+                  ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
+                  : 'text-slate-600 dark:text-slate-300'
+              }`}
+            >
+              {t(lang, ui.chart.live)}
+            </button>
           </div>
         </div>
       </div>
 
-      {hasSomething ? (
+      {view === 'live' ? (
+        <LiveView
+          frame={frame}
+          decimals={decimals}
+          strikePrice={strikePrice}
+          feed={liveFeed}
+          now={now}
+          lang={lang}
+          feedLabel={t(lang, feedName)}
+        />
+      ) : hasSomething ? (
         <svg
           viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
           className="mt-2 h-auto w-full"
@@ -342,40 +731,7 @@ export function PriceChart({
           )}
         >
           {/* ── the two regions: above the strike UP wins, below it DOWN wins ───────────── */}
-          {strikeY !== undefined ? (
-            <>
-              <rect
-                x={PLOT.x0}
-                y={PLOT.y0}
-                width={PLOT.x1 - PLOT.x0}
-                height={Math.max(0, strikeY - PLOT.y0)}
-                className="fill-emerald-500/10"
-              />
-              <rect
-                x={PLOT.x0}
-                y={strikeY}
-                width={PLOT.x1 - PLOT.x0}
-                height={Math.max(0, PLOT.y1 - strikeY)}
-                className="fill-rose-500/10"
-              />
-              {strikeY - PLOT.y0 > 22 ? (
-                <PlateLabel
-                  x={PLOT.x1 - 2}
-                  y={PLOT.y0 + 14}
-                  text={t(lang, ui.chart.upWinsHere)}
-                  className="fill-emerald-700 dark:fill-emerald-400"
-                />
-              ) : null}
-              {PLOT.y1 - strikeY > 22 ? (
-                <PlateLabel
-                  x={PLOT.x1 - 2}
-                  y={PLOT.y1 - 5}
-                  text={t(lang, ui.chart.downWinsHere)}
-                  className="fill-rose-700 dark:fill-rose-400"
-                />
-              ) : null}
-            </>
-          ) : null}
+          {strikeY !== undefined ? <WinZones strikeY={strikeY} lang={lang} /> : null}
 
           {/* Past settlement: prints here no longer decide this round. */}
           {frame.closeTs !== undefined && frame.closeTs < frame.endTs ? (
@@ -457,49 +813,14 @@ export function PriceChart({
 
           {/* ── the strike ──────────────────────────────────────────────────────────────── */}
           {strikeY !== undefined && frame.strike !== undefined ? (
-            <>
-              <line
-                x1={PLOT.x0}
-                x2={PLOT.x1}
-                y1={strikeY}
-                y2={strikeY}
-                strokeWidth={1.2}
-                strokeDasharray="5 3"
-                className="stroke-slate-900 dark:stroke-slate-100"
-              />
-              <text
-                x={VIEW_W - 2}
-                y={strikeY + 4}
-                fontSize={FONT.strikeValue}
-                textAnchor="end"
-                className="fill-slate-900 font-mono font-bold dark:fill-slate-100"
-              >
-                {formatPrice(frame.strike, decimals)}
-              </text>
-              <text x={PLOT.x0 + 3} y={strikeY - 4} fontSize={FONT.label} className="fill-slate-900 font-bold dark:fill-slate-100">
-                {t(lang, ui.chart.axisStrike)}
-              </text>
-            </>
+            <StrikeMark strikeY={strikeY} strike={frame.strike} decimals={decimals} lang={lang} />
           ) : null}
 
           {/* ── boundaries ──────────────────────────────────────────────────────────────── */}
-          <line
-            x1={x(frame.lockTs)}
-            x2={x(frame.lockTs)}
-            y1={PLOT.y0}
-            y2={PLOT.y1}
-            strokeWidth={1}
-            strokeDasharray="3 2"
-            className="stroke-slate-500 dark:stroke-slate-400"
-          />
-          <text
-            x={x(frame.lockTs)}
-            y={PLOT.y1 + 15}
-            fontSize={FONT.label}
-            textAnchor={frame.lockTs >= frame.endTs ? 'end' : 'middle'}
-            className="fill-slate-500 dark:fill-slate-400"
-          >
-            {t(
+          <BoundaryMark
+            cx={x(frame.lockTs)}
+            anchor={frame.lockTs >= frame.endTs ? 'end' : 'middle'}
+            label={t(
               lang,
               frame.strikeState === 'set'
                 ? ui.chart.axisLocked
@@ -507,47 +828,16 @@ export function PriceChart({
                   ? ui.chart.axisStrikeHere
                   : ui.chart.axisLock,
             )}
-          </text>
-          <text
-            x={x(frame.lockTs)}
-            y={PLOT.y1 + 29}
-            fontSize={FONT.time}
-            textAnchor={frame.lockTs >= frame.endTs ? 'end' : 'middle'}
-            className="fill-slate-400 font-mono dark:fill-slate-500"
-          >
-            {formatTime(frame.lockTs, lang)}
-          </text>
+            time={formatTime(frame.lockTs, lang)}
+          />
 
           {frame.closeTs !== undefined ? (
-            <>
-              <line
-                x1={x(frame.closeTs)}
-                x2={x(frame.closeTs)}
-                y1={PLOT.y0}
-                y2={PLOT.y1}
-                strokeWidth={1}
-                strokeDasharray="3 2"
-                className="stroke-slate-500 dark:stroke-slate-400"
-              />
-              <text
-                x={x(frame.closeTs)}
-                y={PLOT.y1 + 15}
-                fontSize={FONT.label}
-                textAnchor={frame.closeTs >= frame.endTs ? 'end' : 'middle'}
-                className="fill-slate-500 dark:fill-slate-400"
-              >
-                {t(lang, ui.chart.axisSettles)}
-              </text>
-              <text
-                x={x(frame.closeTs)}
-                y={PLOT.y1 + 29}
-                fontSize={FONT.time}
-                textAnchor={frame.closeTs >= frame.endTs ? 'end' : 'middle'}
-                className="fill-slate-400 font-mono dark:fill-slate-500"
-              >
-                {formatTime(frame.closeTs, lang)}
-              </text>
-            </>
+            <BoundaryMark
+              cx={x(frame.closeTs)}
+              anchor={frame.closeTs >= frame.endTs ? 'end' : 'middle'}
+              label={t(lang, ui.chart.axisSettles)}
+              time={formatTime(frame.closeTs, lang)}
+            />
           ) : null}
 
           {/* ── now, and the newest print ───────────────────────────────────────────────── */}
@@ -621,6 +911,18 @@ export function PriceChart({
           </>
         )}
       </p>
+
+      {/*
+        Which series the live view is actually drawing. The exchange socket is a convenience and it
+        can be unreachable — on a blocked network, behind a captive portal — and when it is, the
+        line is the oracle's own price polled every couple of seconds. That is a different number
+        from the one the button promises, so it is said plainly rather than left to be inferred.
+      */}
+      {view === 'live' && liveFeed.fallback ? (
+        <p className="mt-1 text-[11px] leading-relaxed text-amber-700 dark:text-amber-400">
+          {t(lang, ui.chart.liveFallbackNote)}
+        </p>
+      ) : null}
 
       {/*
         A stale feed is a live fact about money, in either view: it stays visible. Only while the
@@ -706,9 +1008,10 @@ export function PriceChart({
             {t(lang, trade ? ui.tradeChart.dashedAfter : ui.dashedNote.after)}
           </p>
         ) : null}
+        {view === 'live' ? <p>{t(lang, ui.chart.liveNote)}</p> : null}
         {view === 'candles' ? (
           <p>{t(lang, ui.candlesNote(bucketSec, readiness.printsPerBucket.toFixed(1)))}</p>
-        ) : readiness.reason === 'too-few' || readiness.reason === 'too-sparse' ? (
+        ) : view === 'live' ? null : readiness.reason === 'too-few' || readiness.reason === 'too-sparse' ? (
           <p>{t(lang, ui.candlesOffNote(readiness.printsPerBucket.toFixed(1)))}</p>
         ) : null}
         {!series.coversStart && series.points.length > 0 ? (
