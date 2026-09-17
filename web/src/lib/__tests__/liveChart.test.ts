@@ -8,6 +8,7 @@ import {
   liveDomain,
   liveTimeTicks,
   liveWindow,
+  LIVE_MAX_HZ,
   mergeLivePoints,
   parseAggTrades,
   parseSecondKlines,
@@ -67,16 +68,17 @@ describe('parsing a trade frame', () => {
 describe('the rolling buffer', () => {
   const fill = (ticks: LivePoint[]) => ticks.reduce<readonly LivePoint[]>((acc, p) => pushLivePoint(acc, p), [])
 
-  it('keeps at most four points a second, and the latest one in each bucket', () => {
-    // Ten trades inside one second: four buckets, each holding the last trade that landed in it.
-    const points = fill(Array.from({ length: 10 }, (_, i) => ({ ts: T0 + i * 100, price: 100 + i })))
-    expect(points).toHaveLength(4)
-    expect(points.map((p) => p.price)).toEqual([102, 104, 107, 109])
+  it('keeps `LIVE_MAX_HZ` points a second, and the latest one in each bucket', () => {
+    // Twenty trades inside one second, 50 ms apart: one point per 1/8 s, each the last trade that
+    // landed in it. BTC prints faster than this and the screen cannot show the difference.
+    const points = fill(Array.from({ length: 20 }, (_, i) => ({ ts: T0 + i * 50, price: 100 + i })))
+    expect(points).toHaveLength(LIVE_MAX_HZ)
+    expect(points.map((p) => p.price)).toEqual([102, 104, 107, 109, 112, 114, 117, 119])
   })
 
   it('drops everything older than the buffer, so memory cannot grow with the session', () => {
     const points = fill(Array.from({ length: 2_000 }, (_, i) => ({ ts: T0 + i * 250, price: 100 })))
-    expect(points.length).toBeLessThanOrEqual(90 * 4 + 16)
+    expect(points.length).toBeLessThanOrEqual(90 * LIVE_MAX_HZ + 16)
     expect(points[0].ts).toBeGreaterThanOrEqual(points[points.length - 1].ts - 90_000)
   })
 
@@ -304,6 +306,8 @@ describe('the live feed', () => {
     h.advance(1_000)
     const fell = h.states[h.states.length - 1]
     expect(fell.fallback).toBe(true)
+    // An open socket that says nothing is not a connection, whatever its readyState claims.
+    expect(fell.connected).toBe(false)
     expect(fell.latest?.price).toBe(84_000)
 
     // …and it keeps moving on the oracle's own price every two seconds.
@@ -473,7 +477,7 @@ describe('merging the sources', () => {
     expect(merged.map((p) => p.price)).toEqual([1, 2, 3])
   })
 
-  it('lets the later source win a shared quarter-second, so a trade outranks a candle', () => {
+  it('lets the later source win a shared bucket, so a trade outranks a candle', () => {
     const merged = mergeLivePoints([[at(-1_000, 100)], [at(-1_000, 200)]], { now: T0 })
     expect(merged).toEqual([at(-1_000, 200)])
   })
@@ -484,10 +488,12 @@ describe('merging the sources', () => {
     expect(merged).toEqual([at(-1_000, 2)])
   })
 
-  it('thins to the same 4 Hz the stream is thinned to, and caps the buffer', () => {
+  it('thins to the same rate the stream is thinned to, and caps the buffer', () => {
+    // 400 points across ten seconds, 25 ms apart — denser than the cap, whatever the cap is.
     const dense = Array.from({ length: 400 }, (_, i) => at(-10_000 + i * 25, 100 + i))
     const merged = mergeLivePoints([dense], { now: T0 })
-    expect(merged.length).toBeLessThanOrEqual(41)
+    expect(merged.length).toBeLessThanOrEqual(10 * LIVE_MAX_HZ + 1)
+    expect(merged.length).toBeGreaterThan(10 * LIVE_MAX_HZ - 2)
     expect(merged[merged.length - 1].price).toBe(100 + 399)
   })
 })

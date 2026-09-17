@@ -25,8 +25,13 @@ export interface LivePoint {
 export const LIVE_WINDOW_SECONDS = 60
 /** Seconds kept in the rolling buffer — a little more than is drawn, so the window is always full. */
 export const LIVE_BUFFER_SECONDS = 90
-/** Ticks kept per second. BTC trades far faster than any screen can show; the rest is dropped. */
-export const LIVE_MAX_HZ = 4
+/**
+ * Ticks kept per second. BTC prints thirty-odd trades a second and no screen can show them, so the
+ * rest is dropped — but this is the only throttle between the `@trade` stream and the line, and at
+ * 8 Hz the eye reads it as continuous. Every point kept is also a re-render, so the cost of raising
+ * it is buffer size and redraws, not bandwidth.
+ */
+export const LIVE_MAX_HZ = 8
 /**
  * The least of the plot height the minute's own price range is allowed to keep. A round whose
  * strike sits far from the current price would otherwise squash the line flat against one edge.
@@ -34,7 +39,7 @@ export const LIVE_MAX_HZ = 4
 export const LIVE_PRICE_SHARE = 0.5
 /** Right-hand padding, in seconds, so the end dot and its pill are not sliced by the plot edge. */
 export const LIVE_PAD_SECONDS = 1
-/** Hard cap on the buffer, whatever the clock does. `90s × 4Hz` with room for a backwards jump. */
+/** Hard cap on the buffer, whatever the clock does. `90s × 8Hz` with room for a backwards jump. */
 export const LIVE_MAX_POINTS = LIVE_BUFFER_SECONDS * LIVE_MAX_HZ + 16
 
 const SYMBOLS: Record<string, string> = { BTC: 'btcusdt', ETH: 'ethusdt', BNB: 'bnbusdt' }
@@ -560,6 +565,10 @@ export function createLiveFeed(options: LiveFeedOptions): LiveFeed {
   const enterFallback = () => {
     if (poll !== undefined) return
     fallback = true
+    // The socket may still be `open`, but it is not delivering, and the badge's green dot is a
+    // claim about the line the trader is looking at — which from here is the oracle's, not the
+    // exchange's. A frame arriving later sets this back.
+    connected = false
     samplePoll()
     const tick = () => {
       poll = arm(tick, fallbackIntervalMs)
